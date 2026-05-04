@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>用户应用</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="/element/css/index.css" />
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/config.js"></script>
+</head>
+
+<body>
+  <div id="app" style="padding: 20px;">
+
+    <!-- 查询表单 -->
+    <el-form :inline="true" :model="query" @submit.prevent="loadData">
+      <el-form-item label="APPID">
+        <el-input v-model="query.appid" placeholder="APPID"></el-input>
+      </el-form-item>
+      <el-form-item label="UID">
+        <el-input v-model="query.uid" placeholder="UID"></el-input>
+      </el-form-item>
+      <el-form-item label="标记">
+          <el-select
+            v-model="query.tag"
+            filterable
+            allow-create
+            clearable
+            placeholder="选择标记"
+            style="width:150px"
+          >
+            <el-option label="无标记" value="无标记"></el-option>
+            <el-option label="游戏外挂" value="游戏外挂"></el-option>
+            <el-option label="审核存疑" value="审核存疑"></el-option>
+            <el-option label="残缺应用" value="残缺应用"></el-option>
+            <el-option label="违法应用" value="违法应用"></el-option>
+            <el-option label="侵权应用" value="侵权应用"></el-option>
+            <el-option label="诈骗应用" value="诈骗应用"></el-option>
+            <el-option label="木马应用" value="木马应用"></el-option>
+            <el-option label="涉黄应用" value="涉黄应用"></el-option>
+            <el-option label="风险应用" value="风险应用"></el-option>
+          </el-select>
+        </el-form-item>
+
+      <el-form-item label="名称">
+        <el-input v-model="query.name" placeholder="应用名称"></el-input>
+      </el-form-item>
+      <el-form-item label="版本">
+        <el-input v-model="query.version" placeholder="版本号"></el-input>
+      </el-form-item>
+      <el-form-item label="包名">
+        <el-input v-model="query.package" placeholder="包名"></el-input>
+      </el-form-item>
+      <el-form-item>
+        <el-button type="primary" @click="loadData">查询</el-button>
+        <el-button @click="resetForm">重置</el-button>
+      </el-form-item>
+    </el-form>
+
+    <!-- 表格 -->
+    <el-table :data="tableData" border style="margin-top: 10px;">
+      <el-table-column label="ID" prop="id" width="60"></el-table-column>
+      <el-table-column label="UID" prop="user_id" width="60"></el-table-column>
+
+      <el-table-column label="图标" width="60">
+        <template #default="scope">
+          <img
+            :src="`/icon.php?id=${scope.row.id}`"
+            style="width: 32px; height: 32px; object-fit: contain; border-radius: 6px;"
+          />
+        </template>
+      </el-table-column>
+
+      <el-table-column label="名称" prop="name"></el-table-column>
+      <el-table-column label="版本" prop="version"></el-table-column>
+      <el-table-column label="包名" prop="package" show-overflow-tooltip></el-table-column>
+
+      <el-table-column label="大小" prop="size" :formatter="formatSize"></el-table-column>
+      
+      <!-- OSS 状态 -->
+      <el-table-column label="OSS" width="70">
+          <template #default="scope">
+            <el-tag
+              v-if="scope.row.osspath && scope.row.osspath !== ''"
+              type="success"
+            >
+              是
+            </el-tag>
+            <el-tag v-else type="danger">
+              否
+            </el-tag>
+          </template>
+      </el-table-column>
+      
+      <el-table-column label="上传时间" prop="upload_time"></el-table-column>
+
+      <el-table-column label="配置方式">
+        <template #default="scope">
+          <span>{{ scope.row.config_mode == 1 ? '复用' : '独享' }}</span>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="复用">
+        <template #default="scope">
+          <span v-if="scope.row.reuse_apk_id">
+            {{ scope.row.reuse_apk_id }} - {{ scope.row.reuse_apk_name }}
+          </span>
+          <span v-else>-</span>
+        </template>
+      </el-table-column>
+      
+        <el-table-column label="标记" prop="tag" width="120">
+          <template #default="scope">
+            <el-tag v-if="scope.row.tag && scope.row.tag !== '无标记'">{{ scope.row.tag }}</el-tag>
+            <span v-else>无标记</span>
+          </template>
+        </el-table-column>
+        
+      <el-table-column label="操作" width="660">
+        <template #default="scope">
+          <el-button type="danger" size="small" @click="handleDelete(scope.row)">删除</el-button>
+          <el-button type="warning" size="small" @click="openViolation(scope.row)">违规公示</el-button>
+          <el-button type="info" size="small" @click="cancelViolation(scope.row)">撤销公示</el-button>
+          <el-button type="primary" size="small" @click="openTakeover(scope.row)">接管应用</el-button>
+          <el-button type="success" size="small" @click="openTagDialog(scope.row)">标记</el-button>
+          <el-button type="danger" size="small" @click="openBlacklistDialog(scope.row)">拉黑包名</el-button>
+          <el-button type="primary" size="small" @click="repostToOss(scope.row)">转存OSS</el-button>
+          <el-button type="warning" size="small" @click="restoreFromOss(scope.row)">转存本地</el-button>
+
+        </template>
+      </el-table-column>
+
+    </el-table>
+
+    <!-- 分页 -->
+    <el-pagination
+      v-if="total > 0"
+      style="margin-top: 20px; text-align: right;"
+      background
+      layout="total, prev, pager, next, jumper"
+      :current-page="query.page"
+      :page-size="query.limit"
+      :total="total"
+      @current-change="handlePageChange"
+    ></el-pagination>
+
+    <!-- 接管应用弹窗 -->
+    <el-dialog title="接管应用" v-model="takeoverDialog" width="520px">
+      <div v-if="takeoverSource">
+        <p><strong>要被接管的 APPID：</strong>{{ takeoverSource.id }}</p>
+        <p><strong>名称：</strong>{{ takeoverSource.name }}</p>
+        <p><strong>包名：</strong>{{ takeoverSource.package }}</p>
+        <p><strong>UID：</strong>{{ takeoverSource.user_id }}</p>
+        <p><strong>版本：</strong>{{ takeoverSource.version }}</p>
+        <hr style="margin:10px 0;">
+      </div>
+
+      <el-form label-width="100px">
+        <el-form-item label="接管到 APPID">
+          <div style="display:flex; gap:10px; width:100%;">
+            <el-input v-model="takeoverTargetId" placeholder="输入 APPID" style="flex:1"></el-input>
+            <el-button type="primary" @click="queryTakeoverTarget">查询</el-button>
+          </div>
+        </el-form-item>
+
+        <el-form-item label="备注">
+          <el-input v-model="takeoverRemark" placeholder="可选填"></el-input>
+        </el-form-item>
+      </el-form>
+
+      <!-- 查询结果 -->
+      <div v-if="takeoverTargetInfo" style="margin:10px 0; padding:10px; background:#f5f7fa; border-radius:6px;">
+        <p><strong>目标 APPID：</strong>{{ takeoverTargetInfo.id }}</p>
+        <p><strong>名称：</strong>{{ takeoverTargetInfo.name }}</p>
+        <p><strong>包名：</strong>{{ takeoverTargetInfo.package }}</p>
+        <p><strong>版本：</strong>{{ takeoverTargetInfo.version }}</p>
+      </div>
+
+      <template #footer>
+        <el-button @click="takeoverDialog = false">取消</el-button>
+        <el-button type="primary" @click="submitTakeover">确定接管</el-button>
+      </template>
+    </el-dialog>
+    
+    
+    <!-- 违规公示弹窗 -->
+    <el-dialog title="违规公示" v-model="violationDialog" width="500px">
+      <el-form :model="violationForm" label-width="100px">
+
+        <el-form-item label="应用名">
+          <el-input v-model="violationForm.name"></el-input>
+        </el-form-item>
+
+        <el-form-item label="包名">
+          <el-input v-model="violationForm.package" disabled></el-input>
+        </el-form-item>
+
+        <el-form-item label="UID">
+          <el-input v-model="violationForm.uid" disabled></el-input>
+        </el-form-item>
+
+        <el-form-item label="APPID">
+          <el-input v-model="violationForm.appid" disabled></el-input>
+        </el-form-item>
+
+        <el-form-item label="违规等级">
+          <el-select v-model="violationForm.level" placeholder="选择或输入违规等级">
+            <el-option label="1（严重）" :value="1"></el-option>
+            <el-option label="2（一般）" :value="2"></el-option>
+            <el-option label="3（普通）" :value="3"></el-option>
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="违规类型">
+          <el-select v-model="violationForm.reason" filterable allow-create placeholder="选择或输入类型说明">
+            <el-option label="未违规" value="未违规"></el-option>
+            <el-option label="侵权" value="侵权"></el-option>
+            <el-option label="涉黄" value="涉黄"></el-option>
+            <el-option label="游戏外挂" value="游戏外挂"></el-option>
+            <el-option label="网络赌博" value="网络赌博"></el-option>
+            <el-option label="网络诈骗" value="网络诈骗"></el-option>
+            <el-option label="木马病毒" value="木马病毒"></el-option>
+            <el-option label="锁机勒索" value="锁机勒索"></el-option>
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="处理结果">
+          <el-select v-model="violationForm.punishment" filterable allow-create placeholder="选择或输入处理方式">
+            <el-option label="未处理" value="未处理"></el-option>
+            <el-option label="停止公开访问" value="停止公开访问"></el-option>
+            <el-option label="停止服务并删除" value="停止服务并删除"></el-option>
+            <el-option label="删除应用" value="删除应用"></el-option>
+            <el-option label="警告" value="警告"></el-option>
+            <el-option label="下架" value="下架"></el-option>
+          </el-option>
+        </el-form-item>
+
+      </el-form>
+
+      <template #footer>
+        <el-button @click="violationDialog = false">取消</el-button>
+        <el-button type="primary" @click="submitViolation">提交公示</el-button>
+      </template>
+    </el-dialog>
+    
+    <!-- 标记弹窗 -->
+    <el-dialog title="应用标记" v-model="tagDialog" width="420px">
+      <p><strong>应用名称：</strong>{{ tagForm.name }}</p>
+      <p><strong>APPID：</strong>{{ tagForm.appid }}</p>
+      <p><strong>UID：</strong>{{ tagForm.uid }}</p>
+      <hr style="margin: 10px 0;">
+    
+      <el-form label-width="80px">
+        <el-form-item label="标记">
+          <el-select v-model="tagForm.tag" filterable allow-create placeholder="选择标记">
+            <el-option label="无标记" value="无标记"></el-option>
+            <el-option label="游戏外挂" value="游戏外挂"></el-option>
+            <el-option label="审核存疑" value="审核存疑"></el-option>
+            <el-option label="残缺应用" value="残缺应用"></el-option>
+            <el-option label="违法应用" value="违法应用"></el-option>
+            <el-option label="侵权应用" value="侵权应用"></el-option>
+            <el-option label="诈骗应用" value="诈骗应用"></el-option>
+            <el-option label="木马应用" value="木马应用"></el-option>
+            <el-option label="涉黄应用" value="涉黄应用"></el-option>
+            <el-option label="风险应用" value="风险应用"></el-option>
+          </el-select>
+        </el-form-item>
+      </el-form>
+    
+      <template #footer>
+        <el-button @click="tagDialog = false">取消</el-button>
+        <el-button type="primary" @click="submitTag">确认</el-button>
+      </template>
+    </el-dialog>
+    
+    <!-- 拉黑包名弹窗 -->
+    <el-dialog title="拉黑包名" v-model="blacklistDialog" width="420px">
+      <p><strong>包名：</strong>{{ blacklistForm.package }}</p>
+      <p><strong>备注：</strong>{{ blacklistForm.remark }}</p>
+      <hr style="margin: 10px 0;">
+    
+      <el-form label-width="80px">
+        <el-form-item label="包名">
+          <el-input v-model="blacklistForm.package" placeholder="包名"></el-input>
+        </el-form-item>
+    
+        <el-form-item label="备注">
+          <el-input v-model="blacklistForm.remark" placeholder="备注"></el-input>
+        </el-form-item>
+    
+        <el-form-item label="消息">
+          <el-input v-model="blacklistForm.message" placeholder="消息"></el-input>
+        </el-form-item>
+      </el-form>
+    
+      <template #footer>
+        <el-button @click="blacklistDialog = false">取消</el-button>
+        <el-button type="primary" @click="submitBlacklist">确认</el-button>
+      </template>
+    </el-dialog>
+
+
+
+  </div>
+
+<script>
+const { createApp, ref, reactive, onMounted } = Vue;
+
+createApp({
+  setup() {
+
+    const query = reactive({
+      name: '',
+      appid: '',
+      uid: '',
+      version: '',
+      package: '',
+      tag: '', 
+      page: 1,
+      limit: 20
+    });
+
+    const tableData = ref([]);
+    const total = ref(0);
+    const tagDialog = ref(false);
+    const tagForm = reactive({
+      appid: '',
+      uid: '',
+      name: '',
+      tag: ''
+    });
+    
+    const blacklistDialog = ref(false);
+    const blacklistForm = reactive({
+      package: '',
+      remark: '',
+      message: ''
+    });
+    
+    function openBlacklistDialog(row) {
+      blacklistForm.package = row.package;
+      blacklistForm.remark = row.name + "UID" + row.user_id;
+      blacklistForm.message = "禁止上传该应用"; // 默认提示
+      blacklistDialog.value = true;
+    }
+
+    function openTagDialog(row) {
+      tagForm.appid = row.id;
+      tagForm.uid = row.user_id;
+      tagForm.name = row.name;
+      tagForm.tag = row.tag || "无标记";
+      tagDialog.value = true;
+    }
+    function formatSize(row) {
+      if (!row.size || row.size == 0) return '🚫安装包不存在';
+      return (row.size / 1024 / 1024).toFixed(2) + ' MB';
+    }
+    
+    async function submitBlacklist() {
+      const res = await fetch('/api/index.php?module=blckage&method=addblckagepkg', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(blacklistForm)
+      });
+    
+      const json = await res.json();
+    
+      if (json.code === 200) {
+        const msg = json.message || "已拉黑";
+        ElementPlus.ElMessage.success(msg);
+        blacklistDialog.value = false;
+      } else {
+        ElementPlus.ElMessage.error(json.message || "拉黑失败");
+      }
+    }
+    
+    async function repostToOss(row) {
+      ElementPlus.ElMessageBox.confirm(
+        `确认将 APPID ${row.id} 的本地文件转存到 OSS？`,
+        '转存确认',
+        { type: 'warning' }
+      ).then(async () => {
+        const res = await fetch('/api/index.php?module=app&method=repost', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ appid: row.id })
+        });
+    
+        const json = await res.json();
+    
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success(json.message || '转存成功');
+          loadData();
+        } else {
+          ElementPlus.ElMessage.error(json.message || '转存失败');
+        }
+      });
+    }
+    
+    async function restoreFromOss(row) {
+      ElementPlus.ElMessageBox.confirm(
+        `确认将 APPID ${row.id} 从 OSS 还原到本地？`,
+        '还原确认',
+        { type: 'warning' }
+      ).then(async () => {
+        const res = await fetch('/api/index.php?module=app&method=restoreFromOss', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ appid: row.id })
+        });
+    
+        const json = await res.json();
+    
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success(json.message || '还原成功');
+          loadData();
+        } else {
+          ElementPlus.ElMessage.error(json.message || '还原失败');
+        }
+      });
+    }
+
+
+
+
+    async function submitTag() {
+      const res = await fetch('/api/index.php?module=app&method=setTag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tagForm)
+      });
+    
+      const json = await res.json();
+    
+      if (json.code === 200) {
+        // 优先显示 json.message，其次 json.data.message
+        const msg = json.message || (json.data && json.data.message) || "标记已更新";
+        
+        ElementPlus.ElMessage.success(msg);
+    
+        tagDialog.value = false;
+        loadData();
+      } else {
+        ElementPlus.ElMessage.error(json.message || "标记失败");
+      }
+    }
+
+
+    async function loadData() {
+      try {
+        const res = await fetch(`/api/index.php?module=app&method=getMyAppList`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(query)
+        });
+        const json = await res.json();
+
+        if (json.code === 200) {
+          tableData.value = json.data.list;
+          total.value = json.data.total;
+          query.page = json.data.page;
+        } else {
+          ElementPlus.ElMessage.error(json.message || '加载失败');
+        }
+      } catch {
+        ElementPlus.ElMessage.error('请求失败');
+      }
+    }
+
+    function handlePageChange(p) {
+      query.page = p;
+      loadData();
+    }
+
+    function resetForm() {
+      query.name = query.appid = query.uid = query.version = query.package = '';
+      query.tag = '';
+      query.page = 1;
+      loadData();
+    }
+    
+    const takeoverDialog = ref(false);
+    const takeoverSource = ref(null);
+    const takeoverTargetId = ref("");
+    const takeoverTargetInfo = ref(null);
+    const takeoverRemark = ref("");
+
+    function openTakeover(row) {
+      takeoverSource.value = row;
+      takeoverTargetId.value = "";
+      takeoverTargetInfo.value = null;
+      takeoverRemark.value = "";
+      takeoverDialog.value = true;
+    }
+
+    async function queryTakeoverTarget() {
+      if (!takeoverTargetId.value) {
+        ElementPlus.ElMessage.warning("请输入 APPID");
+        return;
+      }
+
+      const res = await fetch('/api/index.php?module=redirect&method=getApkInfo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: takeoverTargetId.value })
+      });
+      const json = await res.json();
+
+      if (json.code !== 200 || !json.data) {
+        ElementPlus.ElMessage.error("未找到此 APPID");
+        takeoverTargetInfo.value = null;
+        return;
+      }
+
+      takeoverTargetInfo.value = json.data;
+    }
+
+    /* 提交接管 */
+    async function submitTakeover() {
+      if (!takeoverTargetId.value) {
+        ElementPlus.ElMessage.warning("请输入接管目标 APPID");
+        return;
+      }
+
+      if (takeoverSource.value.id == takeoverTargetId.value) {
+        ElementPlus.ElMessage.error("不能接管自己");
+        return;
+      }
+
+      const payload = {
+        apk_id1: takeoverSource.value.id,
+        apk_id2: takeoverTargetId.value,
+        remark: takeoverRemark.value
+      };
+
+      const res = await fetch('/api/index.php?module=redirect&method=add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const json = await res.json();
+
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success("接管成功");
+        takeoverDialog.value = false;
+      } else {
+        ElementPlus.ElMessage.error(json.message || "接管失败");
+      }
+    }
+    async function handleDelete(row) {
+      ElementPlus.ElMessageBox({
+        title: '提示',
+        message: `确定要删除应用「${row.name}」吗？<br>
+        仅删除文件：不会影响配置，注入时需重新上传安装包<br>
+        全部删除：会删除应用以及配置，无法恢复`,
+        type: 'warning',
+        dangerouslyUseHTMLString: true,
+        showCancelButton: true,
+        showConfirmButton: true,
+        confirmButtonText: '全部删除(含配置)',
+        cancelButtonText: '取消',
+        distinguishCancelAndClose: true
+      }).then(action => {
+        if (action === 'confirm') {
+          ElementPlus.ElMessageBox.confirm(
+            '删除后你将完全失去该应用的控制权，是否确定？',
+            '请确认',
+            { type: 'warning' }
+          ).then(async () => {
+            const res = await fetch(`/api/index.php?module=app&method=deleteApp`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: row.id })
+            });
+            loadData();
+          });
+        }
+      });
+
+      setTimeout(() => {
+        const box = document.querySelector('.el-message-box__btns');
+        if (box && !box.querySelector('.only-delete-btn')) {
+          const btn = document.createElement('button');
+          btn.className = 'el-button el-button--danger only-delete-btn';
+          btn.innerHTML = '<span>仅删除文件(推荐)</span>';
+
+          btn.onclick = () => {
+            ElementPlus.ElMessageBox.confirm(
+              '此操作只删除安装包，不影响远程配置，注入时需重新上传安装包。',
+              '请确认',
+              { type: 'warning' }
+            ).then(async () => {
+              await fetch(`/api/index.php?module=app&method=clearAppFile`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: row.id })
+              });
+              loadData();
+              document.querySelector('.el-message-box__headerbtn')?.click();
+            });
+          };
+
+          box.insertBefore(btn, box.children[1]);
+        }
+      }, 50);
+    }
+
+    const violationDialog = ref(false);
+    const violationForm = reactive({
+      name: '',
+      uid: '',
+      appid: '',
+      package: '',
+      level: '',
+      reason: '',
+      punishment: ''
+    });
+
+    function openViolation(row) {
+      violationForm.name = row.name;
+      violationForm.uid = row.user_id;
+      violationForm.appid = row.id;
+      violationForm.package = row.package;
+      violationForm.level = '';
+      violationForm.reason = '';
+      violationForm.punishment = '';
+      violationDialog.value = true;
+    }
+
+    async function submitViolation() {
+      if (!violationForm.level || !violationForm.reason || !violationForm.punishment) {
+        ElementPlus.ElMessage.warning('请填写完整信息');
+        return;
+      }
+      const res = await fetch('/api/index.php?module=violation&method=add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(violationForm)
+      });
+      const json = await res.json();
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success(json.message || '已公示');
+        violationDialog.value = false;
+      } else {
+        ElementPlus.ElMessage.error(json.message || '提交失败');
+      }
+    }
+
+    async function cancelViolation(row) {
+      ElementPlus.ElMessageBox.confirm(
+        `确认撤销 APPID ${row.id} 的违规公示？`,
+        '撤销公示',
+        { type: 'warning' }
+      ).then(async () => {
+        const res = await fetch('/api/index.php?module=violation&method=remove', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ appid: row.id })
+        });
+        const json = await res.json();
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success(json.message || '已撤销');
+        } else {
+          ElementPlus.ElMessage.error(json.message || '撤销失败');
+        }
+      });
+    }
+
+    onMounted(loadData);
+
+    return {
+      query,
+      tableData,
+      total,
+      loadData,
+      resetForm,
+      handlePageChange,
+      handleDelete,
+
+      // 接管功能
+      takeoverDialog,
+      takeoverSource,
+      takeoverTargetId,
+      takeoverTargetInfo,
+      takeoverRemark,
+      openTakeover,
+      queryTakeoverTarget,
+      submitTakeover,
+      
+      violationDialog,
+      violationForm,
+      openViolation,
+      submitViolation,
+
+      cancelViolation,
+      repostToOss,
+      restoreFromOss,
+      
+      formatSize,
+      tagDialog,
+      tagForm,
+      openTagDialog,
+      submitTag,
+      blacklistDialog,
+      blacklistForm,
+      openBlacklistDialog,
+      submitBlacklist,
+    };
+
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+
+</body>
+</html>

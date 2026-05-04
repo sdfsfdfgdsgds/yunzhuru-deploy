@@ -1,0 +1,1357 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>菜鸟云注入 - 后台</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  
+  <link id="theme-style" rel="stylesheet" href="">
+  <link rel="stylesheet" href="/element/css/index.css" />
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/element/js/index.iife.min.js"></script>
+  <script src="/config.js"></script>
+  
+  <style>
+  .el-menu-vertical .el-sub-menu .el-menu {
+  background-color: #f5f5f5 !important;
+}
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+    #app {
+      height: 100%;
+    }
+    .main-layout,
+    .el-container {
+      height: 100%;
+    }
+/* 主体区域填满 header 以外的剩余空间 */
+.el-container {
+  flex: 1;
+  overflow: hidden;
+}
+/* 左侧菜单栏可滚动 */
+.el-aside {
+  height: 100%;
+  overflow-y: auto;
+}
+/* 菜单本身撑满侧栏并可滚动 */
+.el-menu-vertical {
+  height: 100%;
+  overflow-y: auto;
+}
+.main-layout {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.iframe-wrapper {
+  width: 100%;
+  height: 100%;
+  border: none;
+  overflow: hidden;
+  scrollbar-width: none;
+}
+.iframe-wrapper::-webkit-scrollbar {
+  display: none;
+}
+    .footer {
+      text-align: center;
+      padding: 10px 0;
+      font-size: 12px;
+      color: #999;
+      background: #f5f5f5;
+    }
+    .el-menu-vertical {
+      min-height: 100%;
+    }
+.el-header {
+  height: 50px;
+  flex-shrink: 0;
+  background: #ffffff;
+  color: #333;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  border-bottom: 1px solid #e4e7ed;
+}
+.el-header .title {
+  font-weight: bold;
+}
+
+/* 添加类时触发逆时针半圈动画 */
+.rotate-half-ccw {
+  animation: rotate-half-ccw 0.4s linear;
+}
+
+@keyframes rotate-half-ccw {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(-180deg);
+  }
+}
+
+.el-main {
+  overflow: hidden; /* 禁止滚动条 */
+  scrollbar-width: none; /* Firefox 隐藏滚动条 */
+}
+.el-main::-webkit-scrollbar {
+  display: none; /* Chrome/Safari 隐藏滚动条 */
+}
+
+/* 平滑菜单宽度变化 */
+.el-aside {
+  transition: width 0.3s ease;
+}
+
+/* 平滑文字显示隐藏 */
+.el-menu-vertical {
+  transition: opacity 0.3s ease;
+}
+
+.el-menu-vertical .el-menu-item span,
+.el-menu-vertical .el-submenu__title span {
+  transition: opacity 0.2s ease;
+}
+  </style>
+</head>
+<body>
+  <div id="app">
+    <el-container class="main-layout">
+        <el-header height="50px">
+            <div style="display: flex; align-items: center; width: 100%;">
+              <div style="width: 200px; display: flex; align-items: center; " title="回到首页">
+                <!--<img :src="adminInfo.logo || '/images/logo.png'" alt="logo" style="height: 28px; margin-left: 10px; cursor: pointer;" @click="goHome"  />-->
+                <el-popover
+                  placement="bottom"
+                  trigger="manual"
+                  content="点击可展开/折叠菜单"
+                  v-model:visible="showMenuTip"
+                >
+                  <template #reference>
+                    <el-button
+                      size="small"
+                      icon="Menu"
+                      circle
+                      style="margin-left: 10px;"
+                      @click.stop="toggleCollapse"
+                    ></el-button>
+                  </template>
+                </el-popover>
+              </div>
+              
+              <div style="flex: 1;"></div>
+              <div style="display: flex; align-items: center; gap: 20px;">
+                  <el-tooltip content="下载客户端APP" placement="bottom">
+                    <el-button
+                      class="android-btn"
+                      circle
+                      size="small"
+                      @click="handleAndroidClick()"
+                    >
+                      <img src="/logo.png" alt="Android" style="height:16px;width:16px;" />
+                    </el-button>
+                  </el-tooltip>
+                    <el-tooltip content="刷新当前页面" placement="bottom">
+                      <el-button
+                        class="refresh-btn"
+                        icon="Refresh"
+                        circle
+                        size="small"
+                        @click="refreshIframe"
+                        @mouseenter="animateRefresh"
+                        @mouseleave="animateRefresh"
+                      ></el-button>
+                    </el-tooltip>
+                <el-dropdown @command="handleMessageMenu">
+                  <el-badge :value="unreadCount" class="item" v-if="unreadCount > 0">
+                    <el-button icon="ChatDotRound" circle size="small"></el-button>
+                  </el-badge>
+                  <el-button v-else icon="ChatDotRound" circle size="small"></el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="received">我收到的消息</el-dropdown-item>
+                      <el-dropdown-item command="sent">我发出的消息</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+                <el-dropdown @command="handleUserCommand">
+                  <span class="el-dropdown-link" style="cursor: pointer; display: flex; align-items: center; outline: none;">
+                    <span style="margin-right: 8px;">{{ adminInfo.name }}</span>
+                    
+                    <!-- 外层容器用于定位 -->
+                    <div style="position: relative; display: inline-block;">
+                      <el-avatar :src="adminInfo.profile" size="default"></el-avatar>
+                
+                      <!-- VIP 标志：条件渲染 -->
+                      <img
+                          v-if="adminInfo.vip_days > 0"
+                          src="/images/vip-icon.png"
+                          alt="VIP"
+                          style="
+                            position: absolute;
+                            bottom: 0px;
+                            left: 50%;
+                            transform: translateX(-50%);
+                            height: 13px;
+                            width: auto;
+                          "
+                        />
+
+                    </div>
+                    
+                  </span>
+                
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="profile">个人中心</el-dropdown-item>
+                      <el-dropdown-item command="lanzou">蓝奏云盘</el-dropdown-item>
+                      <el-dropdown-item command="s3">S3 桶配置</el-dropdown-item>
+                      <el-dropdown-item command="password">修改密码</el-dropdown-item>
+                      <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+
+              </div>
+              
+              
+              
+            </div>
+          </el-header>
+          
+          
+
+      <el-container>
+        <el-aside :width="isCollapse ? '64px' : '200px'">
+          <el-menu
+            :default-active="activeMenu"
+            class="el-menu-vertical"
+            background-color="#ffffff"
+            text-color="#333"
+            active-text-color="#409EFF"
+            @select="handleMenuSelect"
+            :collapse="isCollapse"
+            :default-openeds="defaultOpeneds"
+          >
+            <template v-for="(item, index) in menuList" :key="item.id">
+              <menu-item :item="item"></menu-item>
+            </template>
+          </el-menu>
+        </el-aside>
+
+        <el-container>
+          <el-main style="padding: 0;">
+            <iframe class="iframe-wrapper" :src="iframeSrc"></iframe>
+          </el-main>
+          <el-footer height="40px" class="footer">
+            © 2025 {{ siteTitle }} · 版权所有
+          </el-footer>
+        </el-container>
+      </el-container>
+    </el-container>
+    
+    <el-dialog v-model="passwordDialogVisible" title="修改密码" width="400px">
+      <el-form :model="passwordForm" label-width="100px">
+        <el-form-item label="原密码">
+          <el-input v-model="passwordForm.old_password" type="password"></el-input>
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input v-model="passwordForm.new_password" type="password"></el-input>
+        </el-form-item>
+        <el-form-item label="确认密码">
+          <el-input v-model="passwordForm.confirm_password" type="password"></el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="passwordDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitPassword">确认修改</el-button>
+      </template>
+    </el-dialog>
+
+
+<el-dialog v-model="profileDialogVisible" title="个人中心" width="400px">
+  <template #default>
+    <div style="text-align: center; margin-bottom: 20px;">
+      <el-avatar :src="adminInfo.profile" size="large"></el-avatar>
+    </div>
+    <el-descriptions column="1" border>
+      <el-descriptions-item label="昵称" width="50px">
+        {{ adminInfo.name }}
+        <el-link type="primary" @click="editNickname" style="margin-left: 8px">修改</el-link>
+      </el-descriptions-item>
+          <el-descriptions-item label="账号" width="50px">{{ adminInfo.account }}</el-descriptions-item>
+          <el-descriptions-item label="权限" width="50px">{{ adminInfo.role }}</el-descriptions-item>
+          <el-descriptions-item label="VIP" width="50px">
+              {{ adminInfo.vip_days }} 天
+              <el-link type="primary" style="margin-left: 8px" @click="openVipDialog">{{ adminInfo.vip_days > 0 ? '续费' : '开通' }}</el-link>
+            </el-descriptions-item>
+          <el-descriptions-item label="余额" width="50px">
+            {{ balanceInYuan }} 元
+          <el-link type="primary" style="margin-left: 8px" @click="handleRecharge">充值</el-link>
+      </el-descriptions-item>
+    </el-descriptions>
+  </template>
+  <template #footer>
+    <el-button @click="loadAdminInfo">刷新用户信息</el-button>
+    <el-button @click="profileDialogVisible = false">关闭</el-button>
+  </template>
+</el-dialog>
+
+<el-dialog v-model="vipDialogVisible" title="会员续费" width="400px">
+  <!-- VIP 权益卡片 -->
+    <el-card shadow="never" style="margin-bottom: 15px; background: #f9f9f9;">
+      <div style="font-weight: bold; font-size: 15px; margin-bottom: 10px;">
+        会员专属权益
+      </div>
+      <ul style="padding-left: 18px; list-style: none; font-size: 14px; color: #555;">
+        <li style="margin: 6px 0;">
+          📦 <b>专属大存储空间</b>
+        </li>
+        <li style="margin: 6px 0;">
+          📁 <b>上传的安装包永久保存(会员过期删除)</b>（不含注入任务安装包以及无法注入的应用）
+        </li>
+        <li style="margin: 6px 0;">
+          🔓 <b>全站功能无限制使用</b>
+        </li>
+        <li style="margin: 6px 0;">
+          ⬇️ <b>下载次数无限制</b>
+        </li>
+      </ul>
+    </el-card>
+
+
+  <!-- 月份选择 -->
+  <div style="margin: 10px 0;">
+    <el-select v-model="vipMonths" placeholder="请选择续费月份" style="width: 100%;">
+      <el-option
+        v-for="n in 12"
+        :key="n"
+        :label="n + ' 个月'"
+        :value="n"
+      ></el-option>
+    </el-select>
+  </div>
+
+  <!-- 价格计算 -->
+  <div style="margin: 10px 0;">每月价格：<b>{{ vipPrice }}</b> 元(每个月按31天计算)</div>
+  <div style="margin: 10px 0;">应付金额：<b style="color: #e06c00;">{{ (vipPrice * vipMonths).toFixed(2) }}</b> 元</div>
+  <div style="margin: 10px 0;">当前余额：<b>{{ balanceInYuan }}</b> 元</div>
+
+  <!-- 操作按钮 -->
+  <template #footer>
+    <el-button @click="vipDialogVisible = false">取消</el-button>
+    <el-button type="primary" @click="submitVipRenew" :disabled="!vipMonths">确认续费</el-button>
+  </template>
+</el-dialog>
+
+
+
+
+<el-dialog v-model="editNicknameDialogVisible" title="修改昵称" width="300px">
+  <el-form :model="nicknameForm" label-width="60px">
+    <el-form-item label="新昵称">
+      <el-input v-model="nicknameForm.name"></el-input>
+    </el-form-item>
+  </el-form>
+  <template #footer>
+    <el-button @click="editNicknameDialogVisible = false">取消</el-button>
+    <el-button type="primary" @click="submitNickname">提交</el-button>
+  </template>
+</el-dialog>
+
+<el-dialog v-model="lanzouDialogVisible" title="蓝奏云盘账号配置" width="400px">
+    <el-alert
+        title="您的蓝奏账号密码会被储存，但是请放心你的文件安全，平台不会查看和窃取你的文件，也没有那个闲情逸致管你的文件，通常登录之后是长期有效的,也不会挤掉你的网页登录"
+        type="info"
+        style="margin-bottom: 10px;"
+        :closable="false"
+      ></el-alert>
+  <el-form :model="lanzouForm" label-width="100px">
+    <el-form-item label="账号">
+      <el-input v-model="lanzouForm.account" placeholder="请输入手机号"></el-input>
+    </el-form-item>
+    <el-form-item label="密码">
+      <el-input v-model="lanzouForm.password" placeholder="请输入密码" type="password"></el-input>
+    </el-form-item>
+    <el-form-item label="登录状态">
+      <el-tag :type="lanzouForm.uid ? 'success' : 'danger'">
+        {{ lanzouForm.uid ? '已登录' : '未登录' }}
+      </el-tag>
+    </el-form-item>
+  </el-form>
+  <template #footer>
+    <el-button @click="lanzouDialogVisible = false">取消</el-button>
+    <el-button type="primary" @click="submitLanzou">登录蓝奏</el-button>
+  </template>
+</el-dialog>
+
+<!-- S3 桶配置弹窗 -->
+<el-dialog v-model="s3DialogVisible" title="S3 桶配置" width="500px">
+    <el-alert
+        title="配置 S3 兼容存储（AWS S3、Cloudflare R2、Backblaze B2），注入完成后自动上传 APK 到桶中"
+        type="info"
+        style="margin-bottom: 15px;"
+        :closable="false"
+    ></el-alert>
+  <el-form :model="s3Form" label-width="110px">
+    <el-form-item label="端点 (Endpoint)">
+      <el-input v-model="s3Form.endpoint" placeholder="如 https://xxx.r2.cloudflarestorage.com"></el-input>
+    </el-form-item>
+    <el-form-item label="Access Key">
+      <el-input v-model="s3Form.accessKey" placeholder="Access Key ID"></el-input>
+    </el-form-item>
+    <el-form-item label="Secret Key">
+      <el-input v-model="s3Form.secretKey" placeholder="Secret Access Key" type="password" show-password></el-input>
+    </el-form-item>
+    <el-form-item label="桶名 (Bucket)">
+      <el-input v-model="s3Form.bucket" placeholder="桶名称"></el-input>
+    </el-form-item>
+    <el-form-item label="区域 (Region)">
+      <el-input v-model="s3Form.region" placeholder="R2 填 auto，S3 填 us-east-1 等"></el-input>
+    </el-form-item>
+    <el-form-item label="上传路径前缀">
+      <el-input v-model="s3Form.uploadPath" placeholder="如 apk/injected（可选，不填则传到桶根目录）"></el-input>
+    </el-form-item>
+    <el-form-item label="公开访问地址">
+      <el-input v-model="s3Form.publicUrl" placeholder="如 https://cdn.example.com（用于拼接下载链接）"></el-input>
+    </el-form-item>
+  </el-form>
+  <template #footer>
+    <el-button @click="s3DialogVisible = false">取消</el-button>
+    <el-button type="danger" @click="clearS3Config">清除配置</el-button>
+    <el-button type="primary" @click="submitS3" :loading="s3Saving">保存并测试</el-button>
+  </template>
+</el-dialog>
+
+
+
+<el-dialog
+  v-model="messageDialogVisible"
+  :title="messageMode === 'received' ? '我收到的消息' : '我发出的消息'"
+  width="800px"
+  destroy-on-close
+>
+  <div style="display: flex; height: 400px; overflow: hidden;">
+    <!-- 消息列表 -->
+    <el-scrollbar style="width: 180px; border-right: 1px solid #eee; padding-right: 10px;">
+      <el-list>
+        <el-list-item
+          v-for="msg in messageList"
+          :key="msg.id"
+          @click="loadMessageDetail(msg.id)"
+          style="cursor: pointer; padding: 10px; border-bottom: 1px solid #f0f0f0;"
+        >
+          <div style="display: flex;">
+            <el-badge is-dot v-if="msg.read == 0">
+              <el-avatar :src="messageMode === 'received' ? msg.send_avatar : msg.receive_avatar" size="small"></el-avatar>
+            </el-badge>
+            <el-avatar v-else :src="messageMode === 'received' ? msg.send_avatar : msg.receive_avatar" size="small"></el-avatar>
+        
+            <div style="margin-left: 10px; flex: 1;">
+              <div style="font-weight: bold;">
+                {{ messageMode === 'received' ? '来自:'+msg.send_nickname : '发给:'+msg.receive_nickname }}
+              </div>
+              <div style="color: #666; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                {{ msg.message }}
+              </div>
+              <div style="color: #999; font-size: 11px;">{{ msg.upload_time }}</div>
+            </div>
+          </div>
+        </el-list-item>
+      </el-list>
+    </el-scrollbar>
+
+    <!-- 消息详情 -->
+    <div style="flex: 1; padding: 10px;">
+      <div v-if="selectedMessage">
+        <div style="display: flex; align-items: center; margin-bottom: 10px;">
+          <el-avatar :src="selectedMessage.send_avatar" size="small"></el-avatar>
+          <div style="margin-left: 10px;">
+            <div style="font-weight: bold;">{{ selectedMessage.send_nickname }}</div>
+            <div style="font-size: 12px; color: #888;">{{ selectedMessage.upload_time }}</div>
+          </div>
+        </div>
+        <el-card style="margin-bottom: 15px;">
+          <div>{{ selectedMessage.message }}</div>
+        </el-card>
+        <!-- 回复输入框 -->
+        <el-input
+          type="textarea"
+          rows="3"
+          v-model="replyContent"
+          placeholder="回复内容（不超过1024字）"
+          maxlength="1024"
+          show-word-limit
+        ></el-input>
+        <div style="text-align: right; margin-top: 10px;">
+          <el-button type="primary" @click="sendReply" :disabled="!replyContent.trim()">发送</el-button>
+        </div>
+      </div>
+      <div v-else style="color: #888;">请选择一条消息查看详情</div>
+    </div>
+  </div>
+
+  <template #footer>
+      <el-button @click="openSendMessageDialog">发送消息</el-button>
+      <el-button @click="messageDialogVisible = false">关闭</el-button>
+  </template>
+</el-dialog>
+
+
+<el-dialog v-model="sendMessageDialogVisible" title="发送消息" width="400px">
+  <el-form :model="sendMessageForm" label-width="80px">
+    <el-form-item label="用户ID">
+      <el-input v-model="sendMessageForm.user_id" placeholder="请输入接收方用户ID"></el-input>
+    </el-form-item>
+    <el-form-item label="消息内容">
+      <el-input
+        v-model="sendMessageForm.message"
+        type="textarea"
+        :rows="4"
+        maxlength="1024"
+        show-word-limit
+        placeholder="请输入消息内容（最多1024字）"
+      ></el-input>
+    </el-form-item>
+  </el-form>
+  <template #footer>
+    <el-button @click="sendMessageDialogVisible = false">取消</el-button>
+    <el-button type="primary" @click="submitSendMessage">发送</el-button>
+  </template>
+</el-dialog>
+
+  </div>
+  <script>
+    const tokenKey = config.tokenKey;
+  
+    // 获取 cookie 中的 token
+    const cookieToken = document.cookie
+      .split('; ')
+      .find(row => row.startsWith(tokenKey + '='))
+      ?.split('=')[1] || '';
+  
+    // 获取 localStorage 中的 token
+    const localToken = localStorage.getItem(tokenKey) || '';
+  
+    // 判断是否跳转登录页
+    const shouldRedirect = (
+      !cookieToken ||                  // cookie 不存在或为空
+      !localToken ||                  // localStorage 不存在或为空
+      (cookieToken && localToken && cookieToken !== localToken) // 值不一致
+    );
+  
+    if (!cookieToken || !localToken) {
+      // 缺任何一个直接跳登录
+      const loginUrl = config.pagePath + config.loginPage + config.pageSuffix;
+      window.location.href = loginUrl;
+    } else if (cookieToken !== localToken) {
+      // 值不一致，更新 localStorage
+      localStorage.setItem(tokenKey, cookieToken);
+    }
+  </script>
+  
+  
+  <script>
+    const { createApp, ref, reactive, onMounted, computed } = Vue;
+    
+    const app = createApp({
+      setup() {
+        const siteTitle = config.siteTitle;
+        const pagePrefix = config.pagePath;
+        const pageSuffix = config.pageSuffix;
+        
+        const menuList = ref([]);
+        const activeMenu = ref('');
+        const iframeSrc = ref(pagePrefix + config.defaultPage + pageSuffix);
+        const adminInfo = ref({
+            logo: '',
+            name: '',
+            profile: ''
+        });
+        const passwordDialogVisible = ref(false);
+        const passwordForm = reactive({
+          old_password: '',
+          new_password: '',
+          confirm_password: ''
+        });
+        const defaultOpeneds = ref([]);
+        const showMenuTip = ref(false);
+
+
+const vipDialogVisible = ref(false);
+const vipMonths = ref(1);
+const vipPrice = ref(0);
+
+
+async function submitVipRenew() {
+  try {
+    const res = await fetch(`/api/?module=user&method=renewvip`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ months: vipMonths.value })
+    });
+    const json = await res.json();
+    if (json.code === 200) {
+      ElementPlus.ElMessage.success('续费成功');
+      vipDialogVisible.value = false;
+      loadAdminInfo(); // 刷新用户信息
+    } else {
+      ElementPlus.ElMessage.error(json.message || '续费失败');
+    }
+  } catch (err) {
+    ElementPlus.ElMessage.error('请求失败');
+  }
+}
+async function loadVipPrice() {
+  try {
+    const res = await fetch('/api/?module=user&method=getvipprice');
+    const json = await res.json();
+    if (json.code === 200) {
+      vipPrice.value = parseFloat(json.data) || 0;
+    } else {
+      ElementPlus.ElMessage.error(json.message || '获取VIP价格失败');
+    }
+  } catch (e) {
+    console.error('获取VIP价格异常', e);
+    ElementPlus.ElMessage.error('网络错误，获取VIP价格失败');
+  }
+}
+function openVipDialog() {
+  loadVipPrice();
+  vipDialogVisible.value = true;
+}
+const handleRecharge = () => {
+  ElementPlus.ElMessageBox.alert(
+    '本平台为免费公益平台，无需充值即可免费使用，如有疑问请联系QQ:2380494437',
+    '充值提示',
+    {
+      confirmButtonText: '我知道了',
+      type: 'info',
+    }
+  );
+};
+
+
+//站内信消息代码
+const messageDialogVisible = ref(false);
+const messageMode = ref('received');
+const messageList = ref([]);
+const selectedMessage = ref(null);
+const replyContent = ref('');
+const unreadCount = ref(0);
+
+// 加载消息列表
+async function loadMessageList() {
+  const method = messageMode.value === 'received' ? 'getreceivemsg' : 'getsendemsg';
+  const res = await fetch(`/api/?module=message&method=${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ page: 1 })
+  });
+  const json = await res.json();
+  if (json.code === 200) {
+    messageList.value = json.data.list || [];
+  }
+}
+
+// 加载消息详情
+async function loadMessageDetail(id) {
+  const res = await fetch('/api/?module=message&method=getmsgdetail', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messageid: id })
+  });
+  const json = await res.json();
+  if (json.code === 200) {
+    selectedMessage.value = json.data;
+
+    const msg = messageList.value.find(m => m.id === id);
+    if (msg) msg.read = 1;
+    loadUnreadCount();
+  }
+}
+
+
+// 回复消息
+async function sendReply() {
+  const msg = replyContent.value.trim();
+  if (!msg) return;
+  const targetId = messageMode.value === 'received'
+    ? selectedMessage.value.send_user_id
+    : selectedMessage.value.receive_user_id;
+
+  const res = await fetch('/api/?module=message&method=sendmsg', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      receive_user_id: targetId,
+      message: msg
+    })
+  });
+  const json = await res.json();
+  if (json.code === 200) {
+    ElementPlus.ElMessage.success('发送成功');
+    replyContent.value = '';
+    loadMessageDetail(selectedMessage.value.id);
+  } else {
+    ElementPlus.ElMessage.error(json.message || '发送失败');
+  }
+}
+async function handleMessageMenu(command) {
+  messageMode.value = command;
+  selectedMessage.value = null;
+  replyContent.value = '';
+  await loadMessageList();
+  messageDialogVisible.value = true;
+}
+async function loadUnreadCount() {
+  try {
+    const res = await fetch('/api/?module=message&method=getreceivemsg', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page: 1 })
+    });
+    const json = await res.json();
+    if (json.code === 200) {
+      unreadCount.value = json.data.unread || 0;
+    }
+  } catch (e) {
+    console.error('获取未读消息数量失败', e);
+  }
+}
+
+
+
+
+const sendMessageDialogVisible = ref(false);
+const sendMessageForm = reactive({
+  user_id: '',
+  message: ''
+});
+
+function openSendMessageDialog() {
+  sendMessageForm.user_id = '';
+  sendMessageForm.message = '';
+  sendMessageDialogVisible.value = true;
+}
+
+async function submitSendMessage() {
+  if (!sendMessageForm.user_id.trim() || !sendMessageForm.message.trim()) {
+    ElementPlus.ElMessage.warning('请输入完整内容');
+    return;
+  }
+
+  const res = await fetch('/api/?module=message&method=sendmsg', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      receive_user_id: sendMessageForm.user_id.trim(),
+      message: sendMessageForm.message.trim()
+    })
+  });
+
+  const json = await res.json();
+  if (json.code === 200) {
+    ElementPlus.ElMessage.success('消息发送成功');
+    sendMessageDialogVisible.value = false;
+    loadMessageList(); // 重新加载消息列表
+  } else {
+    ElementPlus.ElMessage.error(json.message || '发送失败');
+  }
+}
+
+//站内信消息代码结束
+
+const profileDialogVisible = ref(false);
+const editNicknameDialogVisible = ref(false);
+const nicknameForm = reactive({ name: '' });
+
+const balanceInYuan = computed(() => {
+  const val = parseInt(adminInfo.value.balance || 0);
+  return (val / 100).toFixed(2);
+});
+
+function openProfileDialog() {
+  profileDialogVisible.value = true;
+}
+
+function editNickname() {
+  nicknameForm.name = adminInfo.value.name || '';
+  editNicknameDialogVisible.value = true;
+}
+
+async function submitNickname() {
+  if (!nicknameForm.name.trim()) {
+    ElementPlus.ElMessage.warning('请输入新昵称');
+    return;
+  }
+  const res = await fetch('/api/?module=user&method=updateNickname', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: nicknameForm.name })
+  });
+  const json = await res.json();
+  if (json.code === 200) {
+    ElementPlus.ElMessage.success('昵称修改成功');
+    editNicknameDialogVisible.value = false;
+    loadAdminInfo();
+  } else {
+    ElementPlus.ElMessage.error(json.message || '修改失败');
+  }
+}
+
+
+const isCollapse = ref(false);
+function toggleCollapse() {
+  isCollapse.value = !isCollapse.value;
+}
+
+
+const lanzouDialogVisible = ref(false);
+const lanzouForm = reactive({
+  account: '',
+  password: '',
+  uid: ''
+});
+
+async function openLanzouDialog() {
+  const res = await fetch('/api/?module=lanzou&method=getlanzou');
+  const json = await res.json();
+  if (json.code === 200) {
+    lanzouForm.account = json.data.lanzou_account || '';
+    lanzouForm.password = json.data.lanzou_password || '';
+    lanzouForm.uid = json.data.lanzou_uid || '';
+    lanzouDialogVisible.value = true;
+  } else {
+    ElementPlus.ElMessage.error(json.message || '加载失败');
+  }
+}
+
+async function submitLanzou() {
+  if (!lanzouForm.account || !lanzouForm.password) {
+    ElementPlus.ElMessage.warning('请输入账号和密码');
+    return;
+  }
+  const res = await fetch('/api/?module=lanzou&method=editlanzou', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      account: lanzouForm.account,
+      password: lanzouForm.password
+    })
+  });
+  const json = await res.json();
+  if (json.code === 200) {
+    ElementPlus.ElMessage.success(json.data || '登录成功');
+    lanzouDialogVisible.value = false;
+  } else {
+    ElementPlus.ElMessage.error(json.message || '登录失败');
+  }
+}
+
+// ===== S3 桶配置 =====
+const s3DialogVisible = ref(false);
+const s3Saving = ref(false);
+const s3Form = reactive({
+  endpoint: '',
+  accessKey: '',
+  secretKey: '',
+  bucket: '',
+  region: 'auto',
+  uploadPath: '',
+  publicUrl: '',
+});
+
+async function openS3Dialog() {
+  const res = await fetch('/api/?module=s3config&method=getS3Config');
+  const json = await res.json();
+  if (json.code === 200) {
+    s3Form.endpoint = json.data.s3_endpoint || '';
+    s3Form.accessKey = json.data.s3_access_key || '';
+    s3Form.secretKey = json.data.s3_secret_key || '';
+    s3Form.bucket = json.data.s3_bucket || '';
+    s3Form.region = json.data.s3_region || 'auto';
+    s3Form.uploadPath = json.data.s3_upload_path || '';
+    s3Form.publicUrl = json.data.s3_public_url || '';
+    s3DialogVisible.value = true;
+  } else {
+    ElementPlus.ElMessage.error(json.message || '加载失败');
+  }
+}
+
+async function submitS3() {
+  if (!s3Form.endpoint || !s3Form.accessKey || !s3Form.secretKey || !s3Form.bucket) {
+    ElementPlus.ElMessage.warning('端点、Access Key、Secret Key、桶名不能为空');
+    return;
+  }
+  s3Saving.value = true;
+  try {
+    const res = await fetch('/api/?module=s3config&method=editS3Config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        endpoint: s3Form.endpoint,
+        access_key: s3Form.accessKey,
+        secret_key: s3Form.secretKey,
+        bucket: s3Form.bucket,
+        region: s3Form.region,
+        upload_path: s3Form.uploadPath,
+        public_url: s3Form.publicUrl,
+      })
+    });
+    const json = await res.json();
+    if (json.code === 200) {
+      ElementPlus.ElMessage.success(json.data || '保存成功');
+      s3DialogVisible.value = false;
+    } else {
+      ElementPlus.ElMessage.error(json.message || '保存失败');
+    }
+  } finally {
+    s3Saving.value = false;
+  }
+}
+
+async function clearS3Config() {
+  const res = await fetch('/api/?module=s3config&method=editS3Config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  });
+  const json = await res.json();
+  if (json.code === 200) {
+    s3Form.endpoint = '';
+    s3Form.accessKey = '';
+    s3Form.secretKey = '';
+    s3Form.bucket = '';
+    s3Form.region = 'auto';
+    s3Form.uploadPath = '';
+    s3Form.publicUrl = '';
+    ElementPlus.ElMessage.success('配置已清除');
+    s3DialogVisible.value = false;
+  } else {
+    ElementPlus.ElMessage.error(json.message || '清除失败');
+  }
+}
+
+
+        function openPasswordDialog() {
+          passwordForm.old_password = '';
+          passwordForm.new_password = '';
+          passwordForm.confirm_password = '';
+          passwordDialogVisible.value = true;
+        }
+        
+        async function submitPassword() {
+          if (!passwordForm.old_password || !passwordForm.new_password || !passwordForm.confirm_password) {
+            ElementPlus.ElMessage.warning('请填写完整');
+            return;
+          }
+        
+          if (passwordForm.new_password !== passwordForm.confirm_password) {
+            ElementPlus.ElMessage.error('两次新密码不一致');
+            return;
+          }
+        
+          const res = await fetch('/api/?module=user&method=changePassword', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(passwordForm)
+          });
+        
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success(json.message || '密码修改成功');
+            passwordDialogVisible.value = false;
+          } else {
+            ElementPlus.ElMessage.error(json.message || '密码修改失败');
+          }
+        }
+        function handleMenuSelect(path) {
+            if (!validateToken()) {
+                ElementPlus.ElMessage.warning('登录状态已失效，即将跳转到登录页...');
+                setTimeout(() => {
+                window.location.href = config.pagePath + "/" + config.loginPage + config.pageSuffix;
+                }, 3000);
+                return;
+            }
+
+            activeMenu.value = path;
+            iframeSrc.value = pagePrefix + path + pageSuffix;
+            localStorage.setItem('active_menu', path);
+            if (isCollapse.value) {
+                defaultOpeneds.value = [];
+              }
+            
+        }
+        function refreshIframe() {
+          // 强制刷新 iframe，可加随机参数防止缓存
+          iframeSrc.value = iframeSrc.value + '?_t=' + Date.now();
+        }
+        function goHome() {
+            activeMenu.value = '';
+            iframeSrc.value = pagePrefix + config.defaultPage + pageSuffix;
+            localStorage.setItem('active_menu', config.defaultPage);
+        }
+        function handleUserCommand(command) {
+              if (command === 'profile') {
+                  openProfileDialog();
+              } else if (command === 'password') {
+                  openPasswordDialog();
+              } else if (command === 'lanzou') {
+                  openLanzouDialog();
+              } else if (command === 's3') {
+                  openS3Dialog();
+              } else if (command === 'logout') {
+                  // 清除 token 和缓存
+                  document.cookie = config.tokenKey + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
+                  localStorage.removeItem(config.tokenKey);
+                  localStorage.removeItem('adminInfo');
+    
+                  // 跳转到登录页（自动拼接配置路径）
+                  window.location.href = '/' + config.pagePath + config.loginPage + config.pageSuffix;
+              }
+          }
+        function animateRefresh(event) {
+          const icon = event.currentTarget.querySelector('i');
+          if (icon) {
+            icon.classList.remove('rotate-half-ccw'); // 先移除，防止重复动画
+            void icon.offsetWidth; // 强制重绘，重新触发动画
+            icon.classList.add('rotate-half-ccw');
+          }
+        }
+
+        function validateToken() {
+            const tokenKey = config.tokenKey;
+            const localToken = localStorage.getItem(tokenKey) || '';
+            const cookieToken = document.cookie
+                .split('; ')
+                .find(row => row.startsWith(tokenKey + '='))
+                ?.split('=')[1] || '';
+
+            if (!cookieToken || !localToken) {
+                return false;
+            }
+
+            if (cookieToken !== localToken) {
+                localStorage.setItem(tokenKey, cookieToken);
+            }
+
+            return true;
+        }
+        // 过滤 hidden 菜单
+        function filterVisibleMenu(menu) {
+          return menu
+            .filter(item => item.hidden !== true)
+            .map(item => ({
+              ...item,
+              menu: item.menu ? filterVisibleMenu(item.menu) : []
+            }));
+        }
+        async function loadAdminInfo() {
+            try {
+                const res = await fetch('/api/?module=user&method=getInfo');
+                const json = await res.json();
+                if (json.code === 200) {
+                adminInfo.value = json.data;
+                }
+            } catch (e) {
+                console.error('管理员信息加载失败：', e);
+            }
+        }
+        
+        
+
+        async function handleAndroidClick() {
+          try {
+            // 先弹窗确认
+            await ElementPlus.ElMessageBox.confirm(
+              '是否下载安卓APP客户端？',
+              '提示',
+              {
+                confirmButtonText: '确定',
+                cancelButtonText: '取消',
+                type: 'warning'
+              }
+            );
+          } catch {
+            // 用户取消
+            return;
+          }
+        
+          // 显示加载中提示
+          const loading = ElementPlus.ElLoading.service({
+            lock: true,
+            text: '正在获取最新版本，请稍候…',
+            background: 'rgba(0, 0, 0, 0.4)'
+          });
+        
+          try {
+            const res = await fetch('/api/index.php?module=site&method=getAndroidUrl', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: "{}"
+            });
+        
+            const json = await res.json();
+            loading.close();
+        
+            if (json.code !== 200) {
+              ElementPlus.ElMessage.error(json.message || '获取下载地址失败');
+              return;
+            }
+        
+            if (!json.data || !json.data.download) {
+              ElementPlus.ElMessage.error('后端未返回有效下载地址');
+              return;
+            }
+        
+            // 打开下载
+            window.open(json.data.download, '_blank');
+        
+          } catch (err) {
+            loading.close();
+            ElementPlus.ElMessage.error('网络错误，请稍后再试');
+          }
+        }
+
+        async function loadMenu() {
+          try {
+            const res = await fetch('/api/?module=menu&method=getMenu');
+            const json = await res.json();
+            if (json.code === 200) {
+              menuList.value = filterVisibleMenu(json.data);
+              // 可选：加载第一个页面
+              const firstPath = findFirstPath(menuList.value);
+              /* if (firstPath) {
+                handleMenuSelect(firstPath);
+              } */
+        
+              // 初始判断：高度大于宽度的1.5倍才折叠
+              if (window.innerHeight / window.innerWidth >= 1.5) {
+                isCollapse.value = true;
+              }
+        
+              // 响应式监听窗口大小变化
+              window.addEventListener('resize', () => {
+                if (window.innerHeight / window.innerWidth >= 1.5) {
+                  isCollapse.value = true;
+                } else {
+                  isCollapse.value = false;
+                }
+              });
+            }
+          } catch (e) {
+            console.error('菜单加载失败：', e);
+          }
+        }
+
+
+        function findFirstPath(menu) {
+          for (const item of menu) {
+            if (item.path) return item.path;
+            if (item.menu) {
+              const sub = findFirstPath(item.menu);
+              if (sub) return sub;
+            }
+          }
+          return '';
+        }
+
+        
+        onMounted(() => {
+          loadMenu();
+          loadAdminInfo();
+          loadUnreadCount();
+          setInterval(loadUnreadCount, 180000);
+        
+          // 弹出公告提示（只显示一次）
+          /*const noticeKey = 'admin_notice_shown';
+          if (!localStorage.getItem(noticeKey)) {
+            ElementPlus.ElMessageBox.alert(
+              '注入服务已重构,支持注入大部分混淆/加固应用,注入非常快,如有问题,请加QQ群反馈：793107266 (菜鸟云注入交流群2群)',
+              '系统公告',
+              {
+                confirmButtonText: '我知道了',
+                type: 'info'
+              }
+            );
+            localStorage.setItem(noticeKey, '1');
+          }*/
+          
+          /*ElementPlus.ElMessageBox.alert(
+          'B站来的看这里：本平台<br><span style="color:red;font-weight:bold;">不能破解卡密验证</span>，<br><span style="color:red;font-weight:bold;">不能破解卡密验证</span>，<br><span style="color:red;font-weight:bold;">不能破解卡密验证</span>，<br>去除弹窗也只是隐藏弹窗，并不能去掉卡密验证。本平台是一个注入平台，不是破解平台。如有问题,请加QQ群反馈：793107266',
+          '系统公告',
+          {
+            confirmButtonText: '我知道了',
+            type: 'info',
+            dangerouslyUseHTMLString: true // 开启 HTML 渲染
+          }
+        );*/
+
+        
+          const savedMenu = localStorage.getItem('active_menu');
+          if (savedMenu) {
+            activeMenu.value = savedMenu;
+            iframeSrc.value = pagePrefix + savedMenu + pageSuffix;
+          }
+          const ua = navigator.userAgent.toLowerCase();
+            const isMobile = /iphone|ipad|android|mobile|phone/.test(ua);
+            
+            if (isMobile) {
+              ElementPlus.ElMessageBox.alert(
+                '推荐下载APP客户端操作更方便,点击上方小图标可下载',
+                '提示',
+                {
+                  confirmButtonText: '知道了',
+                  type: 'warning'
+                }
+              );
+            }
+          showMenuTip.value = true;
+            setTimeout(() => {
+              showMenuTip.value = false;
+            }, 3000);
+          
+          
+          
+          
+          
+          
+          
+          
+        });
+
+        return {
+          siteTitle,
+          menuList,
+          activeMenu,
+          iframeSrc,
+          handleMenuSelect,
+          adminInfo,
+          handleUserCommand,
+          goHome,
+          refreshIframe,
+          animateRefresh,passwordDialogVisible,
+          passwordForm,
+          openPasswordDialog,
+          submitPassword,profileDialogVisible,
+          editNicknameDialogVisible,
+          nicknameForm,
+          openProfileDialog,
+          editNickname,
+          submitNickname,
+          balanceInYuan,
+          isCollapse,
+          toggleCollapse,
+          lanzouDialogVisible,
+          lanzouForm,
+          openLanzouDialog,
+          submitLanzou,
+          // S3 桶配置
+          s3DialogVisible,
+          s3Saving,
+          s3Form,
+          openS3Dialog,
+          submitS3,
+          clearS3Config,
+          //站内信
+          handleMessageMenu,
+          messageDialogVisible,
+          messageMode,
+          messageList,
+          selectedMessage,
+          replyContent,
+          loadMessageDetail,
+          sendReply,
+          unreadCount,
+          sendMessageDialogVisible,
+          sendMessageForm,
+          openSendMessageDialog,
+          submitSendMessage,
+          defaultOpeneds,
+          showMenuTip,
+          loadAdminInfo,
+          vipDialogVisible,   // 控制会员弹窗显示
+          vipMonths,          // 用户选择的月份
+          vipPrice,           // 每月VIP单价
+          submitVipRenew,      // 提交续费方法
+          loadVipPrice,
+          openVipDialog,
+          handleRecharge,
+          handleAndroidClick
+        };
+      }
+    });
+
+    app.use(ElementPlus);
+
+    // 注册递归组件
+    app.component('menu-item', {
+  props: ['item'],
+  setup(props) {
+    return () => {
+      const h = Vue.h;
+      const item = props.item;
+
+      if (item.menu && item.menu.length) {
+        return h(
+          ElementPlus.ElSubMenu,
+          { index: item.id },
+          {
+            title: () => [
+              item.icon
+                ? h(ElementPlus.ElIcon, { style: 'margin-right: 5px' }, () =>
+                    h(app._context.components[item.icon])
+                  )
+                : null,
+              h('span', item.name)
+            ],
+            default: () =>
+              item.menu.map(child =>
+                h(app._context.components['menu-item'], { item: child, key: child.id })
+              )
+          }
+        );
+      } else {
+        return h(
+              ElementPlus.ElMenuItem,
+              {
+                index: item.path
+              },
+              {
+                default: () => [
+                  item.icon
+                    ? h(ElementPlus.ElIcon, {}, () =>
+                        h(app._context.components[item.icon])
+                      )
+                    : null,
+                  h('span', {}, item.name)
+                ]
+              }
+            );
+
+      }
+    };
+  }
+});
+
+
+    // 自动注册所有图标组件
+    for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
+      app.component(key, component);
+    }
+
+    app.mount('#app');
+  </script>
+  <script> var _mtj = _mtj || []; (function () { var mtj = document.createElement("script"); mtj.src = "https://node91.aizhantj.com:21233/tjjs/?k=pvatfxy1rf8"; var s = document.getElementsByTagName("script")[0]; s.parentNode.insertBefore(mtj, s); })(); </script>
+</body>
+</html>

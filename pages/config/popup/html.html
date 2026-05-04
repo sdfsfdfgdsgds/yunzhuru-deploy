@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>HTML弹窗配置</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ace.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ext-language_tools.min.js"></script>
+    <style>
+    .custom-dialog .el-dialog__body {
+      display: flex;
+      flex-direction: column;
+      padding: 20px;
+      height: 700px; /* 默认高度 */
+    }
+    
+    .dialog-fullscreen .el-dialog__body {
+      height: calc(100vh - 110px); /* 适配最大化时 */
+    }
+    
+    .ace-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    #html-editor {
+      flex: 1;
+      width: 100%;
+    }
+    </style>
+
+
+</head>
+<body>
+  <div id="app" style="padding: 20px">
+    <el-alert title="HTML弹窗适用于自定义UI的展示场景，展示内容由HTML代码决定，空白的HTML弹窗是完全透明的，需要自己设置HTML背景色遮罩" type="success" style="margin-bottom: 20px"></el-alert>
+    <el-alert title="HTML代码里不能执行JS网络请求操作，要请求网络接口，请使用系统的JS接口方法" type="error" style="margin-bottom: 20px"></el-alert>
+
+    <div style="margin-bottom: 20px; display: flex; align-items: center; gap: 10px">
+      <el-select v-model="selectedAppId" placeholder="选择应用" style="width: 300px" @change="loadPopups">
+        <el-option v-for="app in appList" :key="app.id" :label="`${app.name} | ${app.version} | ${app.package}`" :value="app.id"></el-option>
+      </el-select>
+      <el-button @click="loadApps">刷新应用列表</el-button>
+      <el-button type="primary" @click="openAddDialog">添加HTML弹窗</el-button>
+      <el-button type="info" @click="openTemplateDialog">查看示例模板</el-button>
+      <el-button type="success" @click="jsApiDialogVisible = true">查看JS接口方法</el-button>
+    </div>
+
+    <el-table :data="popupList" border>
+      <el-table-column label="ID" prop="id" width="60"></el-table-column>
+      <el-table-column label="图标" width="60">
+        <template #default="scope">
+          <img :src="`/icon.php?id=${scope.row.config_id}`" style="width: 32px; height: 32px; object-fit: contain; border-radius: 6px;" />
+        </template>
+      </el-table-column>
+      <el-table-column label="应用信息" prop="apk_info"></el-table-column>
+      <el-table-column label="备注" prop="remark"></el-table-column>
+      <el-table-column label="启用" prop="enable" width="100">
+        <template #default="scope">
+          <el-tag :type="scope.row.enable == 1 ? 'success' : 'info'">{{ scope.row.enable == 1 ? '是' : '否' }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="名单管理" width="180">
+        <template #default="scope">
+          <el-button size="small" @click="showPopupList('whitelist', scope.row.id)">白名单</el-button>
+          <el-button size="small" type="info" @click="showPopupList('blacklist', scope.row.id)">黑名单</el-button>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="160">
+        <template #default="scope">
+          <el-button type="primary" size="small" @click="editPopup(scope.row)">编辑</el-button>
+          <el-button type="danger" size="small" @click="deletePopup(scope.row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+    
+    <div style="margin-top: 10px; text-align: right;">
+      <el-pagination
+        background
+        layout="total, prev, pager, next"
+        :total="popupTotal"
+        :page-size="popupSearch.limit"
+        :current-page="popupSearch.page"
+        @current-change="popupPageChange"
+      >
+      </el-pagination>
+    </div>
+
+
+    <el-dialog
+      v-model="dialogVisible"
+      :title="editMode ? '编辑HTML弹窗' : '添加HTML弹窗'"
+      :fullscreen="dialogFullscreen"
+      width="800px"
+      :class="['custom-dialog', dialogFullscreen ? 'dialog-fullscreen' : '']"
+    >
+      <!-- 右上角自定义最大化按钮 -->
+      <template #header>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span>{{ editMode ? '编辑HTML弹窗' : '添加HTML弹窗' }}</span>
+          <el-button size="small" @click="dialogFullscreen = !dialogFullscreen">
+            {{ dialogFullscreen ? '还原' : '最大化' }}
+          </el-button>
+        </div>
+      </template>
+    
+      <el-form :model="form" label-width="100px" class="ace-container">
+        <el-form-item label="备注">
+          <el-input v-model="form.remark"></el-input>
+        </el-form-item>
+    
+        <el-form-item label="HTML代码" style="flex: 1">
+          <div id="html-editor" style="height: 100%; width: 100%; border: 1px solid #ccc; border-radius: 4px;"></div>
+        </el-form-item>
+    
+        <el-form-item label="防去除">
+          <el-switch v-model="form.lock"></el-switch>
+          <el-alert title="可防止弹窗被第三方程序拦截关闭,不能防逆向破解"></el-alert>
+        </el-form-item>
+        <el-form-item label="启用">
+          <el-switch v-model="form.enable"></el-switch>
+        </el-form-item>
+      </el-form>
+    
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="dialogVisible = false">取消</el-button>
+          <el-button type="warning" @click="handlePreview">预览</el-button>
+          <el-button type="primary" @click="submitForm">保存</el-button>
+        </span>
+      </template>
+    </el-dialog>
+    
+    
+
+
+
+    <el-dialog v-model="popupListDialogVisible" :title="currentListType === 'whitelist' ? '白名单' : '黑名单'">
+      <el-alert title="白名单：只在这些类名弹出；黑名单：这些类名永不展示弹窗" type="info" style="margin-bottom: 20px"></el-alert>
+      <el-button type="primary" @click="addListItem" style="margin-bottom: 10px">添加</el-button>
+      <el-table :data="popupListData" border>
+        <el-table-column label="ID" prop="id" width="60"></el-table-column>
+        <el-table-column label="类名" prop="class_name"></el-table-column>
+        <el-table-column label="备注" prop="remark"></el-table-column>
+        <el-table-column label="创建时间" prop="created_at" width="180"></el-table-column>
+        <el-table-column label="操作" width="100">
+          <template #default="scope">
+            <el-button type="danger" size="small" @click="deleteListItem(scope.row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+    
+    <el-dialog v-model="templateDialogVisible" title="示例模板">
+      <div style="margin-bottom: 10px; display: flex; gap: 10px;">
+        <el-input v-model="templateSearch.title" placeholder="按标题搜索" style="width: 200px"></el-input>
+        <el-input v-model="templateSearch.html" placeholder="按HTML关键字搜索" style="width: 200px"></el-input>
+        <el-button type="primary" @click="loadTemplates">搜索</el-button>
+        <el-button @click="resetTemplateSearch">重置</el-button>
+      </div>
+      <el-row :gutter="20">
+        <el-col :span="6" v-for="tpl in htmlTemplates" :key="tpl.id" style="margin-bottom: 20px">
+          <div style="border: 1px solid #eee; border-radius: 6px; padding: 15px">
+            <h3 style="margin: 0 0 6px;">{{ tpl.title }}</h3>
+            <p style="margin: 0 0 10px; color: #888; font-size: 13px;">
+              {{ tpl.remark && tpl.remark.trim() !== '' ? tpl.remark : '无说明' }}
+            </p>
+            <el-button type="primary" size="small" @click="previewTemplate(tpl.html)">预览</el-button>
+            <el-button size="small" @click="copyTemplate(tpl.html)">复制代码</el-button>
+          </div>
+        </el-col>
+      </el-row>
+      <div style="margin-top: 10px; text-align: right;">
+        <el-pagination background layout="total, prev, pager, next"
+                       :total="templateTotal"
+                       :page-size="templateSearch.limit"
+                       :current-page="templateSearch.page"
+                       @current-change="templatePageChange">
+        </el-pagination>
+      </div>
+    </el-dialog>
+
+
+
+
+    <el-dialog v-model="previewDialogVisible" title="HTML预览" width="380px">
+      <div style="display: flex; justify-content: center;">
+        <div
+          style="
+            position: relative;
+            width: 360px;
+            aspect-ratio: 9 / 16;
+            background-image: url('/images/phone-frame.jpg');
+            background-size: cover;
+            background-position: center;
+            border-radius: 12px;
+            overflow: hidden;
+          "
+        >
+          <iframe
+            v-if="previewHtml"
+            :srcdoc="previewHtml"
+            style="
+              position: absolute;
+              top: 0;
+              left: 0;
+              width: 100%;
+              height: 100%;
+              border: none;
+              background-color: transparent;
+              pointer-events: none;
+            "
+          ></iframe>
+        </div>
+      </div>
+    </el-dialog>
+
+
+    <el-dialog v-model="jsApiDialogVisible" title="JS接口说明" width="600px">
+      <el-alert
+        title="HTML模板可通过 JS 调用原生方法，以下是可用接口说明"
+        type="info"
+        show-icon
+        style="margin-bottom: 20px"
+      ></el-alert>
+    
+      <el-collapse>
+        <el-collapse-item title="关闭当前弹窗" name="1">
+          <p><strong>说明：</strong>关闭当前 HTML 弹窗。</p>
+          <p><strong>示例：</strong><code>window.Android.close('{#id#}')</code></p>
+          <p><strong>参数：</strong>{#id#} 会被系统自动替换为弹窗ID，直接传这个变量即可</p>
+        </el-collapse-item>
+        
+        <el-collapse-item title="打印日志" name="11">
+          <p><strong>说明：</strong>可以往调试器里加入日志。</p>
+          <p><strong>示例：</strong><code>window.Android.log('日志内容')</code></p>
+          <p><strong>参数：</strong>msg: 字符串,日志内容</p>
+        </el-collapse-item>
+        
+        <el-collapse-item title="读取配置" name="12">
+          <p><strong>说明：</strong>用于从本地持久化存储中读取数据，适合读取用户输入的卡密、登录信息等。</p>
+          <p><strong>示例：</strong><code>const value = window.Android.readSP("kami");</code></p>
+          <p><strong>参数：</strong></p>
+          <ul>
+            <li><code>key</code>（字符串）—— 要读取的键名。</li>
+          </ul>
+          <p><strong>返回值：</strong></p>
+          <ul>
+            <li>对应键名的数据（字符串），如果不存在则返回空字符串。</li>
+          </ul>
+        </el-collapse-item>
+        
+        <el-collapse-item title="写入配置" name="13">
+          <p><strong>说明：</strong>用于将数据写入本地持久化存储，可用于保存卡密、用户设置等信息。</p>
+          <p><strong>示例：</strong><code>window.Android.writeSP("kami", "abc123");</code></p>
+          <p><strong>参数：</strong></p>
+          <ul>
+            <li><code>key</code>（字符串）—— 要保存的键名。</li>
+            <li><code>value</code>（字符串）—— 要保存的内容。</li>
+          </ul>
+          <p><strong>返回值：</strong></p>
+          <ul>
+            <li>无。</li>
+          </ul>
+        </el-collapse-item>
+        
+        <el-collapse-item title="检测是否存在某个包名" name="14">
+          <p><strong>说明：</strong>用于检测设备上是否安装指定的应用包名。</p>
+          
+          <p><strong>示例：</strong></p>
+          <pre><code>// 检查是否安装某个应用
+        const isInstalled = window.Android.isAppInstalled("com.android.incallui");
+        if (isInstalled) {
+          window.Android.log("已安装【电话】应用");
+        } else {
+          window.Android.log("未安装该应用");
+        }</code></pre>
+        
+          <p><strong>参数：</strong></p>
+          <ul>
+            <li><code>packageName</code>（字符串）—— 要检测的应用包名，例如：<code>"com.tencent.mobileqq"</code></li>
+          </ul>
+        
+          <p><strong>返回值：</strong></p>
+          <ul>
+            <li>存在则返回 <code>true</code>，未安装或发生异常时返回 <code>false</code>。</li>
+          </ul>
+        </el-collapse-item>
+
+    
+        <el-collapse-item title="弹出原生Toast提示" name="2">
+          <p><strong>说明：</strong>弹出一个原生 Toast 提示。</p>
+          <p><strong>示例：</strong><code>window.Android.Toast('你好')</code></p>
+          <p><strong>参数：</strong>msg：字符串</p>
+        </el-collapse-item>
+    
+        <el-collapse-item title="打开网页链接" name="3">
+          <p><strong>说明：</strong>使用系统浏览器打开一个网页链接。</p>
+          <p><strong>示例：</strong><code>window.Android.openUrl('https://example.com')</code></p>
+          <p><strong>参数：</strong>url：字符串，支持 http(s) 或 schema</p>
+        </el-collapse-item>
+    
+        <el-collapse-item title="启动指定 Activity" name="4">
+          <p><strong>说明：</strong>打开一个指定类名的原生 Activity。</p>
+          <p><strong>示例：</strong><code>window.Android.openActivity('com.xxx.xxx.YourActivity')</code></p>
+          <p><strong>参数：</strong>className：完整类路径</p>
+        </el-collapse-item>
+    
+        <el-collapse-item title="退出应用" name="5">
+          <p><strong>说明：</strong>终止当前应用进程。</p>
+          <p><strong>示例：</strong><code>window.Android.exitApp()</code></p>
+          <p><strong>参数：</strong>无</p>
+        </el-collapse-item>
+    
+        <el-collapse-item title="复制内容到剪贴板" name="6">
+          <p><strong>说明：</strong>将指定内容复制到系统剪贴板。</p>
+          <p><strong>示例：</strong><code>window.Android.copyText('复制的内容')</code></p>
+          <p><strong>参数：</strong>text：字符串</p>
+        </el-collapse-item>
+    
+        <el-collapse-item title="加入QQ群" name="7">
+          <p><strong>说明：</strong>打开 QQ 加群页面（需手Q支持）。</p>
+          <p><strong>示例：</strong><code>window.Android.QQGroup('vHrwY6iadgsWoSfB6-XoPs3gzqRIBmgm')</code></p>
+          <p><strong>参数：</strong>url：QQ群官网的群组件，安卓组件里的key值</p>
+        </el-collapse-item>
+        
+        <el-collapse-item title="获取应用设备信息" name="8">
+          <p><strong>说明：</strong>获取当前 App 的基本信息，如 AppId、AppKey、包名、版本、设备ID 等。</p>
+          <p><strong>示例：</strong></p>
+          <pre><code>
+        const info = window.Android.getAppInfo();
+        const parsed = JSON.parse(info);
+        console.log('AppId:', parsed.appId);
+        console.log('AppKey:', parsed.appKey);
+        console.log('设备ID:', parsed.deviceId);
+        console.log('包名:', parsed.package);
+        console.log('版本名称:', parsed.version_name);
+        console.log('版本号:', parsed.version_code);
+          </code></pre>
+          <p><strong>返回：</strong>JSON 字符串，使用 <code>JSON.parse</code> 解析后获取字段。</p>
+        </el-collapse-item>
+        
+        <el-collapse-item title="验证卡密" name="9">
+          <p><strong>说明：</strong>验证卡密合法性，支持异步回调处理结果。</p>
+          <p><strong>示例：</strong><code>window.Android.verifyCardKey('{#id#}', 'https://yunzhuru.com/kami/', '你的卡密', 'onCardVerify')</code></p>
+          <p><strong>参数：</strong></p>
+          <ul>
+            <li><code>{#id#}</code>：当前弹窗 ID，会被系统自动替换，直接传这个变量即可</li>
+            <li><code>url</code>：验证接口地址</li>
+            <li><code>card</code>：用户输入的卡密</li>
+            <li><code>callbackFunc</code>：回调函数名称，需接收2个参数参数为 <code>ok: boolean</code> 和 <code>msg: string</code></li>
+          </ul>
+          <p><strong>回调示例：</strong></p>
+          <pre><code>function onCardVerify(success, message) {
+          if (success) {
+            alert('请求成功：' + message);//具体看message是什么
+          } else {
+            alert('请求失败：' + message);
+          }
+        }</code></pre>
+        </el-collapse-item>
+        
+        <el-collapse-item title="验证卡密(新)" name="15">
+          <p><strong>说明：</strong>验证卡密合法性，支持异步回调处理结果。</p>
+          <p><strong>示例：</strong><code>window.Android.verifyCardKey2('{#id#}', 'https://yunzhuru.com/kami/', '你的卡密', 'onCardVerify')</code></p>
+          <p><strong>参数：</strong></p>
+          <ul>
+            <li><code>{#id#}</code>：当前弹窗 ID，会被系统自动替换，直接传这个变量即可</li>
+            <li><code>url</code>：验证接口地址</li>
+            <li><code>card</code>：用户输入的卡密</li>
+            <li><code>callbackFunc</code>：回调函数名称，需接收4个参数，参数为 <code>success: 状态</code> / <code>statusCode: 状态码</code> / <code>body: 响应正文</code> / <code>headers: 响应头</code></li>
+          </ul>
+          <p><strong>回调示例：</strong></p>
+          <pre><code>function onCardVerify(success, statusCode, body, headers) {
+      if (success && body === 'ok') {
+        window.Android.writeSP("kami", cardInput.value);
+        showResult('验证成功');
+        setTimeout(() => window.Android.close('{#id#}'), 1000);
+    
+        // 如果响应头中包含卡密剩余信息，可以显示它
+        if (headers.includes("卡密剩余")) {
+          const match = headers.match(/卡密剩余\d+天/);
+          if (match) {
+            showResult(match[0]); // 弹出“卡密剩余X天”
+          }
+        }
+    
+      } else {
+        showResult(body || '验证失败');
+      }
+    }</code></pre>
+        </el-collapse-item>
+        
+        <el-collapse-item title="通用网络请求" name="10">
+          <p><strong>说明：</strong>通过原生发送网络请求（GET/POST），并将响应回调给 JS。</p>
+          <p><strong>示例：</strong><code>window.Android.http('{#id#}', 'https://api.xxx.com/data', 'GET', '{}', '', 'onHttpResponse')</code></p>
+          <p><strong>参数：</strong></p>
+          <ul>
+            <li><code>{#id#}</code>：当前弹窗 ID，会被系统自动替换，直接传这个变量即可</li>
+            <li><code>url</code>：请求地址</li>
+            <li><code>method</code>：请求方式（"GET" 或 "POST"）</li>
+            <li><code>headers</code>：请求头（JSON 字符串，如 <code>{ "Authorization": "Bearer token" }</code>）</li>
+            <li><code>body</code>：请求体（仅 POST 支持）</li>
+            <li><code>callbackFunc</code>：回调函数名称，参数为响应信息</li>
+          </ul>
+          <p><strong>回调格式：</strong>响应内容将以 JSON 字符串形式传入，如：</p>
+          <pre><code>{
+          ok: true,
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+          body: "响应文本"
+        }</code></pre>
+          <p><strong>回调示例：</strong></p>
+          <pre><code>function onHttpResponse(result) {
+          const res = JSON.parse(result);
+          if (res.ok) {
+            console.log('响应成功：', res.body);
+          } else {
+            console.error('请求失败：', res.body);
+          }
+        }</code></pre>
+        </el-collapse-item>
+
+
+
+      </el-collapse>
+    </el-dialog>
+    
+    
+    <!-- 添加白/黑名单弹窗 -->
+    <el-dialog v-model="addListDialogVisible" :title="addListDialogTitle" width="500px">
+      <el-form :model="addListForm" label-width="100px">
+        <el-form-item label="类名">
+          <el-input v-model="addListForm.class_name" placeholder="请输入类名"></el-input>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="addListForm.remark" placeholder="备注可不填写"></el-input>
+        </el-form-item>
+      </el-form>
+    
+      <template #footer>
+        <el-button @click="addListDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitAddList">确认添加</el-button>
+      </template>
+    </el-dialog>
+        
+    
+  </div>
+
+  <script>
+  const { createApp, ref, reactive, onMounted, watch, nextTick } = Vue;
+  createApp({
+    setup() {
+      // 主界面数据
+      const popupSearch = reactive({
+          page: 1,
+          limit: 20
+        });
+        
+        const popupTotal = ref(0);
+        
+      const appList = ref([]);
+      const selectedAppId = ref(null);
+      const popupList = ref([]);
+      const dialogVisible = ref(false);
+      const dialogFullscreen = ref(false);
+      const editMode = ref(false);
+      const form = reactive({ id: null, remark: '', html: '', enable: false, lock:false });
+
+      // 模板弹窗数据
+      const templateDialogVisible = ref(false);
+      const htmlTemplates = ref([]);
+      const templateSearch = reactive({ title: '', html: '', page: 1, limit: 20 });
+      const templateTotal = ref(0);
+
+      // 名单管理
+      const popupListDialogVisible = ref(false);
+      const popupListData = ref([]);
+      const currentListType = ref('whitelist');
+      const currentPopupId = ref(null);
+
+      // 预览弹窗
+      const previewDialogVisible = ref(false);
+      const previewHtml = ref('');
+
+      // JS接口弹窗
+      const jsApiDialogVisible = ref(false);
+
+      //添加黑白名单类名
+      const addListDialogVisible = ref(false)
+        const addListDialogTitle = ref('')
+        const addListType = ref('whitelist')
+        
+        const addListForm = reactive({
+          class_name: '',
+          remark: ''
+        })
+      let editor = null;
+
+      /** 加载主界面应用列表 */
+      async function loadApps() {
+        const res = await fetch('/api/index.php?module=config&method=getMyApps');
+        const json = await res.json();
+        if (json.code === 200) appList.value = json.data;
+      }
+
+      /** 加载HTML弹窗列表 */
+      async function loadPopups() {
+        const params = {
+          apk_id: selectedAppId.value || 0,
+          page: popupSearch.page,
+          limit: popupSearch.limit
+        };
+        const res = await fetch('/api/index.php?module=popup_html&method=getHtmlPopupList', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(params)
+        });
+        const json = await res.json();
+        if (json.code === 200) {
+          popupList.value = json.data.list;
+          popupTotal.value = json.data.total; // 后端返回总数
+        }
+      }
+      
+      function popupPageChange(p) {
+          popupSearch.page = p;
+          loadPopups();
+        }
+
+      /** 打开模板弹窗并加载第一页模板 */
+      function openTemplateDialog() {
+        templateSearch.page = 1; // 自动回到第一页
+        templateDialogVisible.value = true;
+        loadTemplates();
+      }
+
+      /** 加载模板数据 */
+      async function loadTemplates() {
+        const res = await fetch('/api/index.php?module=template_html&method=getEnabledTemplateHtmlList', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(templateSearch)
+        });
+        const json = await res.json();
+        if (json.code === 200) {
+          htmlTemplates.value = json.data.list;
+          templateTotal.value = json.data.total;
+        }
+      }
+
+      /** 模板分页 */
+      function templatePageChange(p) {
+        templateSearch.page = p;
+        loadTemplates();
+      }
+
+      /** 复制模板HTML代码 */
+      function copyTemplate(html) {
+        navigator.clipboard.writeText(html).then(() => {
+          ElementPlus.ElMessage.success('HTML代码已复制');
+        }).catch(() => {
+          ElementPlus.ElMessage.error('复制失败');
+        });
+      }
+
+      /** 预览模板 */
+      function previewTemplate(html) {
+        previewHtml.value = html;
+        previewDialogVisible.value = true;
+      }
+
+      /** 打开添加弹窗 */
+      function openAddDialog() {
+        if (!selectedAppId.value) {
+          ElementPlus.ElMessage.warning('请先选择应用');
+          return;
+        }
+        Object.assign(form, { id: null, remark: '', html: '', enable: false, lock: false });
+        dialogVisible.value = true;
+        editMode.value = false;
+        nextTick(() => { if (editor) editor.setValue('', -1); });
+      }
+
+      /** 编辑弹窗 */
+      function editPopup(row) {
+        selectedAppId.value = row.apk_id;
+        Object.assign(form, { ...row, enable: row.enable == 1, lock: row.lock == 1 });
+        dialogVisible.value = true;
+        editMode.value = true;
+      }
+
+      /** 删除弹窗 */
+      async function deletePopup(row) {
+        await ElementPlus.ElMessageBox.confirm(`确认删除弹窗：${row.remark}?`, '提示', { type: 'warning' });
+        const res = await fetch('/api/index.php?module=popup_html&method=deleteHtmlPopup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: row.id })
+        });
+        const json = await res.json();
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success('删除成功');
+          loadPopups();
+        } else {
+          ElementPlus.ElMessage.error(json.message || '删除失败');
+        }
+      }
+    function resetTemplateSearch() {
+      templateSearch.title = '';
+      templateSearch.html = '';
+      templateSearch.page = 1; // 回到第一页
+      loadTemplates();
+    }
+      /** 保存弹窗 */
+      async function submitForm() {
+        if (!selectedAppId.value) {
+          ElementPlus.ElMessage.warning('请选择应用');
+          return;
+        }
+        const data = { ...form, apk_id: selectedAppId.value };
+        const method = editMode.value ? 'editHtmlPopup' : 'addHtmlPopup';
+        const res = await fetch(`/api/index.php?module=popup_html&method=${method}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        const json = await res.json();
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success('保存成功');
+          dialogVisible.value = false;
+          loadPopups();
+        } else {
+          ElementPlus.ElMessage.error(json.message || '保存失败');
+        }
+      }
+
+      /** 预览编辑器HTML */
+      function handlePreview() {
+        previewHtml.value = form.html;
+        previewDialogVisible.value = true;
+      }
+
+      /** 白名单/黑名单 */
+      async function showPopupList(type, popupId) {
+        currentListType.value = type;
+        currentPopupId.value = popupId;
+        const res = await fetch('/api/index.php?module=popup_html&method=getHtmlPopupLists', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ popup_id: popupId })
+        });
+        const json = await res.json();
+        if (json.code === 200) {
+          popupListData.value = json.data[type] || [];
+          popupListDialogVisible.value = true;
+        } else {
+          ElementPlus.ElMessage.error(json.message || '加载失败');
+        }
+      }
+
+      /*async function addListItem() {
+        const { value } = await ElementPlus.ElMessageBox.prompt('请输入类名', '添加', {
+          confirmButtonText: '添加',
+          cancelButtonText: '取消'
+        });
+        if (!value) return;
+        const method = currentListType.value === 'whitelist' ? 'addHtmlWhitelist' : 'addHtmlBlacklist';
+        const res = await fetch(`/api/index.php?module=popup_html&method=${method}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ popup_id: currentPopupId.value, class_name: value })
+        });
+        const json = await res.json();
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success('添加成功');
+          showPopupList(currentListType.value, currentPopupId.value);
+        } else {
+          ElementPlus.ElMessage.error(json.message || '添加失败');
+        }
+      }*/
+        function addListItem() {
+          addListForm.class_name = ''
+          addListForm.remark = ''
+        
+          addListType.value = currentListType.value
+          addListDialogTitle.value =
+            currentListType.value === 'whitelist'
+              ? '添加白名单'
+              : '添加黑名单'
+        
+          addListDialogVisible.value = true
+        }
+        
+        async function submitAddList() {
+          if (!addListForm.class_name.trim()) {
+            ElementPlus.ElMessage.error('类名不能为空')
+            return
+          }
+        
+          const method =
+            addListType.value === 'whitelist'
+              ? 'addHtmlWhitelist'
+              : 'addHtmlBlacklist'
+        
+          const payload = {
+            popup_id: currentPopupId.value,
+            class_name: addListForm.class_name.trim(),
+            remark: addListForm.remark.trim()
+          }
+        
+          const res = await fetch(`/api/index.php?module=popup_html&method=${method}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          })
+        
+          const json = await res.json()
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('添加成功')
+        
+            addListDialogVisible.value = false
+        
+            // 刷新原列表弹窗
+            showPopupList(addListType.value, currentPopupId.value)
+          } else {
+            ElementPlus.ElMessage.error(json.message || '添加失败')
+          }
+        }
+
+
+
+      async function deleteListItem(row) {
+        const method = currentListType.value === 'whitelist' ? 'deleteWhitelist' : 'deleteBlacklist';
+        await ElementPlus.ElMessageBox.confirm('确认删除该类名？', '提示', { type: 'warning' });
+        const res = await fetch(`/api/index.php?module=popup_html&method=${method}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: row.id })
+        });
+        const json = await res.json();
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success('删除成功');
+          showPopupList(currentListType.value, currentPopupId.value);
+        } else {
+          ElementPlus.ElMessage.error(json.message || '删除失败');
+        }
+      }
+
+      // 初始化编辑器
+      watch(dialogVisible, (visible) => {
+        if (visible) {
+          nextTick(() => {
+            if (!editor) {
+              editor = ace.edit('html-editor');
+              editor.setTheme('ace/theme/monokai');
+              editor.session.setMode('ace/mode/html');
+              editor.setOptions({
+                  fontSize: '14px',
+                  showPrintMargin: false,
+                  wrap: true,
+                  tabSize: 2,
+                  useSoftTabs: true,
+                  highlightActiveLine: true,
+                  enableLiveAutocompletion: true,
+                  enableBasicAutocompletion: true
+                });
+              editor.session.on('change', () => {
+                form.html = editor.getValue();
+              });
+            }
+            editor.setValue(form.html || '', -1);
+            editor.focus();
+          });
+        } else {
+          if (editor) {
+            editor.setValue('', -1);
+          }
+        }
+      });
+
+      // 初始加载
+      onMounted(() => {
+        loadApps();
+        loadPopups();
+      });
+
+      return {
+        appList, selectedAppId, popupList,
+        dialogVisible, dialogFullscreen, editMode, form,
+        templateDialogVisible, htmlTemplates, templateSearch, templateTotal,
+        popupListDialogVisible, popupListData, currentListType,
+        previewDialogVisible, previewHtml, jsApiDialogVisible,
+        loadApps, loadPopups, openTemplateDialog, loadTemplates, templatePageChange,
+        copyTemplate, previewTemplate, openAddDialog, editPopup, deletePopup,
+        submitForm, handlePreview, showPopupList, addListItem, deleteListItem,
+        resetTemplateSearch,addListDialogVisible,
+addListDialogTitle,
+addListType,
+addListForm,
+addListItem,
+submitAddList,popupSearch,
+popupTotal,
+popupPageChange,
+      };
+    }
+  }).use(ElementPlus).mount('#app');
+</script>
+
+
+</body>
+</html>

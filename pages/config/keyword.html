@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>关键词拦截配置</title>
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+</head>
+<body>
+<div id="app" style="padding: 20px">
+  <el-alert title="此功能可直接根据关键字拦截弹窗/窗口等，也可以直接替换窗口上的文字，可用于远程界面汉化，修改弹窗内容之用。" type="info" style="margin-bottom: 20px">
+  </el-alert>
+
+  <div style="margin-bottom: 20px; display: flex; gap: 10px">
+    <el-select v-model="selectedAppId" placeholder="选择应用" style="width: 300px" @change="loadAll">
+      <el-option v-for="app in appList" :key="app.id" :label="`${app.name} | ${app.version}`" :value="app.id">
+      </el-option>
+    </el-select>
+    <el-button @click="loadApps">刷新应用列表</el-button>
+    <el-button type="primary" @click="openAddKeyword">添加关键词</el-button>
+    <el-button type="primary" @click="openAddBlockType">添加拦截/替换窗类型</el-button>
+  </div>
+
+  <el-row :gutter="20">
+    <el-col :span="16">
+      <h3>关键词列表</h3>
+      <el-table :data="keywordList" border>
+        <el-table-column label="ID" prop="id" width="80">
+        </el-table-column>
+        <el-table-column label="关键词" prop="keyword">
+        </el-table-column>
+        <el-table-column label="操作类型" width="140">
+          <template #default="scope">
+            <span v-if="scope.row.type == 0">直接关闭弹窗</span>
+            <span v-else-if="scope.row.type == 1">替换为新关键词</span>
+            <span v-else>未知</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="新关键词" prop="new_keyword">
+        </el-table-column>
+        <el-table-column label="创建时间" prop="created_at">
+        </el-table-column>
+        <el-table-column label="操作" width="180">
+          <template v-slot="scope">
+            <el-button size="small" @click="editKeyword(scope.row)">编辑</el-button>
+            <el-button size="small" type="danger" @click="deleteKeyword(scope.row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-col>
+
+
+    <el-col :span="8">
+      <h3>拦截/替换的窗类型</h3>
+      <el-table :data="blockTypeList" border>
+        <el-table-column label="ID" prop="id" width="80">
+        </el-table-column>
+        <el-table-column label="类型" prop="description">
+        </el-table-column>
+        <el-table-column label="弹窗TYPE_ID" prop="popup_id">
+        </el-table-column>
+        <el-table-column label="操作" width="180">
+          <template v-slot="scope">
+            <el-button size="small" @click="editBlockType(scope.row)">编辑</el-button>
+            <el-button size="small" type="danger" @click="deleteBlockType(scope.row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-col>
+  </el-row>
+
+  <!-- 添加/编辑关键词 -->
+    <el-dialog v-model="keywordDialogVisible" :title="keywordEditMode ? '编辑关键词' : '添加关键词'">
+      <el-form :model="keywordForm" label-width="100px">
+        <el-form-item label="关键词">
+          <el-input v-model="keywordForm.keyword"></el-input>
+        </el-form-item>
+        
+        <el-form-item label="操作类型">
+          <el-select v-model="keywordForm.type" placeholder="请选择操作类型">
+            <el-option :value="0" label="直接关闭窗口/弹窗"></el-option>
+            <el-option :value="1" label="替换为新关键词"></el-option>
+          </el-select>
+        </el-form-item>
+    
+        <el-form-item label="新关键词" v-if="keywordForm.type == 1">
+          <el-input v-model="keywordForm.new_keyword" placeholder="请输入要替换的新关键词"></el-input>
+        </el-form-item>
+        <el-form-item label="重写事件" v-if="keywordForm.type == 1">
+            
+        <el-select v-model="keywordForm.clickAction" placeholder="请选择事件类型">
+          <el-option :value="0" label="无（保留默认行为）"></el-option>
+          <el-option :value="1" label="点击打开网址"></el-option>
+          <el-option :value="2" label="禁止点击"></el-option>
+          <el-option :value="3" label="隐藏控件"></el-option>
+          <el-option :value="4" label="隐藏父节点控件(上1层)"></el-option>
+          <el-option :value="5" label="隐藏祖节点控件(上2层)"></el-option>
+        </el-select>
+      </el-form-item>
+    
+      <el-form-item label="事件文本" v-if="keywordForm.type == 1 && keywordForm.clickAction == 1">
+        <el-input v-model="keywordForm.clickText" placeholder="请输入要跳转的网址"></el-input>
+      </el-form-item>
+      </el-form>
+    
+      <template #footer>
+        <el-button @click="keywordDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitKeywordForm">确定</el-button>
+      </template>
+    </el-dialog>
+
+
+  <!-- 添加/编辑拦截类型 -->
+  <el-dialog v-model="blockTypeDialogVisible" :title="blockTypeEditMode ? '编辑拦截类型' : '添加拦截类型'">
+    <el-form :model="blockTypeForm" label-width="100px">
+      <el-form-item label="弹窗类型">
+        <el-select v-model="blockTypeForm.popup_id" style="width: 100%">
+          <el-option v-for="item in popupTypes" :key="item.id" :label="item.description" :value="item.id">
+          </el-option>
+        </el-select>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="blockTypeDialogVisible = false">取消</el-button>
+      <el-button type="primary" @click="submitBlockTypeForm">确定</el-button>
+    </template>
+  </el-dialog>
+</div>
+
+<script>
+const { createApp, ref, reactive, onMounted } = Vue;
+
+createApp({
+  setup() {
+    const appList = ref([]);
+    const selectedAppId = ref(null);
+    const keywordList = ref([]);
+    const blockTypeList = ref([]);
+    const popupTypes = ref([]);
+
+    const keywordDialogVisible = ref(false);
+    const blockTypeDialogVisible = ref(false);
+    const keywordEditMode = ref(false);
+    const blockTypeEditMode = ref(false);
+
+    
+    const keywordForm = reactive({
+      id: null,
+      keyword: '',
+      type: 0,
+      new_keyword: '',
+      clickAction: 0,
+      clickText: ''
+    });
+    const blockTypeForm = reactive({ id: null, popup_id: null });
+
+    async function loadApps() {
+      const res = await fetch('/api/index.php?module=config&method=getMyApps');
+      const json = await res.json();
+      if (json.code === 200) appList.value = json.data;
+    }
+
+    async function loadAll() {
+      if (!selectedAppId.value) return;
+      loadKeywords();
+      loadBlockTypes();
+      loadPopupTypes();
+    }
+
+    async function loadKeywords() {
+      const res = await fetch('/api/index.php?module=keyword_block&method=getKeywords', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apk_id: selectedAppId.value })
+      });
+      const json = await res.json();
+      keywordList.value = json.data || [];
+    }
+
+    async function loadBlockTypes() {
+      const res = await fetch('/api/index.php?module=keyword_block&method=getBlockedTypes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apk_id: selectedAppId.value })
+      });
+      const json = await res.json();
+      blockTypeList.value = json.data || [];
+    }
+
+    async function loadPopupTypes() {
+      const res = await fetch('/api/index.php?module=popup_kill&method=getPopupTypes');
+      const json = await res.json();
+      popupTypes.value = json.data || [];
+    }
+
+    function openAddKeyword() {
+        if (!selectedAppId.value) {
+            ElementPlus.ElMessage.warning('请先选择应用');
+            return;
+          }
+      keywordEditMode.value = false;
+      Object.assign(keywordForm, { id: null, keyword: '' });
+      keywordDialogVisible.value = true;
+    }
+
+    function editKeyword(row) {
+      keywordEditMode.value = true;
+      Object.assign(keywordForm, row);
+      keywordDialogVisible.value = true;
+    }
+
+    async function submitKeywordForm() {
+      const method = keywordEditMode.value ? 'editKeyword' : 'addKeyword';
+      const payload = { ...keywordForm, apk_id: selectedAppId.value };
+      const res = await fetch(`/api/index.php?module=keyword_block&method=${method}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const json = await res.json();
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success(json.message || '操作成功');
+        keywordDialogVisible.value = false;
+        loadKeywords();
+      }
+    }
+
+    async function deleteKeyword(row) {
+      await ElementPlus.ElMessageBox.confirm(`确认删除关键词：${row.keyword}?`, '提示');
+      await fetch('/api/index.php?module=keyword_block&method=deleteKeyword', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: row.id })
+      });
+      loadKeywords();
+    }
+
+    function openAddBlockType() {
+        if (!selectedAppId.value) {
+            ElementPlus.ElMessage.warning('请先选择应用');
+            return;
+          }
+      blockTypeEditMode.value = false;
+      Object.assign(blockTypeForm, { id: null, popup_id: null });
+      blockTypeDialogVisible.value = true;
+    }
+
+    function editBlockType(row) {
+      blockTypeEditMode.value = true;
+      Object.assign(blockTypeForm, { id: row.id, popup_id: row.type_id });
+      blockTypeDialogVisible.value = true;
+    }
+
+    async function submitBlockTypeForm() {
+      const method = blockTypeEditMode.value ? 'editBlockedType' : 'addBlockedType';
+      const payload = { ...blockTypeForm, apk_id: selectedAppId.value };
+    
+      try {
+        const res = await fetch(`/api/index.php?module=keyword_block&method=${method}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const json = await res.json();
+    
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success(json.message || '操作成功');
+          blockTypeDialogVisible.value = false;
+          loadBlockTypes();
+        } else {
+          ElementPlus.ElMessage.error(json.message || '操作失败');
+        }
+      } catch (error) {
+        ElementPlus.ElMessage.error('请求异常：' + error.message);
+      }
+    }
+
+
+    async function deleteBlockType(row) {
+      await ElementPlus.ElMessageBox.confirm(`确认删除拦截类型？`, '提示');
+      await fetch('/api/index.php?module=keyword_block&method=deleteBlockedType', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: row.id })
+      });
+      loadBlockTypes();
+    }
+
+    onMounted(loadApps);
+
+    return {
+      appList,
+      selectedAppId,
+      keywordList,
+      blockTypeList,
+      popupTypes,
+      keywordDialogVisible,
+      blockTypeDialogVisible,
+      keywordEditMode,
+      blockTypeEditMode,
+      keywordForm,
+      blockTypeForm,
+      loadApps,
+      loadAll,
+      openAddKeyword,
+      editKeyword,
+      submitKeywordForm,
+      deleteKeyword,
+      openAddBlockType,
+      editBlockType,
+      submitBlockTypeForm,
+      deleteBlockType
+    };
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

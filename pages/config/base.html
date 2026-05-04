@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>应用配置管理</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+</head>
+<body>
+  <div id="app" style="padding: 20px">
+
+    <!-- 查询表单 -->
+    <el-form :inline="true" :model="searchForm" style="margin-bottom: 20px">
+      <el-form-item label="用户ID">
+        <el-input v-model="searchForm.user_id" placeholder="请输入用户ID" style="width: 150px"></el-input>
+      </el-form-item>
+      <el-form-item label="应用ID">
+        <el-input v-model="searchForm.apk_id" placeholder="请输入应用ID" style="width: 150px"></el-input>
+      </el-form-item>
+      
+      <el-form-item label="应用名称">
+        <el-input v-model="searchForm.name" placeholder="请输入应用名称" style="width: 150px"></el-input>
+      </el-form-item>
+      <el-form-item>
+        <el-button type="primary" @click="handleSearch">查询</el-button>
+        <el-button  @click="resetSearch">重置</el-button>
+      </el-form-item>
+    </el-form>
+
+    <!-- 应用列表表格 -->
+    <el-table :data="appList" border style="width: 100%; margin-bottom: 20px">
+      <el-table-column label="ID" prop="id" width="60" fixed="left"></el-table-column>
+      <el-table-column label="UID" prop="user_id" width="60" fixed="left"></el-table-column>
+      <el-table-column label="图标" width="60">
+          <template #default="scope">
+            <img
+              :src="`/icon.php?id=${scope.row.id}`"
+              style="width: 32px; height: 32px; object-fit: contain; border-radius: 6px;"
+              alt="icon"
+            />
+          </template>
+      </el-table-column>
+      <el-table-column label="名称" prop="name" width="150" fixed="left"></el-table-column>
+      <el-table-column label="操作" width="100" fixed="right">
+        <template #default="scope">
+          <el-button size="small" @click="openQuickEdit(scope.row)">快速编辑</el-button>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="包名" prop="package" width="200"></el-table-column>
+      <el-table-column label="版本" prop="version" width="100"></el-table-column>
+      <el-table-column label="上传时间" prop="upload_time" width="180"></el-table-column>
+
+      <!-- 动态展示配置字段 -->
+      <el-table-column
+        v-for="field in configFields"
+        :key="field.prop"
+        :label="field.label"
+        width="120">
+        <template #default="scope">
+          <el-switch
+            v-if="scope.row.config"
+            :model-value="scope.row.config[field.prop] == '1'"
+            @change="val => updateSwitch(scope.row.config.id, field.prop, val)">
+          </el-switch>
+          <span v-else style="color: #999">无配置</span>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <!-- 分页器 -->
+    <el-pagination
+      v-model:current-page="page"
+      :page-size="limit"
+      :total="total"
+      layout="prev, pager, next"
+      @current-change="loadList">
+    </el-pagination>
+
+    <!-- 快速编辑对话框 -->
+    <el-dialog v-model="editDialogVisible" title="快速编辑配置" width="600px">
+      <div v-if="currentConfig">
+        <el-row :gutter="20">
+          <el-col :span="8" v-for="field in configFields" :key="field.prop" style="margin-bottom: 10px">
+            <div style="display: flex; align-items: center">
+              <el-switch
+                :model-value="currentConfig[field.prop] == '1'"
+                @change="val => updateSwitch(currentConfig.id, field.prop, val)">
+              </el-switch>
+              <span style="margin-left: 8px">{{ field.label }}</span>
+            </div>
+          </el-col>
+        </el-row>
+      </div>
+    </el-dialog>
+
+  </div>
+
+  <script>
+    const { createApp, ref, reactive, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const appList = ref([]);
+        const page = ref(1);
+        const limit = ref(20);
+        const total = ref(0);
+
+        const searchForm = reactive({
+          user_id: '',
+          apk_id: '',
+          name: ''
+        });
+
+        const configFields = ref([
+          { prop: 'debug', label: '调试模式' },
+          { prop: 'offline', label: '离线模式' },
+          { prop: 'websocket', label: '实时管理用户' },
+          { prop: 'ban_Root', label: '禁用Root' },
+          { prop: 'ban_Xposed', label: '禁用Xposed' },
+          { prop: 'ban_Emulator', label: '禁用模拟器' },
+          { prop: 'ban_VirtualApp', label: '禁用VirtualApp' },
+          { prop: 'ban_DualApp', label: '禁用双开' },
+          { prop: 'black_package', label: '包名检测' },
+          { prop: 'enable_popup_kill_all', label: '弹窗通杀' },
+          { prop: 'enable_popup_keywords', label: '关键词拦截' },
+          { prop: 'enable_sp_put', label: 'SP写入劫持' },
+          { prop: 'enable_sp_get', label: 'SP读取劫持' },
+          { prop: 'enable_sp', label: 'SP重写' },
+          { prop: 'screen_priority', label: '全屏窗优先' },
+          { prop: 'enablePopups', label: '全屏弹窗' },
+          { prop: 'enableImagePopups', label: '图片弹窗' },
+          { prop: 'enableMessagePopups', label: '文字弹窗' },
+          { prop: 'enableinputPopups', label: '输入框弹窗' },
+          { prop: 'enablehtmlPopups', label: 'HTML弹窗' },
+          { prop: 'enabledex', label: '远程dex加载' },
+          { prop: 'enableHook', label: '启用HOOK(关闭将无法使用部分功能)' }
+        ]);
+
+        const editDialogVisible = ref(false);
+        const currentConfig = ref(null);
+
+        function openQuickEdit(row) {
+          if (row.config) {
+            currentConfig.value = row.config;
+            editDialogVisible.value = true;
+          } else {
+            ElementPlus.ElMessage.warning('当前应用无配置数据');
+          }
+        }
+
+        async function loadList() {
+          const payload = {
+            page: page.value,
+            limit: limit.value,
+            ...searchForm
+          };
+
+          const res = await fetch('/api/index.php?module=config&method=getMyAppsWithConfig', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          const json = await res.json();
+          if (json.code === 200 && Array.isArray(json.data.list)) {
+            appList.value = json.data.list;
+            total.value = json.data.total;
+          } else {
+            ElementPlus.ElMessage.error(json.message || '加载失败');
+          }
+        }
+
+        async function updateSwitch(configId, field, value) {
+          const payload = { id: configId, field, value };
+          const res = await fetch('/api/index.php?module=config&method=updateAppConfig', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          const json = await res.json();
+          if (json.code === 200) {
+            const item = appList.value.find(app => app.config && app.config.id == configId);
+            if (item) {
+              item.config[field] = value ? '1' : '0';
+            }
+            ElementPlus.ElMessage.success('更新成功');
+          } else {
+            ElementPlus.ElMessage.error(json.message || '更新失败');
+          }
+        }
+
+        function handleSearch() {
+          page.value = 1;
+          loadList();
+        }
+
+        function resetSearch() {
+          searchForm.user_id = '';
+          searchForm.apk_id = '';
+          searchForm.name = '';
+          page.value = 1;
+          loadList();
+        }
+
+        onMounted(() => {
+          loadList();
+        });
+
+        return {
+          appList,
+          page,
+          limit,
+          total,
+          configFields,
+          loadList,
+          updateSwitch,
+          editDialogVisible,
+          currentConfig,
+          openQuickEdit,
+          searchForm,
+          handleSearch,
+          resetSearch
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

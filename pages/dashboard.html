@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>仪表盘 - 后台管理系统</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+      background: #f5f7fa;
+    }
+    .page-title {
+      font-size: 22px;
+      font-weight: bold;
+      margin-bottom: 20px;
+      color: #333;
+    }
+    .card-block {
+      margin-bottom: 20px;
+    }
+    .button-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="page-title">仪表盘</div>
+
+    <el-row :gutter="20" class="card-block">
+      <el-col
+        v-for="(card, index) in cards"
+        :key="index"
+        :xs="24"
+        :sm="12"
+        :md="8"
+      >
+        <el-card>
+          <template #header>
+            <span>{{ card.title }}</span>
+          </template>
+    
+          <div v-if="card.key === 'welcome'">
+            <p>当前时间：{{ time }}</p>
+            <p>欢迎进入后台管理系统！</p>
+          </div>
+    
+          <div v-else-if="card.key === 'panel'">
+            <div class="button-group">
+              <el-button
+                v-for="(item, index) in buttons"
+                :key="index"
+                type="primary"
+                @click="openDialog(item)"
+              >{{ item.label }}</el-button>
+            </div>
+          </div>
+    
+          <div v-else-if="card.key === 'tutorial'">
+            <div class="button-group">
+              <el-button
+                v-for="(item, index) in tutorialButtons"
+                :key="index"
+                type="success"
+                @click="confirmAndOpenTutorial(item)"
+              >{{ item.label }}</el-button>
+            </div>
+          </div>
+    
+          <div v-else v-html="card.content"></div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+
+    <el-dialog
+      v-model="dialogVisible"
+      :title="dialogTitle"
+      width="400px"
+    >
+      <div style="white-space: pre-wrap;">{{ dialogContent }}</div>
+      <template #footer>
+        <el-button @click="dialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+  </div>
+
+  <script>
+    const { createApp, ref, onMounted } = Vue;
+
+    const app = createApp({
+      setup() {
+        const time = ref('');
+        const dialogVisible = ref(false);
+        const dialogTitle = ref('');
+        const dialogContent = ref('');
+
+        const buttons = ref([
+          { label: '如何对接第三方卡密系统', title: '说明', content: '在【应用配置】-【弹窗配置】-【输入弹窗】创建一个输入弹窗,然后给这个弹窗增加一个按钮，按钮事件设置为【提交输入内容】，事件参数设置为卡密验证接口，输入的卡密信息会提交到这个接口进行验证，接口返回“ok”则代表验证通过。' },
+          { label: '使用步骤', title: '说明', content: '在【我的应用】中上传需要注入的apk,在【证书管理】中上传或创建证书，然后在【我的应用】中注入即可,可以在【注入管理】中查看注入任务状态和下载。\n然后在【应用配置】中管理这个APP，创建弹窗等。' },
+          { label: '如何检查是否注入成功', title: '说明', content: '在【应用配置】-【全局开关】中，找到需要查看的APP，打开调试模式，然后运行APP，看是否弹出调试器。' },
+          { label: '注入后运行闪退/无法运行', title: '说明', content: '更换注入模式后重新注入一次，若问题依旧，则该应用可能存在混淆加固或者签名校验，可以先用MT管理器去除签名校验' },
+        ]);
+
+        const cards = ref([
+          /*{
+            key: 'welcome',
+            title: '欢迎您'
+          },*/
+          {
+              key: 'tutorial',
+              title: '视频教程',
+              content: ''
+            },
+          {
+            key: 'notice',
+            title: '公告',
+            content: `
+              <ul style="padding-left: 18px; line-height: 1.8;">
+                <li>作者：菜鸟八哥 QQ2380494437 群：793107266。</li>
+                <li>支持源码出售独立部署，全套源码，需要的私聊。</li>
+                <li>本注入服务为免费公益服务，长期稳定运行</li>
+                <li>我的目的是内卷，卷同行</li>
+                <li>由于是公益项目，服务器储存空间有限，上传单个应用限制为100M，总储存空间限制为256M</li>
+              </ul>
+            `
+          },
+          {
+            key: 'tips',
+            title: '使用注意事项',
+            content: `
+              <ul style="padding-left: 18px; line-height: 1.8;">
+                <li>本系统仅用于 APK 分析、调试与学习用途。</li>
+                <li>严禁将注入功能用于未经授权的 APK。</li>
+                <li>平台不长期保存已注入的应用，请自行备份。</li>
+                <li>系统可能随时更新功能或条款，请注意查看公告。</li>
+                <li>如有问题请联系管理员获取支持。</li>
+                <li>作者：菜鸟八哥 QQ2380494437 群：793107266。</li>
+                <li>支持源码出售独立部署，全套源码，需要的私聊。</li>
+              </ul>
+            `
+          },
+          {
+            key: 'panel',
+            title: '操作面板'
+          },
+          {
+            key: 'tips',
+            title: '更新日志',
+            content: `
+              <ul style="padding-left: 18px; line-height: 1.4.1;">
+                <li>链路注入进行了较大更新，修复了部分混淆应用链路注入回编译失败的问题。</li>
+                <li>壳模板最新版。</li>
+                <li>支持关键字替换。</li>
+                <li>可以直接替换掉界面上的指定文字，可用作远程汉化场景，替换弹窗广告内容。</li>
+                <li>支持替换后重新绑定事件，或禁用点击，也可以直接隐藏(精准抹杀广告弹窗)支持按节点层级隐藏。</li>
+                <li>配合URI劫持，可以直接把原有的弹窗劫持为你的信息。</li>
+                <li>此功能只有关键词替换才有用，关键词拦截是直接关闭弹窗了所以绑定新事件也没意义。</li>
+              </ul>
+            `
+          }
+        ]);
+
+        function updateTime() {
+          const now = new Date();
+          time.value = now.toLocaleString();
+        }
+
+        function openDialog(item) {
+          dialogTitle.value = item.title;
+          dialogContent.value = item.content;
+          dialogVisible.value = true;
+        }
+        
+        const tutorialButtons = ref([//【菜鸟云注入教程(基础教程)】 
+          { label: '基本注入教程', url: 'https://www.bilibili.com/video/BV1KEufzmExk/?share_source=copy_web&vd_source=9ee906d6ceb3517feecca5280a0024dd' },
+          { label: '添加卡密弹窗教程', url: 'https://www.bilibili.com/video/BV1HCuZzrEf5/?share_source=copy_web&vd_source=9ee906d6ceb3517feecca5280a0024dd' },
+          { label: '图片弹窗配置教程', url: 'https://www.bilibili.com/video/BV1zguZzPEx7/?share_source=copy_web&vd_source=9ee906d6ceb3517feecca5280a0024dd' },
+          { label: '根据关键字去除弹窗', url: 'https://www.bilibili.com/video/BV1MguozLEFB/?share_source=copy_web&vd_source=9ee906d6ceb3517feecca5280a0024dd' },
+          { label: '去除第三方云注入弹窗', url: 'https://www.bilibili.com/video/BV1qwg5zyEfS/?share_source=copy_web&vd_source=9ee906d6ceb3517feecca5280a0024dd' },
+          { label: '利用SP重写实现绕过开屏强制分享', url: 'https://www.bilibili.com/video/BV1VNgHzdEuz/?share_source=copy_web&vd_source=9ee906d6ceb3517feecca5280a0024dd' },
+        ]);
+        
+        function confirmAndOpenTutorial(item) {
+          ElementPlus.ElMessageBox.confirm(
+            '即将前往哔哩哔哩观看视频教程',
+            '提示',
+            {
+              confirmButtonText: '确定',
+              cancelButtonText: '取消',
+              type: 'info'
+            }
+          ).then(() => {
+            window.open(item.url, '_blank');
+          }).catch(() => {
+            // 用户取消
+          });
+        }
+
+        onMounted(() => {
+          updateTime();
+          setInterval(updateTime, 1000);
+        });
+
+        return {
+          time,
+          buttons,
+          cards,
+          dialogVisible,
+          dialogTitle,
+          dialogContent,
+          openDialog,
+          tutorialButtons,
+          confirmAndOpenTutorial
+        };
+      }
+    });
+
+    app.use(ElementPlus);
+    app.mount('#app');
+  </script>
+</body>
+</html>

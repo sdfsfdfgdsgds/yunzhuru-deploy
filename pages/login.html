@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>登录 - 菜鸟云注入 - 强大的安卓应用注入系统</title>
+  <meta name="keywords" content="云计算,API接入,云服务,云注入,Android云注入,dex注入,广告拦截,广告植入,弹窗植入">
+  <meta name="description" content="菜鸟云注入提供强大的安卓应用注入服务,各种各样的功能应有尽有。">
+  <link rel="stylesheet" href="/element/css/index.css" />
+  <link rel="icon" href="data:image/x-icon;," type="image/x-icon">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/config.js"></script>
+  <style>
+    body, html {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background: linear-gradient(135deg, #a0e9ff, #cbf7e7);
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }
+
+    #app {
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+
+    .login-container {
+      width: 100%;
+      max-width: 400px;
+      transition: all 0.3s;
+    }
+
+    .login-card {
+      padding: 30px 25px 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+      background-color: #fff;
+    }
+
+    .login-title {
+      text-align: center;
+      font-size: 22px;
+      font-weight: bold;
+      margin-bottom: 10px;
+      color: #333;
+    }
+
+    .login-subtitle {
+      text-align: center;
+      font-size: 14px;
+      color: #999;
+      margin-bottom: 20px;
+    }
+
+    .captcha-box {
+      display: flex;
+      align-items: center;
+    }
+
+    .captcha-box img {
+      height: 38px;
+      margin-left: 10px;
+      cursor: pointer;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+
+    .login-footer {
+      text-align: center;
+      font-size: 12px;
+      color: #aaa;
+      margin-top: 20px;
+    }
+
+    .register-link {
+      margin-top: 10px;
+      text-align: center;
+      cursor: pointer;
+      color: #409EFF;
+    }
+
+    .user-agreement {
+      color: #409EFF;
+      cursor: pointer;
+      text-decoration: underline;
+      margin-left: 4px;
+    }
+
+    @media (max-width: 500px), (max-height: 500px) {
+      .login-card {
+        background-color: transparent;
+        box-shadow: none;
+        padding: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="login-container">
+      <div class="login-card">
+        <div class="login-title">{{ siteTitle }}</div>
+        <h1 class="login-subtitle">请登录后台管理系统</h1>
+        <el-form :model="form" :rules="rules" ref="formRef" label-width="0">
+          <el-form-item prop="username">
+            <el-input v-model="form.username" placeholder="请输入账号"></el-input>
+          </el-form-item>
+          <el-form-item prop="password">
+            <el-input v-model="form.password" type="password" placeholder="请输入密码" show-password></el-input>
+          </el-form-item>
+          <el-form-item prop="captcha">
+            <div class="captcha-box" style="width: 100%;">
+              <el-input v-model="form.captcha" placeholder="验证码" style="flex: 1; margin-right: 10px;"></el-input>
+              <img
+                :src="captchaUrl"
+                @click="refreshCaptcha"
+                title="点击刷新验证码"
+              />
+            </div>
+          </el-form-item>
+            <el-form-item>
+              <el-checkbox v-model="form.agreeLaw">
+                我已阅读并同意
+                <a href="https://fgw.sh.gov.cn/cmsres/9e/9eb64bfe42fe43aca3c423e5426beccd/313075d4f6b30301a4f18f84db8dab71.pdf" target="_blank" class="user-agreement">
+                  《计算机软件保护条例》
+                </a>
+              </el-checkbox>
+            </el-form-item>
+          
+          <el-form-item>
+            <el-button type="primary" style="width: 100%;" @click="handleLogin">登录</el-button>
+          </el-form-item>
+          <div class="forget-password" @click="handleForgotPassword" style="text-align: right; margin-bottom: 10px; cursor: pointer; color: #409EFF;">忘记密码？</div>
+        </el-form>
+        <div class="register-link" @click="showRegister = true">没有账号？点击注册</div>
+        <div class="login-footer">© 2025 {{ siteTitle }} · 版权所有</div>
+      </div>
+    </div>
+
+    <el-dialog v-model="showRegister" title="注册" width="400px">
+      <el-form :model="registerForm" ref="registerFormRef" label-width="80px">
+        <el-form-item label="昵称">
+          <el-input v-model="registerForm.nickname" placeholder="请输入昵称(选填)"></el-input>
+        </el-form-item>
+        <el-form-item label="账号">
+          <el-input v-model="registerForm.username" placeholder="请输入账号(必填)"></el-input>
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="registerForm.password" type="password" placeholder="请输入密码(必填)"></el-input>
+        </el-form-item>
+        <el-form-item label="确认密码">
+          <el-input v-model="registerForm.confirmPassword" type="password" placeholder="请再次输入密码(必填)"></el-input>
+        </el-form-item>
+        <el-form-item>
+          <el-checkbox
+              :model-value="registerForm.agreed"
+              @update:model-value="val => registerForm.agreed = val"
+            >
+              我同意
+              <span class="user-agreement" @click.stop="showAgreement = true">《用户协议》</span>
+            </el-checkbox>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" style="width: 100%;" @click="submitRegister">提交注册</el-button>
+        </el-form-item>
+      </el-form>
+    </el-dialog>
+
+    <el-dialog v-model="showAgreement" title="用户协议" width="600px">
+      <div style="max-height: 400px; overflow-y: auto; line-height: 1.8; font-size: 14px; color: #333; padding-right: 10px;">
+        <p>欢迎您使用本平台提供的服务！在注册成为本平台用户或使用平台服务前，请您务必认真阅读并充分理解本协议内容。一旦您注册、登录或使用平台服务，即表示您已阅读并完全同意本协议的全部条款。</p>
+    
+        <p><strong>一、服务说明</strong></p>
+        <p>本平台提供一种 APK 注入服务，旨在辅助开发者在 APK 开发过程中进行调试、功能测试、动态分析等研究用途。本平台明确禁止用户将平台提供的注入功能用于任何第三方 APK 或非本人所有的应用程序中。</p>
+    
+        <p><strong>二、用户行为规范</strong></p>
+        <ul>
+          <li>用户仅可将注入服务用于合法用途，不得用于破解、篡改、传播他人软件。</li>
+          <li>用户在使用本平台时需遵守国家相关法律法规，不得上传、使用或传播包含违法、侵权内容的 APK。</li>
+          <li>用户需对其使用平台服务过程中的一切行为独立承担全部法律责任。</li>
+        </ul>
+    
+        <p><strong>三、免责声明</strong></p>
+        <ul>
+          <li>若用户将平台服务用于非法用途（如注入他人应用、绕过授权等），由此引发的一切法律责任由用户自行承担，平台不承担任何责任。</li>
+          <li>平台不对用户上传或处理的任何 APK 文件及数据内容的合法性、完整性、安全性负责。</li>
+          <li>平台不承诺对用户账户、注入记录或相关资料进行长期保存，用户应自行备份重要信息。</li>
+        </ul>
+    
+        <p><strong>四、协议变更</strong></p>
+        <p>本平台有权根据实际运营需要随时修改本协议内容，修改后的协议无需另行通知用户。协议变更后，若用户继续使用平台服务，即视为用户已接受修改内容。</p>
+    
+        <p><strong>五、其他说明</strong></p>
+        <ul>
+          <li>本协议自用户注册、登录或使用平台服务时即生效。</li>
+          <li>用户对本协议的接受是使用本平台服务的前提条件。</li>
+        </ul>
+    
+        <p style="text-align: right; margin-top: 20px;">最后更新：2025年5月</p>
+      </div>
+    </el-dialog>
+
+  </div>
+
+  <script>
+    const { createApp, ref, reactive } = Vue;
+
+    const app = createApp({
+      setup() {
+        const siteTitle = config.siteTitle;
+        const formRef = ref(null);
+        const form = reactive({
+          username: '',
+          password: '',
+          captcha: '',
+          agreeLaw: false
+        });
+
+        const rules = {
+          username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
+          password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+          captcha: [{ required: true, message: '请输入验证码', trigger: 'blur' }]
+        };
+
+        const captchaUrl = ref(getCaptchaUrl());
+        function getCaptchaUrl() {
+          return `/captcha.php?time=${Date.now()}`;
+        }
+        const handleForgotPassword = () => {
+          ElementPlus.ElMessageBox.alert(
+            '密码不能找回,只能重置(因为管理员也不知道你的密码)，如需重置请联系管理员QQ:2380494437。',
+            '忘记密码提示',
+            {
+              confirmButtonText: '我知道了',
+              type: 'warning',
+            }
+          );
+        };
+        function refreshCaptcha() {
+          captchaUrl.value = getCaptchaUrl();
+        }
+
+        async function handleLogin() {
+          formRef.value.validate(async valid => {
+            if (!valid) return;
+        
+            if (!form.agreeLaw) {
+              ElementPlus.ElMessage.warning('请先阅读并勾选《计算机软件保护条例》');
+              return;
+            }
+        
+            try {
+              const res = await fetch(`/api/?module=login&method=login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(form)
+              });
+              const json = await res.json();
+              if (json.code === 200) {
+                const token = json.data.admin_token;
+                localStorage.setItem(config.tokenKey, token);
+                localStorage.setItem('adminInfo', JSON.stringify(json.data));
+                window.location.href = "/console" + config.pageSuffix;
+              } else {
+                ElementPlus.ElMessage.error(json.message || '登录失败');
+                refreshCaptcha();
+              }
+            } catch (err) {
+              console.error('登录异常：', err);
+              ElementPlus.ElMessage.error('请求失败，请稍后再试');
+              refreshCaptcha();
+            }
+          });
+        }
+
+        const showRegister = ref(false);
+        const showAgreement = ref(false);
+        const registerFormRef = ref(null);
+        const registerForm = reactive({
+          nickname: '',
+          username: '',
+          password: '',
+          confirmPassword: '',
+          agreed: false
+        });
+
+        function submitRegister() {
+          // 表单完整性校验
+          if (!registerForm.nickname || !registerForm.username || !registerForm.password || !registerForm.confirmPassword) {
+            ElementPlus.ElMessage.warning('请填写完整信息');
+            return;
+          }
+        
+          // 密码一致性校验
+          if (registerForm.password !== registerForm.confirmPassword) {
+            ElementPlus.ElMessage.warning('两次输入的密码不一致');
+            return;
+          }
+        
+          // 用户协议勾选校验
+          if (!registerForm.agreed) {
+            ElementPlus.ElMessage.warning('请先同意用户协议');
+            return;
+          }
+        
+          // 发起注册请求
+          fetch(`/api/?module=register&method=register`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              nickname: registerForm.nickname,
+              account: registerForm.username,
+              password: registerForm.password,
+              confirm_password: registerForm.confirmPassword
+            })
+          })
+          .then(res => res.json())
+          .then(json => {
+            if (json.code === 200) {
+              ElementPlus.ElMessage.success('注册成功，请前往登录');
+              showRegister.value = false;
+            } else {
+              ElementPlus.ElMessage.error(json.message || '注册失败');
+            }
+          })
+          .catch(err => {
+            console.error('注册请求异常：', err);
+            ElementPlus.ElMessage.error('请求失败，请稍后再试');
+          });
+        }
+
+
+        return {
+          siteTitle,
+          form,
+          formRef,
+          rules,
+          captchaUrl,
+          refreshCaptcha,
+          handleLogin,
+          showRegister,
+          registerForm,
+          registerFormRef,
+          submitRegister,
+          showAgreement,
+          handleForgotPassword
+        };
+      }
+    });
+
+    app.use(ElementPlus);
+    app.mount('#app');
+  </script>
+</body>
+</html>

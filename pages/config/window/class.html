@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>活动窗口拦截配置</title>
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+</head>
+<body>
+<div id="app" style="padding: 20px">
+  <el-alert title="活动窗口拦截配置可用于阻止指定类名的窗口启动，例如广告或弹窗页面。" type="info" show-icon style="margin-bottom: 20px">
+  </el-alert>
+
+  <div style="margin-bottom: 20px; display: flex; gap: 10px">
+    <el-select v-model="selectedAppId" placeholder="选择应用" style="width: 300px" @change="loadList">
+      <el-option v-for="app in appList" :key="app.id" :label="`${app.name} | ${app.version}`" :value="app.id"></el-option>
+    </el-select>
+    <el-button @click="loadApps">刷新应用列表</el-button>
+    <el-button type="primary" @click="openAddDialog">添加活动类名</el-button>
+  </div>
+
+  <el-table :data="list" border style="width: 100%">
+    <el-table-column label="ID" prop="id" width="80"></el-table-column>
+    <el-table-column label="窗口类名" prop="class_name"></el-table-column>
+    <el-table-column label="备注" prop="remark"></el-table-column>
+    <el-table-column label="创建时间" prop="created_at" width="180"></el-table-column>
+    <el-table-column label="操作" width="200">
+      <template v-slot="scope">
+        <el-button size="small" @click="editRow(scope.row)">编辑</el-button>
+        <el-button size="small" type="danger" @click="deleteRow(scope.row)">删除</el-button>
+      </template>
+    </el-table-column>
+  </el-table>
+
+  <!-- 添加/编辑弹窗 -->
+  <el-dialog v-model="dialogVisible" :title="editMode ? '编辑类名' : '添加类名'">
+    <el-form :model="form" label-width="100px">
+      <el-form-item label="类名">
+        <el-input v-model="form.class_name"></el-input>
+      </el-form-item>
+      <el-form-item label="备注">
+        <el-input type="textarea" v-model="form.remark"></el-input>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="dialogVisible = false">取消</el-button>
+      <el-button type="primary" @click="submitForm">确定</el-button>
+    </template>
+  </el-dialog>
+</div>
+
+<script>
+const { createApp, ref, reactive, onMounted } = Vue;
+
+createApp({
+  setup() {
+    const appList = ref([]);
+    const selectedAppId = ref(null);
+    const list = ref([]);
+    const dialogVisible = ref(false);
+    const editMode = ref(false);
+    const form = reactive({
+      id: null,
+      class_name: '',
+      remark: ''
+    });
+
+    async function loadApps() {
+      const res = await fetch('/api/index.php?module=config&method=getMyApps');
+      const json = await res.json();
+      if (json.code === 200) appList.value = json.data;
+    }
+
+    async function loadList() {
+      if (!selectedAppId.value) return;
+      const res = await fetch('/api/index.php?module=window_block&method=getList', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apk_id: selectedAppId.value })
+      });
+      const json = await res.json();
+      list.value = json.data || [];
+    }
+
+    function openAddDialog() {
+        if (!selectedAppId.value) {
+            ElementPlus.ElMessage.warning('请先选择应用');
+            return;
+          }
+      editMode.value = false;
+      Object.assign(form, { id: null, class_name: '', remark: '' });
+      dialogVisible.value = true;
+    }
+
+    function editRow(row) {
+      editMode.value = true;
+      Object.assign(form, row);
+      dialogVisible.value = true;
+    }
+
+    async function submitForm() {
+      const method = editMode.value ? 'edit' : 'add';
+      const payload = { ...form, apk_id: selectedAppId.value };
+      const res = await fetch(`/api/index.php?module=window_block&method=${method}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const json = await res.json();
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success(json.message || '保存成功');
+        dialogVisible.value = false;
+        loadList();
+      } else {
+        ElementPlus.ElMessage.error(json.message || '操作失败');
+      }
+    }
+
+    async function deleteRow(row) {
+      await ElementPlus.ElMessageBox.confirm(`确认删除类名：${row.class_name}？`, '警告');
+      const res = await fetch('/api/index.php?module=window_block&method=delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: row.id })
+      });
+      const json = await res.json();
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success('删除成功');
+        loadList();
+      }
+    }
+
+    onMounted(loadApps);
+
+    return {
+      appList,
+      selectedAppId,
+      list,
+      dialogVisible,
+      form,
+      editMode,
+      openAddDialog,
+      editRow,
+      submitForm,
+      deleteRow,
+      loadApps,
+      loadList
+    };
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

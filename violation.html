@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>违规违法APP公示列表</title>
+
+<style>
+/* ======== 全局 ======== */
+body {
+    margin: 0;
+    font-family: "Microsoft YaHei", sans-serif;
+    background: linear-gradient(135deg, #b5f6e5 0%, #c7e9ff 50%, #e5faff 100%);
+    min-height: 100vh;
+    color: #333;
+    overflow-x: hidden;
+}
+
+/* 夏日柔和光点背景 */
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(circle at 20% 30%, rgba(255,255,255,0.4), transparent 60%),
+                radial-gradient(circle at 80% 70%, rgba(255,255,255,0.35), transparent 60%);
+    z-index: -1;
+}
+
+/* ======== 顶部导航玻璃效果 ======== */
+.header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 60px;
+
+    background: rgba(255,255,255,0.45);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+
+    border-bottom: 1px solid rgba(255,255,255,0.35);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 15px;
+    z-index: 10;
+}
+
+.header a {
+    color: #0c7ca1;
+    font-size: 16px;
+    font-weight: bold;
+    text-decoration: none;
+}
+
+.header h3 {
+    margin: 0;
+    font-size: 20px;
+    color: #0b6c8f;
+    text-shadow: 0 1px 2px rgba(255,255,255,0.5);
+}
+
+/* ======== 内容容器 ======== */
+.container {
+    padding: 80px 15px 70px;
+    max-width: 1100px;
+    margin: auto;
+}
+
+/* ======== APP 列表 ======== */
+.app-list {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.app-item {
+    display: flex;
+    flex-direction: row;
+    gap: 15px;
+
+    padding: 16px;
+    border-radius: 16px;
+
+    background: rgba(255,255,255,0.55);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    transition: transform 0.25s ease, box-shadow 0.25s;
+}
+
+.app-item:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+}
+
+.app-icon {
+    width: 70px;
+    height: 70px;
+    border-radius: 14px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.app-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.app-info {
+    flex-grow: 1;
+}
+
+.app-info h2 {
+    margin: 0 0 6px;
+    font-size: 18px;
+    color: #125f7b;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* ======== 等级标签 ======== */
+.level-tag {
+    padding: 3px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    color: #fff;
+    font-weight: bold;
+}
+
+.level-1 { background: #ff6b6b; }
+.level-2 { background: #ffa53d; }
+.level-3 { background: #4cd964; }
+
+/* 文本 */
+.app-info p {
+    margin: 2px 0;
+    font-size: 14px;
+    color: #444;
+}
+
+/* ======== 底部版权 ======== */
+.footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 34px;
+
+    background: rgba(255,255,255,0.45);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(255,255,255,0.35);
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    color: #0a5b79;
+}
+
+/* ======== 加载提示 ======== */
+.loading {
+    text-align: center;
+    color: #0a6b8b;
+    margin: 15px 0;
+    font-weight: bold;
+}
+
+/* ======== 弹窗 ======== */
+.alert-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 999;
+}
+
+.alert-box {
+    width: 82%;
+    max-width: 300px;
+    background: rgba(255,255,255,0.85);
+    border-radius: 14px;
+    padding: 22px 20px;
+    backdrop-filter: blur(8px);
+    text-align: center;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.25);
+}
+
+.alert-box h3 {
+    margin: 0 0 8px;
+    font-size: 18px;
+    color: #127590;
+}
+
+.alert-box p {
+    margin: 4px 0 12px;
+    font-size: 15px;
+    color: #333;
+}
+
+.alert-box button {
+    padding: 8px 18px;
+    background: #17a2b8;
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+/* ======== 自适应横屏 ======== */
+@media (orientation: landscape) {
+    .app-item {
+        padding: 20px;
+    }
+    .app-icon {
+        width: 80px;
+        height: 80px;
+    }
+}
+
+</style>
+</head>
+<body>
+
+<!-- 顶部 -->
+<div class="header">
+    <a class="back" href="index.html">返回</a>
+    <h3>公示列表</h3>
+    <a class="report" href="javascript:void(0)">举报</a>
+</div>
+
+<!-- 内容 -->
+<div class="container">
+    <div id="appList" class="app-list"></div>
+    <div id="loading" class="loading">正在加载中...</div>
+</div>
+
+<!-- 底部 -->
+<div class="footer">© 2025 菜鸟云注入 版权所有</div>
+
+<script>
+// 当前页码
+let currentPage = 1;
+let isLoading = false;
+let hasMore = true;
+
+/* ======== 加载数据 ======== */
+function loadApps() {
+    if (isLoading || !hasMore) return;
+    isLoading = true;
+    document.getElementById('loading').innerText = '正在加载中...';
+
+    fetch('violation.php?page=' + currentPage)
+        .then(res => res.json())
+        .then(res => {
+            if (res.code === 0) {
+                const list = res.data;
+                if (list.length === 0) {
+                    hasMore = false;
+                    document.getElementById('loading').innerText = '没有更多数据了';
+                } else {
+                    renderApps(list);
+                    currentPage++;
+                    document.getElementById('loading').innerText = '下拉加载更多';
+                }
+            } else {
+                document.getElementById('loading').innerText = '加载失败';
+            }
+        })
+        .catch(() => {
+            document.getElementById('loading').innerText = '网络出错';
+        })
+        .finally(() => { isLoading = false; });
+}
+
+/* ======== 渲染 APP 项 ======== */
+function renderApps(apps) {
+    const container = document.getElementById('appList');
+
+    apps.forEach(app => {
+        const levelClass = "level-" + app.level;
+        const levelText = app.level == 1 ? "严重违规" :
+                          app.level == 2 ? "一般违规" : "普通违规";
+
+        const div = document.createElement('div');
+        div.className = "app-item";
+
+        div.innerHTML = `
+            <div class="app-icon">
+                <img src="${app.icon}">
+            </div>
+            <div class="app-info">
+                <h2>${app.name} <span class="level-tag ${levelClass}">${levelText}</span></h2>
+                <p>包名：${app.package}</p>
+                <p>处理时间：${app.time}</p>
+                <p>违规原因：${app.reason}</p>
+                <p>处罚内容：${app.punishment}</p>
+            </div>
+        `;
+
+        container.appendChild(div);
+    });
+}
+
+/* ======== 滚动加载 ======== */
+window.addEventListener('scroll', function () {
+    if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 200) {
+        loadApps();
+    }
+});
+
+/* ======== 举报弹窗 ======== */
+function showAlert(msg) {
+    const mask = document.createElement("div");
+    mask.className = "alert-mask";
+
+    mask.innerHTML = `
+        <div class="alert-box">
+            <h3>违规举报</h3>
+            <p>${msg}</p>
+            <button id="closeAlert">确定</button>
+        </div>
+    `;
+
+    document.body.appendChild(mask);
+    document.getElementById("closeAlert")
+        .onclick = () => mask.remove();
+};
+
+document.querySelector(".report")
+    .onclick = () => showAlert("请联系 QQ2380494437 并备注来意");
+
+/* 初次加载 */
+loadApps();
+</script>
+
+</body>
+</html>

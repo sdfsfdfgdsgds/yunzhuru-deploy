@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>违规公示管理</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="/element/css/index.css" />
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/config.js"></script>
+</head>
+
+<body>
+  <div id="app" style="padding: 20px;">
+
+    <!-- 查询表单 -->
+    <el-form :inline="true" :model="query" @submit.prevent="loadData">
+      <el-form-item label="APPID">
+        <el-input v-model="query.appid" placeholder="APPID"></el-input>
+      </el-form-item>
+
+      <el-form-item label="UID">
+        <el-input v-model="query.uid" placeholder="UID"></el-input>
+      </el-form-item>
+
+      <el-form-item label="名称">
+        <el-input v-model="query.name" placeholder="应用名"></el-input>
+      </el-form-item>
+
+      <el-form-item>
+        <el-button type="primary" @click="loadData">查询</el-button>
+        <el-button @click="resetForm">重置</el-button>
+      </el-form-item>
+    </el-form>
+
+    <!-- 表格 -->
+    <el-table :data="tableData" border style="margin-top: 10px;">
+      <el-table-column label="ID" prop="id" width="60"></el-table-column>
+      <el-table-column label="APPID" prop="appid" width="80"></el-table-column>
+      <el-table-column label="用户UID" prop="uid" width="80"></el-table-column>
+
+      <el-table-column label="应用名" prop="name"></el-table-column>
+      <el-table-column label="包名" prop="package"></el-table-column>
+
+      <el-table-column label="等级" width="80">
+        <template #default="scope">
+          <span v-if="scope.row.level == 1">严重(1)</span>
+          <span v-else-if="scope.row.level == 2">一般(2)</span>
+          <span v-else>普通(3)</span>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="违规类型" width="120" prop="reason"></el-table-column>
+      <el-table-column label="处理" width="120" prop="punishment"></el-table-column>
+      <el-table-column label="时间" width="150" prop="time"></el-table-column>
+
+      <el-table-column label="操作" width="250">
+        <template #default="scope">
+          <el-button size="small" type="primary" @click="openEdit(scope.row)">编辑</el-button>
+          <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
+          <el-button size="small" type="warning" @click="revokeViolation(scope.row)">撤销公示</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <!-- 分页 -->
+    <el-pagination
+      v-if="total > 0"
+      style="margin-top: 20px; text-align: right;"
+      background
+      layout="total, prev, pager, next, jumper"
+      :current-page="query.page"
+      :page-size="query.limit"
+      :total="total"
+      @current-change="handlePageChange"
+    ></el-pagination>
+
+    <!-- 编辑弹窗 -->
+    <el-dialog title="编辑违规信息" v-model="editDialog" width="500px">
+      <el-form :model="editForm" label-width="120px">
+
+        <el-form-item label="应用名">
+          <el-input v-model="editForm.name"></el-input>
+        </el-form-item>
+
+        <el-form-item label="APPID">
+          <el-input v-model="editForm.appid"></el-input>
+        </el-form-item>
+
+        <el-form-item label="UID">
+          <el-input v-model="editForm.uid"></el-input>
+        </el-form-item>
+
+        <el-form-item label="包名">
+          <el-input v-model="editForm.package"></el-input>
+        </el-form-item>
+
+        <el-form-item label="违规等级">
+          <el-select v-model="editForm.level" placeholder="请选择">
+            <el-option label="1（严重）" :value="1"></el-option>
+            <el-option label="2（一般）" :value="2"></el-option>
+            <el-option label="3（普通）" :value="3"></el-option>
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="违规类型">
+          <el-select v-model="editForm.reason" filterable allow-create>
+            <el-option label="涉黄" value="涉黄"></el-option>
+            <el-option label="网络赌博" value="网络赌博"></el-option>
+            <el-option label="网络诈骗" value="网络诈骗"></el-option>
+            <el-option label="木马病毒" value="木马病毒"></el-option>
+            <el-option label="侵权" value="侵权"></el-option>
+            <el-option label="锁机勒索" value="锁机勒索"></el-option>
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="处理方式">
+          <el-select v-model="editForm.punishment" filterable allow-create>
+            <el-option label="未处理" value="未处理"></el-option>
+            <el-option label="删除应用" value="删除应用"></el-option>
+            <el-option label="警告" value="警告"></el-option>
+            <el-option label="下架" value="下架"></el-option>
+            <el-option label="停止服务并删除" value="停止服务并删除"></el-option>
+          </el-select>
+        </el-form-item>
+
+      </el-form>
+
+      <template #footer>
+        <el-button @click="editDialog = false">取消</el-button>
+        <el-button type="primary" @click="submitEdit">保存修改</el-button>
+      </template>
+    </el-dialog>
+
+  </div>
+
+<script>
+const { createApp, ref, reactive, onMounted } = Vue;
+
+createApp({
+  setup() {
+
+    const query = reactive({
+      appid: '',
+      uid: '',
+      name: '',
+      page: 1,
+      limit: 20
+    });
+
+    const tableData = ref([]);
+    const total = ref(0);
+
+    // 加载数据
+    async function loadData() {
+      const res = await fetch('/api/index.php?module=violation&method=getlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(query)
+      });
+      const json = await res.json();
+
+      if (json.code === 200) {
+        tableData.value = json.data.list;
+        total.value = json.data.total;
+        query.page = json.data.page;
+      } else {
+        ElementPlus.ElMessage.error(json.message || '加载失败');
+      }
+    }
+
+    function handlePageChange(p) {
+      query.page = p;
+      loadData();
+    }
+
+    function resetForm() {
+      query.appid = query.uid = query.name = "";
+      query.page = 1;
+      loadData();
+    }
+
+    // 删除记录
+    async function handleDelete(row) {
+      const ok = await ElementPlus.ElMessageBox.confirm(
+        `确定要删除该违规记录吗？`,
+        '确认',
+        { type: 'warning' }
+      ).catch(() => false);
+
+      if (!ok) return;
+
+      const res = await fetch('/api/index.php?module=violation&method=delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: row.id })
+      });
+      const json = await res.json();
+
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success('删除成功');
+        loadData();
+      }
+    }
+
+    // 撤销公示（按 appid）
+    async function revokeViolation(row) {
+      const ok = await ElementPlus.ElMessageBox.confirm(
+        `撤销应用「${row.name}」的违规公示？`,
+        '确认操作',
+        { type: 'warning' }
+      ).catch(() => false);
+
+      if (!ok) return;
+
+      const res = await fetch('/api/index.php?module=violation&method=remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appid: row.appid })
+      });
+
+      const json = await res.json();
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success('已撤销公示');
+        loadData();
+      }
+    }
+
+    // 编辑记录
+    const editDialog = ref(false);
+    const editForm = reactive({
+      id: '',
+      appid: '',
+      uid: '',
+      name: '',
+      package: '',
+      level: '',
+      reason: '',
+      punishment: ''
+    });
+
+    function openEdit(row) {
+      editForm.id = row.id;
+      editForm.appid = row.appid;
+      editForm.uid = row.uid;
+      editForm.name = row.name;
+      editForm.package = row.package;
+      editForm.level = row.level;
+      editForm.reason = row.reason;
+      editForm.punishment = row.punishment;
+
+      editDialog.value = true;
+    }
+
+    async function submitEdit() {
+      const res = await fetch('/api/index.php?module=violation&method=update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editForm)
+      });
+
+      const json = await res.json();
+
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success('修改成功');
+        editDialog.value = false;
+        loadData();
+      } else {
+        ElementPlus.ElMessage.error(json.message);
+      }
+    }
+
+    onMounted(loadData);
+
+    return {
+      query,
+      tableData,
+      total,
+      loadData,
+      resetForm,
+      handlePageChange,
+
+      handleDelete,
+      revokeViolation,
+
+      editDialog,
+      editForm,
+      openEdit,
+      submitEdit
+    };
+
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+
+</body>
+</html>

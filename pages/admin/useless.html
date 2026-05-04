@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>无主文件清理</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/config.js"></script>
+  <style>
+    body { padding: 20px; }
+    .toolbar { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <el-alert title="孤儿文件就是目录中存在，但是数据库却已经删除了的文件，这些文件可能因为各种原因，导致没有被自动删除的，可以统一在这里看到，自行手动清理保持目录的文件的干净。" type="warning" show-icon style="margin-bottom: 20px;"></el-alert>
+
+  <div class="toolbar">
+    <div>
+      <strong>无主文件管理</strong>
+      <el-tag type="danger" style="margin-left: 10px;">release: {{ releaseList.length }}</el-tag>
+      <el-tag type="warning" style="margin-left: 5px;">uploads: {{ uploadsList.length }}</el-tag>
+      <el-tag type="info" style="margin-left: 5px;">signfile: {{ signList.length }}</el-tag>
+    </div>
+    <div>
+      <el-button type="danger" @click="confirmBatchDelete" :disabled="getSelected().length === 0">批量删除选中</el-button>
+      <el-button type="primary" @click="loadAll" style="margin-left: 10px;">刷新</el-button>
+    </div>
+  </div>
+
+  <el-tabs v-model="activeTab">
+    <el-tab-pane label="release目录(已注入的安装包)" name="release">
+      <el-table v-model:selected-rows="releaseSelected" :data="releaseList" border style="width: 100%" height="400" @selection-change="val => releaseSelected = val">
+        <el-table-column type="selection" width="50"></el-table-column>
+        <el-table-column label="文件名" prop="name"></el-table-column>
+        <el-table-column label="大小" width="100">
+          <template #default="scope">{{ formatSize(scope.row.size) }}</template>
+        </el-table-column>
+        <el-table-column label="修改时间" prop="mtime" width="180"></el-table-column>
+        <el-table-column label="操作" width="120">
+          <template #default="scope">
+            <el-button type="danger" size="small" @click="deleteFile('release', [scope.row.name])">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-tab-pane>
+
+    <el-tab-pane label="uploads目录(用户上传的安装包)" name="uploads">
+      <el-table v-model:selected-rows="uploadsSelected" :data="uploadsList" border style="width: 100%" height="400" @selection-change="val => uploadsSelected = val">
+        <el-table-column type="selection" width="50"></el-table-column>
+        <el-table-column label="文件名" prop="name"></el-table-column>
+        <el-table-column label="大小" width="100">
+          <template #default="scope">{{ formatSize(scope.row.size) }}</template>
+        </el-table-column>
+        <el-table-column label="修改时间" prop="mtime" width="180"></el-table-column>
+        <el-table-column label="操作" width="120">
+          <template #default="scope">
+            <el-button type="danger" size="small" @click="deleteFile('uploads', [scope.row.name])">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-tab-pane>
+
+    <el-tab-pane label="signfile目录(用户的证书文件)" name="signfile">
+      <el-table v-model:selected-rows="signSelected" :data="signList" border style="width: 100%" height="400" @selection-change="val => signSelected = val">
+        <el-table-column type="selection" width="50"></el-table-column>
+        <el-table-column label="文件名" prop="name"></el-table-column>
+        <el-table-column label="大小" width="100">
+          <template #default="scope">{{ formatSize(scope.row.size) }}</template>
+        </el-table-column>
+        <el-table-column label="修改时间" prop="mtime" width="180"></el-table-column>
+        <el-table-column label="操作" width="120">
+          <template #default="scope">
+            <el-button type="danger" size="small" @click="deleteFile('signfile', [scope.row.name])">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-tab-pane>
+  </el-tabs>
+</div>
+
+<script>
+  const { createApp, ref, reactive, onMounted } = Vue;
+
+  createApp({
+    setup() {
+      const releaseList = ref([]);
+      const uploadsList = ref([]);
+      const signList = ref([]);
+      const activeTab = ref('release');
+
+      const releaseSelected = ref([]);
+      const uploadsSelected = ref([]);
+      const signSelected = ref([]);
+
+      function getSelected() {
+        if (activeTab.value === 'release') return releaseSelected.value;
+        if (activeTab.value === 'uploads') return uploadsSelected.value;
+        return signSelected.value;
+      }
+
+      function getCurrentList() {
+        if (activeTab.value === 'release') return releaseList.value;
+        if (activeTab.value === 'uploads') return uploadsList.value;
+        return signList.value;
+      }
+
+      async function loadAll() {
+        await Promise.all([
+          loadList('release'),
+          loadList('uploads'),
+          loadList('signfile')
+        ]);
+      }
+
+      async function loadList(type) {
+        const methodMap = {
+          release: 'list_release_useless',
+          uploads: 'list_uploads_useless',
+          signfile: 'list_sign_useless'
+        };
+        const res = await fetch('/api/index.php?module=admin_file&method=' + methodMap[type], {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        const json = await res.json();
+        if (json.code === 200 && Array.isArray(json.data.files)) {
+          const fileList = json.data.files.map(f => ({
+            name: f.name,
+            size: f.size,
+            mtime: f.mtime
+          }));
+          if (type === 'release') releaseList.value = fileList;
+          if (type === 'uploads') uploadsList.value = fileList;
+          if (type === 'signfile') signList.value = fileList;
+        } else {
+          ElementPlus.ElMessage.error(json.message || '加载失败');
+        }
+      }
+
+      function formatSize(bytes) {
+        if (!bytes) return '0 B';
+        const kb = bytes / 1024;
+        if (kb < 1024) return kb.toFixed(2) + ' KB';
+        return (kb / 1024).toFixed(2) + ' MB';
+      }
+
+      async function deleteFile(type, files) {
+        const methodMap = {
+          release: 'delete_release_useless',
+          uploads: 'delete_uploads_useless',
+          signfile: 'delete_sign_useless'
+        };
+        const confirm = await ElementPlus.ElMessageBox.confirm('确认删除选中文件？', '警告', { type: 'warning' }).catch(() => null);
+        if (!confirm) return;
+        const res = await fetch('/api/index.php?module=admin_file&method=' + methodMap[type], {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ files })
+        });
+        const json = await res.json();
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success('删除成功');
+          await loadList(type);
+        } else {
+          ElementPlus.ElMessage.error(json.message || '删除失败');
+        }
+      }
+
+      async function confirmBatchDelete() {
+        const files = getSelected().map(f => f.name);
+        if (files.length === 0) return;
+        await deleteFile(activeTab.value, files);
+      }
+
+      onMounted(loadAll);
+
+      return {
+        activeTab,
+        releaseList,
+        uploadsList,
+        signList,
+        loadAll,
+        deleteFile,
+        confirmBatchDelete,
+        getCurrentList,
+        getSelected,
+        releaseSelected,
+        uploadsSelected,
+        signSelected,
+        formatSize
+      };
+    }
+  }).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

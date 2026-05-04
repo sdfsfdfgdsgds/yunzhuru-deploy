@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>应用底包库管理</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/config.js"></script>
+  <style>
+    body { padding: 20px; }
+    .toolbar { margin-bottom: 15px; display:flex; justify-content:space-between; align-items:center; }
+    .search-bar { margin-bottom:15px; }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- 顶部 -->
+  <div class="toolbar">
+    <div><strong>应用商店管理</strong></div>
+    <div>
+      <el-button type="danger" :disabled="multipleSelection.length===0" @click="batchDelete">
+        批量删除
+      </el-button>
+      <el-button type="primary" @click="openCreate">新增应用</el-button>
+    </div>
+  </div>
+
+  <!-- 搜索 -->
+  <div class="search-bar">
+    <el-form :inline="true" :model="query">
+      <el-form-item label="名称">
+        <el-input v-model="query.keyword" placeholder="应用名称"></el-input>
+      </el-form-item>
+      <el-form-item label="下载地址">
+        <el-input v-model="query.download_keyword" placeholder="下载地址关键字"></el-input>
+      </el-form-item>
+      <el-form-item label="创建时间">
+        <el-date-picker
+          v-model="query.date_range"
+          type="daterange"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          value-format="YYYY-MM-DD">
+        </el-date-picker>
+      </el-form-item>
+      <el-form-item>
+        <el-button type="primary" @click="handleSearch">搜索</el-button>
+        <el-button @click="resetSearch">重置</el-button>
+      </el-form-item>
+    </el-form>
+  </div>
+
+  <!-- 列表 -->
+  <el-table
+      :data="list"
+      border
+      @selection-change="handleSelectionChange">
+
+    <el-table-column type="selection" width="55"></el-table-column>
+    <el-table-column prop="id" label="ID" width="70"></el-table-column>
+    <el-table-column prop="name" label="应用名称" min-width="140"></el-table-column>
+    <el-table-column prop="version" label="版本" width="180"></el-table-column>
+    <el-table-column prop="size" label="大小" width="100"></el-table-column>
+
+    <el-table-column label="VIP" width="80">
+      <template #default="scope">
+        <el-tag :type="scope.row.vip ? 'warning' : 'info'">
+          {{ scope.row.vip ? 'VIP' : '普通' }}
+        </el-tag>
+      </template>
+    </el-table-column>
+
+    <el-table-column label="启用" width="90">
+      <template #default="scope">
+        <el-tag :type="scope.row.enabled ? 'success' : 'info'">
+          {{ scope.row.enabled ? '已启用' : '未启用' }}
+        </el-tag>
+      </template>
+    </el-table-column>
+
+    <el-table-column prop="download1_url" label="下载地址1" min-width="200" show-overflow-tooltip></el-table-column>
+    <el-table-column prop="update_time" label="创建时间" width="170"></el-table-column>
+
+    <el-table-column label="操作" width="160" fixed="right">
+      <template #default="scope">
+        <el-button size="small" @click="openEdit(scope.row)">编辑</el-button>
+        <el-button size="small" type="danger" @click="confirmDelete(scope.row)">删除</el-button>
+      </template>
+    </el-table-column>
+
+  </el-table>
+
+  <!-- 分页 -->
+  <el-pagination
+      v-if="pagination.total>0"
+      style="margin-top:20px;text-align:right"
+      background
+      layout="total, prev, pager, next, jumper"
+      :current-page="query.page"
+      :page-size="query.page_size"
+      :total="pagination.total"
+      @current-change="handlePageChange">
+  </el-pagination>
+
+  <!-- 编辑弹窗 -->
+<el-dialog 
+  v-model="showEdit" 
+  :title="isCreate ? '新增应用' : '编辑应用'" 
+  width="600px">
+
+  <el-form 
+    ref="formRef"
+    :model="form" 
+    :rules="rules"
+    label-width="110px">
+
+    <el-form-item label="应用名称" prop="name" required>
+      <template #label>
+        <span><span style="color:red">*</span> 应用名称</span>
+      </template>
+      <el-input v-model="form.name"></el-input>
+    </el-form-item>
+
+    <el-form-item label="副标题" prop="subtitle">
+      <el-input v-model="form.subtitle"></el-input>
+    </el-form-item>
+
+    <el-form-item label="版本" prop="version">
+      <el-input v-model="form.version"></el-input>
+    </el-form-item>
+
+
+    <el-form-item prop="download1_text" required>
+      <template #label>
+        <span><span style="color:red">*</span> 下载1名称</span>
+      </template>
+      <el-input v-model="form.download1_text"></el-input>
+    </el-form-item>
+
+    <el-form-item prop="download1_url" required>
+      <template #label>
+        <span><span style="color:red">*</span> 下载1地址</span>
+      </template>
+      <el-input v-model="form.download1_url"></el-input>
+    </el-form-item>
+    
+    <el-form-item label="下载2名称">
+      <el-input v-model="form.download2_text"></el-input>
+    </el-form-item>
+
+    <el-form-item label="下载2地址">
+      <el-input v-model="form.download2_url"></el-input>
+    </el-form-item>
+
+    
+
+    <el-form-item label="图标地址">
+      <el-input v-model="form.logoUrl"></el-input>
+    </el-form-item>
+
+    <el-form-item prop="size" required>
+      <template #label>
+        <span><span style="color:red">*</span> 应用大小</span>
+      </template>
+      <el-input v-model="form.size"></el-input>
+    </el-form-item>
+
+    <el-form-item label="VIP资源">
+      <el-switch v-model="form.vip"></el-switch>
+    </el-form-item>
+
+    <el-form-item label="是否启用">
+      <el-switch v-model="form.enabled"></el-switch>
+    </el-form-item>
+
+    <el-form-item v-if="!isCreate" label="创建时间">
+      <el-input :model-value="form.update_time" disabled></el-input>
+    </el-form-item>
+
+  </el-form>
+
+  <template #footer>
+    <el-button @click="showEdit=false">取消</el-button>
+    <el-button type="primary" @click="submitForm">
+      {{ isCreate ? '新增' : '保存' }}
+    </el-button>
+  </template>
+
+</el-dialog>
+
+</div>
+
+<script>
+const { createApp, ref, reactive, onMounted } = Vue;
+
+createApp({
+  setup() {
+
+    const query = reactive({
+      page:1,
+      page_size:20,
+      keyword:'',
+      download_keyword:'',
+      date_range:[]
+    });
+
+    const pagination = reactive({ total:0 });
+    const list = ref([]);
+    const multipleSelection = ref([]);
+
+    const showEdit = ref(false);
+    const isCreate = ref(false);
+    const formRef = ref(null);
+    
+    const rules = {
+      name: [
+        { required: true, message: '请输入应用名称', trigger: 'blur' }
+      ],
+      download1_text: [
+        { required: true, message: '请输入下载1名称', trigger: 'blur' }
+      ],
+      download1_url: [
+        { required: true, message: '请输入下载1地址', trigger: 'blur' }
+      ],
+      size: [
+        { required: true, message: '请输入应用大小', trigger: 'blur' }
+      ]
+    };
+    const form = reactive({
+      id:'',
+      name:'',
+      subtitle:'',
+      version:'',
+      download1_text:'',
+      download1_url:'',
+      download2_text:'',
+      download2_url:'',
+      logoUrl:'',
+      size:'',
+      vip:false,
+      enabled:false,
+      update_time:''
+    });
+
+    async function loadData(){
+      const params = {
+        page: query.page,
+        page_size: query.page_size,
+        keyword: query.keyword,
+        download_keyword: query.download_keyword,
+        start_date: query.date_range[0] || '',
+        end_date: query.date_range[1] || ''
+      };
+
+      console.log("加载数据",params);
+
+      const res = await fetch('/api/index.php?module=appstore&method=appstore_list',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(params)
+      });
+      const json = await res.json();
+
+      if(json.code===200){
+        const data = json.data||{};
+        list.value = data.list||[];
+        pagination.total = data.pagination?.total||0;
+      }else{
+        ElementPlus.ElMessage.error(json.message||'加载失败');
+      }
+    }
+
+    function handleSearch(){
+      query.page=1;
+      loadData();
+    }
+
+    function resetSearch(){
+      query.keyword='';
+      query.download_keyword='';
+      query.date_range=[];
+      query.page=1;
+      loadData();
+    }
+
+    function handlePageChange(p){
+      query.page=p;
+      loadData();
+    }
+
+    function handleSelectionChange(rows){
+      multipleSelection.value=rows;
+    }
+
+    function resetForm(){
+      Object.keys(form).forEach(k=>form[k]='');
+      form.vip=false;
+      form.enabled=false;
+    }
+
+    function openCreate(){
+      isCreate.value=true;
+      resetForm();
+      showEdit.value=true;
+    }
+
+    function openEdit(row){
+      isCreate.value=false;
+      Object.assign(form,row);
+      showEdit.value=true;
+    }
+
+    async function submitForm(){
+    
+      if(!formRef.value) return;
+    
+      await formRef.value.validate(async (valid)=>{
+        if(!valid){
+          ElementPlus.ElMessage.warning("请填写必填项");
+          return;
+        }
+    
+        const url=isCreate.value
+          ? '/api/index.php?module=appstore&method=appstore_add'
+          : '/api/index.php?module=appstore&method=appstore_update';
+    
+        const payload=Object.assign({},form);
+        if(isCreate.value) delete payload.id;
+    
+        const res=await fetch(url,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(payload)
+        });
+    
+        const json=await res.json();
+    
+        if(json.code===200){
+          ElementPlus.ElMessage.success('操作成功');
+          showEdit.value=false;
+          loadData();
+        }else{
+          ElementPlus.ElMessage.error(json.message||'操作失败');
+        }
+      });
+    }
+
+    async function confirmDelete(row){
+      await ElementPlus.ElMessageBox.confirm('确认删除？','提示');
+      const res=await fetch('/api/index.php?module=appstore&method=appstore_delete',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ id:row.id })
+      });
+      const json=await res.json();
+      if(json.code===200){
+        ElementPlus.ElMessage.success('删除成功');
+        loadData();
+      }
+    }
+
+    async function batchDelete(){
+      await ElementPlus.ElMessageBox.confirm('确认批量删除？','提示');
+      const ids=multipleSelection.value.map(i=>i.id);
+
+      console.log("批量删除",ids);
+
+      const res=await fetch('/api/index.php?module=appstore&method=appstore_delete',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ ids })
+      });
+      const json=await res.json();
+      if(json.code===200){
+        ElementPlus.ElMessage.success('批量删除成功');
+        loadData();
+      }
+    }
+
+    onMounted(loadData);
+
+    return {
+      query,pagination,list,multipleSelection,
+      showEdit,isCreate,form,
+      handleSearch,resetSearch,
+      handlePageChange,handleSelectionChange,
+      openCreate,openEdit,submitForm,
+      confirmDelete,batchDelete,formRef,
+      rules,
+    };
+
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+
+</body>
+</html>

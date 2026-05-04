@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>地区访问统计</title>
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/element/js/echarts.min.js"></script>
+  <script src="/element/js/china.js"></script>
+</head>
+<body>
+<div id="app" style="padding: 20px">
+  <el-alert title="地区访问统计" show-icon style="margin-bottom: 20px"
+    description="访问数据按省份统计，默认展示今天数据。">
+  </el-alert>
+
+  <div style="display: flex; gap: 10px; margin-bottom: 20px; align-items: center">
+    <el-select v-model="selectedAppId" placeholder="选择应用" style="width: 300px">
+      <el-option
+        v-for="app in appList"
+        :key="app.id"
+        :label="`${app.name} | ${app.version}`"
+        :value="app.id">
+      </el-option>
+    </el-select>
+    <el-button @click="loadApps">刷新应用列表</el-button>
+    <el-select v-model="quickRange" placeholder="快速选择" style="width: 150px" @change="applyQuickRange">
+      <el-option label="今天" value="today"></el-option>
+      <el-option label="昨天" value="yesterday"></el-option>
+      <el-option label="近3天" value="last3"></el-option>
+      <el-option label="近1周" value="last7"></el-option>
+      <el-option label="近1月" value="last30"></el-option>
+      <el-option label="近3月" value="last90"></el-option>
+      <el-option label="近6月" value="last180"></el-option>
+    </el-select>
+    <el-date-picker
+      v-model="dateRange"
+      type="daterange"
+      range-separator="至"
+      start-placeholder="开始日期"
+      end-placeholder="结束日期"
+      format="YYYY-MM-DD"
+      value-format="YYYY-MM-DD"
+    ></el-date-picker>
+    <el-button type="primary" @click="loadStat">查询</el-button>
+    <el-button @click="resetForm">重置</el-button>
+  </div>
+
+  <div id="regionMap" style="width: 100%; height: 600px"></div>
+</div>
+
+<script>
+const { createApp, ref, onMounted } = Vue;
+
+createApp({
+  setup() {
+    const appList = ref([]);
+    const selectedAppId = ref(null);
+    const dateRange = ref([]);
+    const quickRange = ref('');
+    const mapChart = ref(null);
+
+    function resetForm() {
+      selectedAppId.value = null;
+      dateRange.value = [];
+      quickRange.value = '';
+      loadStat();
+    }
+
+    function applyQuickRange(value) {
+      const now = new Date();
+      let start = new Date();
+      switch (value) {
+        case 'today': start = now; break;
+        case 'yesterday':
+          start.setDate(now.getDate() - 1);
+          now.setDate(now.getDate() - 1);
+          break;
+        case 'last3': start.setDate(now.getDate() - 2); break;
+        case 'last7': start.setDate(now.getDate() - 6); break;
+        case 'last30': start.setDate(now.getDate() - 29); break;
+        case 'last90': start.setDate(now.getDate() - 89); break;
+        case 'last180': start.setDate(now.getDate() - 179); break;
+      }
+      const format = (d) => d.toISOString().split('T')[0];
+      dateRange.value = [format(start), format(now)];
+    }
+
+    async function loadApps() {
+      const res = await fetch('/api/index.php?module=config&method=getMyApps');
+      const json = await res.json();
+      if (json.code === 200) appList.value = json.data;
+    }
+
+    async function loadStat() {
+      const params = {};
+      if (selectedAppId.value) params.apk_id = selectedAppId.value;
+      if (dateRange.value.length === 2) {
+        params.start = dateRange.value[0] + ' 00:00:00';
+        params.end = dateRange.value[1] + ' 23:59:59';
+      }
+
+      const res = await fetch('/api/index.php?module=stat&method=apk_region_stat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params)
+      });
+      const json = await res.json();
+      if (json.code === 200) renderMap(json.data.list);
+    }
+
+    function renderMap(data) {
+      if (!mapChart.value) {
+        mapChart.value = echarts.init(document.getElementById('regionMap'));
+      }
+    
+      // 清洗数据并统一省份名称
+      const formatRegionName = (region) => {
+        if (!region || region === '0') return null;
+        return region
+          .replace('省', '')
+          .replace('市', '')
+          .replace('自治区', '')
+          .replace('特别行政区', '')
+          .replace('壮族', '')
+          .replace('回族', '')
+          .replace('维吾尔', '')
+          .replace('自治区', '')
+          .trim();
+      };
+    
+      const mapData = data
+        .map(item => {
+          const name = formatRegionName(item.region);
+          if (!name) return null;
+          return {
+            name,
+            value: parseInt(item.total_visits) || 0,
+            device_count: parseInt(item.device_count) || 0,
+            ip_count: parseInt(item.ip_count) || 0,
+            total_visits: parseInt(item.total_visits) || 0
+          };
+        })
+        .filter(Boolean);
+    
+      const maxVisits = Math.max(...mapData.map(i => i.total_visits), 100);
+    
+      const option = {
+        tooltip: {
+          trigger: 'item',
+          formatter: function (params) {
+            if (!params.data) return `${params.name}<br/>无数据`;
+            return `${params.name}<br/>
+              访问次数：${params.data.total_visits}<br/>
+              设备数：${params.data.device_count}<br/>
+              IP数：${params.data.ip_count}`;
+          }
+        },
+        visualMap: {
+          min: 0,
+          max: maxVisits,
+          left: 'left',
+          bottom: '20px',
+          text: ['高', '低'],
+          inRange: {
+            color: ['#FFE0E0', '#FF0000']
+          },
+          calculable: true
+        },
+        series: [{
+          name: '访问地区',
+          type: 'map',
+          map: 'china',
+          roam: true,
+          label: {
+            show: true
+          },
+          data: mapData
+        }]
+      };
+    
+      mapChart.value.setOption(option);
+    }
+
+
+
+    onMounted(() => {
+      loadApps();
+      loadStat();
+    });
+
+    return {
+      appList,
+      selectedAppId,
+      dateRange,
+      loadApps,
+      loadStat,
+      quickRange,
+      applyQuickRange,
+      resetForm
+    };
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

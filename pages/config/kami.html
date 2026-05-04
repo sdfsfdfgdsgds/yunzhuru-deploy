@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>卡密管理</title>
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+</head>
+<body>
+<div id="app" style="padding: 20px">
+
+  <el-alert title="【应用配置】-【弹窗配置】-【输入弹窗】中创建一个弹窗，并添加一个按钮，按钮事件设置为“提交输入内容”，事件参数填写为：“https://yunzhuru.com/kami/”   即可对接卡密" type="error" style="margin-bottom: 20px"></el-alert>
+
+  <div style="margin-bottom: 20px; display: flex; gap: 10px">
+    <el-select v-model="selectedAppId" placeholder="选择应用" style="width: 300px" @change="loadList">
+      <el-option v-for="app in appList" :key="app.id" :label="`${app.name} | ${app.version}`" :value="app.id"></el-option>
+    </el-select>
+    <el-button @click="loadApps">刷新应用列表</el-button>
+    <el-button type="primary" @click="openAddDialog">生成卡密</el-button>
+    <el-button type="success" @click="openImportDialog">导入卡密</el-button>
+    <el-button type="warning" @click="openEditDialog" :disabled="multipleSelection.length === 0">批量修改</el-button>
+    <el-button type="danger" @click="() => deleteBatch()" :disabled="multipleSelection.length === 0">批量删除</el-button>
+
+    <el-button type="success" @click="openExportDialog" :disabled="list.length === 0">导出卡密</el-button>
+  </div>
+
+  <div style="margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap">
+    <el-input v-model="search.kami" placeholder="卡密模糊查找" style="width: 200px"></el-input>
+    <el-input v-model="search.deviceId" placeholder="设备ID模糊查找" style="width: 200px"></el-input>
+    <el-input v-model="search.name" placeholder="卡密名称模糊查找" style="width: 200px"></el-input>
+    <el-select v-model="search.used" placeholder="使用状态" style="width: 120px">
+      <el-option label="全部" value=""></el-option>
+      <el-option label="已使用" value="1"></el-option>
+      <el-option label="未使用" value="0"></el-option>
+    </el-select>
+    <el-select v-model="search.expire" placeholder="使用到期状态" style="width: 160px">
+      <el-option label="全部" value=""></el-option>
+      <el-option label="已到期" value="1"></el-option>
+      <el-option label="未到期" value="0"></el-option>
+    </el-select>
+    <el-select v-model="search.enabled" placeholder="启用状态" style="width: 120px">
+      <el-option label="全部" value=""></el-option>
+      <el-option label="启用" value="1"></el-option>
+      <el-option label="禁用" value="0"></el-option>
+    </el-select>
+    <el-button @click="loadList">查询</el-button>
+  </div>
+
+  <!--el-table :data="list" border @selection-change="handleSelectionChange"-->
+  <el-table :data="list" row-key="id" border @selection-change="handleSelectionChange">
+
+    <el-table-column type="selection" width="50"></el-table-column>
+    <el-table-column label="ID" prop="id" width="80"></el-table-column>
+    <el-table-column label="卡密" prop="kami" width="300"></el-table-column>
+    <el-table-column label="名称" prop="name" width="100"></el-table-column>
+    <el-table-column label="有效时长" prop="time" width="100"></el-table-column>
+    <el-table-column label="使用时间" prop="use_at" width="150"></el-table-column>
+    <el-table-column label="设备ID" prop="deviceId"></el-table-column>
+    <el-table-column label="启用" width="80">
+      <template v-slot="scope">
+        <el-tag :type="scope.row.enabled ? 'success' : 'info'">{{ scope.row.enabled ? '是' : '否' }}</el-tag>
+      </template>
+    </el-table-column>
+    <el-table-column label="备注" prop="remark"></el-table-column>
+    <el-table-column label="创建时间" prop="created_at" width="150"></el-table-column>
+    <el-table-column label="操作" width="220">
+      <template v-slot="scope">
+        <el-button size="small" @click="openEditDialog([scope.row])">编辑</el-button>
+        <el-button size="small" type="danger" @click="deleteBatch([scope.row.id])">删除</el-button>
+      </template>
+    </el-table-column>
+  </el-table>
+
+  <el-pagination
+    v-model:current-page="pagination.page"
+    :page-size="pagination.page_size"
+    :total="pagination.total"
+    layout="total, prev, pager, next"
+    @current-change="loadList"
+    style="margin-top: 20px">
+  </el-pagination>
+
+  <!-- 添加卡密对话框 -->
+    <el-dialog v-model="dialogVisible" title="生成卡密">
+      <el-form :model="form" label-width="100px">
+        <el-form-item label="生成数量">
+          <el-input-number v-model="form.count" :min="1" :max="300"></el-input-number>
+        </el-form-item>
+        <el-form-item label="有效时长(小时)">
+          <el-input-number v-model="form.time" :min="0.01" :max="999999999"></el-input-number>
+          <el-alert title="支持小数点,最小值0.01(36秒)" type="error" style="margin-bottom: 20px"></el-alert>
+        </el-form-item>
+    
+        <div style="margin: -10px 0 20px 100px">
+          <el-button size="small" @click="setPresetTime('周卡', 24 * 7, '有效期为7天')">周卡</el-button>
+          <el-button size="small" @click="setPresetTime('月卡', 24 * 30, '有效期为30天')">月卡</el-button>
+          <el-button size="small" @click="setPresetTime('季度卡', 24 * 90, '有效期为90天')">季度卡</el-button>
+          <el-button size="small" @click="setPresetTime('半年卡', 24 * 180, '有效期为180天')">半年卡</el-button>
+          <el-button size="small" @click="setPresetTime('年卡', 24 * 365, '有效期为365天')">年卡</el-button>
+          <el-button size="small" type="danger" @click="setPresetTime('永久卡', 999999999, '有效期永久')">永久卡</el-button>
+        </div>
+        <el-form-item label="一机一码绑定">
+        <el-switch v-model="form.bind"></el-switch>
+      </el-form-item>
+        <el-form-item label="卡密名称">
+          <el-input v-model="form.name" placeholder="默认：卡密"></el-input>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="form.remark" placeholder="默认：无备注"></el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitForm">生成</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 导入卡密对话框 -->
+<el-dialog v-model="importDialogVisible" title="导入卡密">
+  <el-form :model="importForm" label-width="100px">
+    <el-form-item label="有效时长(小时)">
+      <el-input-number v-model="importForm.time" :min="0.01" :max="999999999"></el-input-number>
+      <el-alert title="支持小数点,最小值0.01(36秒)" type="error" style="margin-bottom: 20px"></el-alert>
+    </el-form-item>
+
+    <div style="margin: -10px 0 20px 100px">
+      <el-button size="small" @click="setPresetImportTime('周卡', 24 * 7, '有效期为7天')">周卡</el-button>
+      <el-button size="small" @click="setPresetImportTime('月卡', 24 * 30, '有效期为30天')">月卡</el-button>
+      <el-button size="small" @click="setPresetImportTime('季度卡', 24 * 90, '有效期为90天')">季度卡</el-button>
+      <el-button size="small" @click="setPresetImportTime('半年卡', 24 * 180, '有效期为180天')">半年卡</el-button>
+      <el-button size="small" @click="setPresetImportTime('年卡', 24 * 365, '有效期为365天')">年卡</el-button>
+      <el-button size="small" type="danger" @click="setPresetImportTime('永久卡', 999999999, '有效期永久')">永久卡</el-button>
+    </div>
+
+    <el-form-item label="一机一码绑定">
+      <el-switch v-model="importForm.bind"></el-switch>
+    </el-form-item>
+
+    <el-form-item label="卡密名称">
+      <el-input v-model="importForm.name" placeholder="默认：卡密"></el-input>
+    </el-form-item>
+
+    <el-form-item label="备注">
+      <el-input v-model="importForm.remark" placeholder="默认：无备注"></el-input>
+    </el-form-item>
+
+    <el-form-item label="卡密列表">
+      <el-input
+        type="textarea"
+        v-model="importForm.kami_text"
+        placeholder="每行一条卡密，最多300条"
+        rows="10">
+      </el-input>
+    </el-form-item>
+
+    <div style="margin-left: 100px;">
+      <el-button size="small" @click="fillExampleKami">一键填充示例</el-button>
+    </div>
+  </el-form>
+
+  <template #footer>
+    <el-button @click="importDialogVisible = false">取消</el-button>
+    <el-button type="primary" @click="submitImport">导入</el-button>
+  </template>
+</el-dialog>
+
+
+  <!-- 批量编辑对话框 -->
+  <el-dialog v-model="editDialogVisible" title="批量修改卡密">
+    <el-form :model="editForm" label-width="100px">
+      <el-form-item label="设备ID">
+        <el-input v-model="editForm.deviceId"></el-input>
+        <div style="color: #E6A23C; font-size: 12px; margin-top: 4px;">清空设备码等于解绑设备,允许重新绑定</div>
+      </el-form-item>
+      <el-form-item label="有效时长(小时)">
+        <el-input-number v-model="editForm.time" :min="0.01" :max="999999999"></el-input-number>
+        <el-alert title="支持小数点,最小值0.01(36秒)" type="error" style="margin-bottom: 20px"></el-alert>
+      </el-form-item>
+      <el-form-item label="启用状态">
+        <el-switch v-model="editForm.enabled"></el-switch>
+      </el-form-item>
+      <el-form-item label="一机一码绑定">
+        <el-switch v-model="editForm.bind"></el-switch>
+      </el-form-item>
+      <el-form-item label="卡密名称">
+        <el-input v-model="editForm.name"></el-input>
+      </el-form-item>
+      <el-form-item label="备注">
+        <el-input v-model="editForm.remark" type="textarea" rows="2"></el-input>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="editDialogVisible = false">取消</el-button>
+      <el-button type="primary" @click="submitEdit">保存</el-button>
+    </template>
+  </el-dialog>
+
+
+    <el-dialog v-model="exportDialogVisible" title="导出卡密列选择">
+      <el-checkbox-group v-model="exportColumns" style="display: flex; flex-wrap: wrap; gap: 10px">
+        <el-checkbox v-for="col in allColumns" :key="col.prop" :label="col.prop">{{ col.label }}</el-checkbox>
+      </el-checkbox-group>
+      <template #footer>
+        <el-button @click="exportDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="exportKami">导出</el-button>
+      </template>
+    </el-dialog>
+
+</div>
+
+<script>
+const { createApp, ref, reactive, onMounted } = Vue;
+
+createApp({
+  setup() {
+     //导入卡密
+     const importDialogVisible = ref(false);
+const importForm = reactive({
+  time: 24,
+  bind: true,
+  name: '',
+  remark: '',
+  kami_text: ''
+});
+
+function openImportDialog() {
+  if (!selectedAppId.value) {
+    ElementPlus.ElMessage.warning('请先选择应用');
+    return;
+  }
+  Object.assign(importForm, {
+    time: 24,
+    bind: true,
+    name: '',
+    remark: '',
+    kami_text: ''
+  });
+  importDialogVisible.value = true;
+}
+
+function setPresetImportTime(name, hours, remark) {
+  importForm.time = hours;
+  importForm.name = name;
+  importForm.remark = remark;
+}
+
+function fillExampleKami() {
+  importForm.kami_text = 'abc123\nxyz456\nhello789';
+}
+
+async function submitImport() {
+  if (!importForm.time) {
+    ElementPlus.ElMessage.error('有效时长不能为空');
+    return;
+  }
+  if (!importForm.kami_text.trim()) {
+    ElementPlus.ElMessage.error('请输入要导入的卡密');
+    return;
+  }
+
+  const payload = {
+    ...importForm,
+    app_id: selectedAppId.value
+  };
+
+  const res = await fetch('/api/index.php?module=kami&method=import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  const json = await res.json();
+  if (json.code === 200) {
+    ElementPlus.ElMessage.success(json.message || '导入完成');
+    importDialogVisible.value = false;
+    loadList();
+  } else {
+    ElementPlus.ElMessage.error(json.message || '导入失败');
+  }
+}
+//导入卡密结束
+    const appList = ref([]);
+    const selectedAppId = ref(null);
+    const list = ref([]);
+    const dialogVisible = ref(false);
+    const editDialogVisible = ref(false);
+    const form = reactive({
+      count: 1,
+      bind: true,
+      time: 24,
+      name: '',
+      remark: ''
+    });
+
+    const editForm = reactive({
+      deviceId: '',
+      time: null,
+      enabled: true,
+      bind: true,
+      name: '',
+      remark: ''
+    });
+    const selectedEditIds = ref([]);
+
+    const search = reactive({
+      kami: '',
+      deviceId: '',
+      name: '',
+      used: '',
+      expire: '',
+      enabled: ''
+    });
+    const pagination = reactive({
+      page: 1,
+      page_size: 100,
+      total: 0
+    });
+    const multipleSelection = ref([]);
+    const exportDialogVisible = ref(false);
+    const exportColumns = ref([]);
+    const allColumns = ref([
+      { label: 'ID', prop: 'id' },
+      { label: '卡密', prop: 'kami' },
+      { label: '名称', prop: 'name' },
+      { label: '有效时长', prop: 'time' },
+      { label: '使用时间', prop: 'use_at' },
+      { label: '设备ID', prop: 'deviceId' },
+      { label: '包名', prop: 'package' },
+      { label: '版本', prop: 'version' },
+      { label: '启用状态', prop: 'enabled' },
+      { label: '备注', prop: 'remark' },
+      { label: '创建时间', prop: 'created_at' }
+    ]);
+    function setPresetTime(name, hours, remark) {
+      form.time = hours;
+      form.name = name;
+      form.remark = remark;
+    }
+    function openExportDialog() {
+      exportColumns.value = allColumns.value.map(item => item.prop); // 默认全选
+      exportDialogVisible.value = true;
+    }
+    
+    function exportKami() {
+      if (!exportColumns.value.length) {
+        ElementPlus.ElMessage.warning('请至少选择一个导出字段');
+        return;
+      }
+    
+      const rows = list.value.map(row => {
+        return exportColumns.value.map(key => {
+          let val = row[key];
+          if (key === 'enabled') {
+            val = val ? '启用' : '禁用';
+          }
+          return val ?? '';
+        }).join('\t');
+      });
+    
+      const header = exportColumns.value.map(key => {
+        const found = allColumns.value.find(col => col.prop === key);
+        return found ? found.label : key;
+      }).join('\t');
+    
+      const content = [header, ...rows].join('\n');
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const timeStr = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+      link.download = `kami_export_${timeStr}.txt`;
+      link.click();
+      URL.revokeObjectURL(url);
+      exportDialogVisible.value = false;
+    }
+
+    async function loadApps() {
+      const res = await fetch('/api/index.php?module=config&method=getMyApps');
+      const json = await res.json();
+      if (json.code === 200) appList.value = json.data;
+    }
+
+    async function loadList() {
+      if (!selectedAppId.value) return;
+      const query = {
+        app_id: selectedAppId.value,
+        page: pagination.page,
+        page_size: pagination.page_size,
+        ...search
+      };
+      const res = await fetch('/api/index.php?module=kami&method=getList', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(query)
+      });
+      const json = await res.json();
+      if (json.code === 200) {
+        // 转换 enabled 字段为布尔值
+        json.data.data.forEach(item => {
+          item.enabled = !!item.enabled;
+        });
+        list.value = json.data.data;
+        pagination.total = json.data.total;
+      }
+    }
+
+    function openAddDialog() {
+      if (!selectedAppId.value) {
+        ElementPlus.ElMessage.warning('请先选择应用');
+        return;
+      }
+      Object.assign(form, {
+        count: 1,
+        time: 24,
+        name: '',
+        remark: ''
+      });
+      dialogVisible.value = true;
+    }
+
+    async function submitForm() {
+      if (!form.count || !form.time) {
+        ElementPlus.ElMessage.error('生成数量和有效时长不能为空');
+        return;
+      }
+      const payload = {
+        ...form,
+        app_id: selectedAppId.value
+      };
+      const res = await fetch('/api/index.php?module=kami&method=add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const json = await res.json();
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success(json.message || '生成成功');
+        dialogVisible.value = false;
+        loadList();
+      }
+    }
+
+    function openEditDialog(rows = []) {
+      let ids, source;
+      if (rows.length) {
+        ids = rows.map(r => r.id);
+        source = rows[0]; // 单个
+      } else {
+        ids = multipleSelection.value.map(r => r.id);
+        source = multipleSelection.value.length === 1 ? multipleSelection.value[0] : null;
+      }
+
+      if (!ids.length) {
+        ElementPlus.ElMessage.warning('请选择要修改的卡密');
+        return;
+      }
+
+      selectedEditIds.value = ids;
+
+      // 如果是单条，填充原始数据
+      if (source) {
+        editForm.deviceId = source.deviceId;
+        editForm.time = source.time;
+        editForm.enabled = !!source.enabled;
+        editForm.bind = !!source.bind;
+        editForm.name = source.name;
+        editForm.remark = source.remark;
+      } else {
+        Object.assign(editForm, {
+          time: null,
+          bind: true,
+          enabled: true,
+          deviceId: '',
+          name: '',
+          remark: ''
+        });
+      }
+
+      editDialogVisible.value = true;
+    }
+
+    async function submitEdit() {
+      const payload = {
+        ids: selectedEditIds.value
+      };
+
+      if (editForm.deviceId !== null) payload.deviceId = editForm.deviceId;
+      if (editForm.time !== null) payload.time = editForm.time;
+      if (editForm.name) payload.name = editForm.name;
+      if (editForm.remark) payload.remark = editForm.remark;
+      payload.bind = editForm.bind ? 1 : 0;
+      payload.enabled = editForm.enabled ? 1 : 0;
+
+      const res = await fetch('/api/index.php?module=kami&method=edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const json = await res.json();
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success(json.message || '修改成功');
+        editDialogVisible.value = false;
+        loadList();
+      }
+    }
+
+    async function deleteBatch(ids = null) {
+      const deleteIds = ids || multipleSelection.value.map(item => item.id);
+      if (!deleteIds.length) {
+        ElementPlus.ElMessage.warning('请选择要删除的卡密');
+        return;
+      }
+    
+      try {
+        await ElementPlus.ElMessageBox.confirm(`确定要删除选中的 ${deleteIds.length} 条卡密？`, '警告', {
+          type: 'warning'
+        });
+    
+        const res = await fetch('/api/index.php?module=kami&method=delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: deleteIds })
+        });
+    
+        const json = await res.json();
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success(json.message || '删除成功');
+          loadList();
+        } else {
+          ElementPlus.ElMessage.error(json.message || '删除失败');
+        }
+      } catch (e) {
+        // 用户点击了取消，不执行任何操作
+      }
+    }
+
+
+    function handleSelectionChange(val) {
+      //multipleSelection.value = val;
+      multipleSelection.value = [...val];
+    }
+
+    onMounted(loadApps);
+
+    return {
+      appList,
+      selectedAppId,
+      list,
+      dialogVisible,
+      editDialogVisible,
+      form,
+      editForm,
+      search,
+      pagination,
+      openAddDialog,
+      submitForm,
+      loadList,
+      deleteBatch,
+      openEditDialog,
+      submitEdit,
+      multipleSelection,
+      handleSelectionChange,
+      exportDialogVisible,
+        exportColumns,
+        allColumns,
+        openExportDialog,
+        exportKami,
+        setPresetTime,
+        importDialogVisible,
+  importForm,
+  openImportDialog,
+  submitImport,
+  setPresetImportTime,
+  fillExampleKami
+
+    };
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+
+
+</body>
+</html>

@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>安卓版本管理</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/config.js"></script>
+  <style>
+    body { padding: 20px; }
+    .toolbar { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+    .note-ellipsis { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="toolbar">
+      <div><strong>安卓客户端管理</strong></div>
+      <div>
+        <el-button type="primary" @click="openCreate">新增版本</el-button>
+      </div>
+    </div>
+
+    <el-table :data="list" border style="width: 100%">
+      <el-table-column label="ID" prop="id" width="70"></el-table-column>
+      <el-table-column label="版本名称" prop="versionname" min-width="120"></el-table-column>
+      <el-table-column label="版本编号" prop="versioncode" min-width="120"></el-table-column>
+      <el-table-column label="启用" width="90">
+        <template #default="scope">
+          <el-tag :type="scope.row.enabled ? 'success' : 'info'">
+            {{ scope.row.enabled ? '已启用' : '未启用' }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="下载地址" prop="download" min-width="200" show-overflow-tooltip></el-table-column>
+      <el-table-column label="更新说明" min-width="200">
+        <template #default="scope">
+          <span class="note-ellipsis" :title="scope.row.newnotice || ''">{{ scope.row.newnotice || '' }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="公告" min-width="200">
+        <template #default="scope">
+          <span class="note-ellipsis" :title="scope.row.notice || ''">{{ scope.row.notice || '' }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="导航背景图" prop="imageUrl" width="170" show-overflow-tooltip></el-table-column>
+      <el-table-column label="创建时间" prop="update_time" width="170"></el-table-column>
+      <el-table-column label="操作" width="180" fixed="right">
+        <template #default="scope">
+          <el-button size="small" @click="openEdit(scope.row)">编辑</el-button>
+          <el-button size="small" type="danger" @click="confirmDelete(scope.row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <el-pagination
+      v-if="pagination.total > 0"
+      style="margin-top: 20px; text-align: right"
+      background
+      layout="total, prev, pager, next, jumper"
+      :current-page="query.page"
+      :page-size="query.page_size"
+      :total="pagination.total"
+      @current-change="handlePageChange">
+    </el-pagination>
+
+    <el-dialog v-model="showEdit" :title="isCreate ? '新增版本' : '编辑版本'" width="600px">
+      <el-form :model="form" label-width="100px">
+        <el-form-item label="版本名称">
+          <el-input v-model="form.versionname" placeholder="请输入版本名称"></el-input>
+        </el-form-item>
+        <el-form-item label="版本编号">
+          <el-input v-model="form.versioncode" placeholder="请输入版本编号"></el-input>
+        </el-form-item>
+        <el-form-item label="下载地址">
+          <el-input v-model="form.download" placeholder="请输入下载直连"></el-input>
+        </el-form-item>
+        <el-form-item label="底部导航背景">
+          <el-input v-model="form.imageUrl" placeholder="请输入图片URL直链"></el-input>
+        </el-form-item>
+        
+        <el-form-item label="顶部通知图">
+          <el-input v-model="form.up_imageUrl" placeholder="请输入图片URL直链"></el-input>
+        </el-form-item>
+        <el-form-item label="顶部通知标题">
+          <el-input v-model="form.up_title" placeholder="请输入标题"></el-input>
+        </el-form-item>
+        <el-form-item label="顶部通知说明">
+          <el-input v-model="form.up_desc" type="textarea" :rows="4" placeholder="请输入文字说明"></el-input>
+        </el-form-item>
+        <el-form-item label="通知操作类型">
+          <el-select
+              v-model="form.up_actionType"
+              placeholder="请选择操作类型"
+              style="width: 100%">
+            <el-option label="无操作" value="0"></el-option>
+            <el-option label="打开网址" value="1"></el-option>
+            <el-option label="打开窗口类" value="2"></el-option>
+            <el-option label="加 QQ 好友" value="3"></el-option>
+            <el-option label="加 QQ 群" value="4"></el-option>
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="通知操作参数">
+          <el-input v-model="form.up_actionArg" placeholder="请输入参数"></el-input>
+        </el-form-item>
+        
+        <el-form-item label="更新说明">
+          <el-input v-model="form.newnotice" type="textarea" :rows="4" placeholder="更新说明"></el-input>
+        </el-form-item>
+        <el-form-item label="公告">
+          <el-input v-model="form.notice" type="textarea" :rows="3" placeholder="公告通知"></el-input>
+        </el-form-item>
+        <el-form-item label="是否启用">
+          <el-switch v-model="form.enabled" active-text="启用" inactive-text="禁用"></el-switch>
+        </el-form-item>
+        <el-form-item v-if="!isCreate" label="创建时间">
+          <el-input :model-value="form.update_time" disabled></el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showEdit = false">取消</el-button>
+        <el-button type="primary" @click="submitForm">{{ isCreate ? '新增' : '保存' }}</el-button>
+      </template>
+    </el-dialog>
+  </div>
+
+  <script>
+    const { createApp, ref, reactive, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        // 查询参数与分页
+        const query = reactive({ page: 1, page_size: 20 });
+        const pagination = reactive({ total: 0, pages: 0 });
+
+        // 列表数据
+        const list = ref([]);
+
+        // 编辑/新增
+        const showEdit = ref(false);
+        const isCreate = ref(false);
+        const form = reactive({
+          id: '',
+          versionname: '',
+          versioncode: '',
+          download: '',
+          newnotice: '',
+          notice: '',
+          imageUrl: '',
+          enabled: false,
+          update_time: '',
+          // ===== 顶部通知相关 =====
+          up_imageUrl: '',
+          up_title: '',
+          up_desc: '',
+          up_actionType: '',
+          up_actionArg: ''
+        });
+
+        // 加载列表数据（分页，按创建时间降序，后端已处理）
+        async function loadData() {
+          const params = { page: query.page, page_size: query.page_size };
+          try {
+            console.log('开始加载列表数据', params); // 日志：中文
+            const res = await fetch('/api/index.php?module=android&method=android_list', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(params)
+            });
+            const json = await res.json();
+            if (json.code === 200) {
+              const data = json.data || {};
+              list.value = data.list || [];
+              const p = data.pagination || {};
+              pagination.total = p.total || 0;
+              pagination.pages = p.pages || 0;
+              query.page = p.page || query.page;
+              query.page_size = p.page_size || query.page_size;
+            } else {
+              ElementPlus.ElMessage.error(json.message || '加载失败');
+            }
+          } catch (e) {
+            console.error('加载失败', e); // 日志：中文
+            ElementPlus.ElMessage.error('请求异常');
+          }
+        }
+
+        function handlePageChange(p) {
+          query.page = p;
+          loadData();
+        }
+
+        function resetForm() {
+          form.id = '';
+          form.versionname = '';
+          form.versioncode = '';
+          form.download = '';
+          form.newnotice = '';
+          form.notice = '';
+          form.imageUrl = '';
+          form.enabled = false;
+          form.update_time = '';
+          // 顶部通知
+          form.up_imageUrl = '';
+          form.up_title = '';
+          form.up_desc = '';
+          form.up_actionType = '';
+          form.up_actionArg = '';
+        }
+
+        function openCreate() {
+          isCreate.value = true;
+          resetForm();
+          showEdit.value = true;
+        }
+
+        function openEdit(row) {
+          isCreate.value = false;
+          form.id = row.id;
+          form.versionname = row.versionname || '';
+          form.versioncode = row.versioncode || '';
+          form.download = row.download || '';
+          form.newnotice = row.newnotice || '';
+          form.notice = row.notice || '';
+          form.imageUrl = row.imageUrl || '';
+          form.enabled = !!row.enabled;
+          form.update_time = row.update_time || '';
+          
+          // ===== 顶部通知 =====
+          form.up_imageUrl = row.up_imageUrl || '';
+          form.up_title = row.up_title || '';
+          form.up_desc = row.up_desc || '';
+          form.up_actionType = row.up_actionType != null
+              ? String(row.up_actionType)
+              : '';
+          form.up_actionArg = row.up_actionArg || '';
+          
+          showEdit.value = true;
+
+
+        }
+
+        async function submitForm() {
+          try {
+            const url = isCreate.value
+              ? '/api/index.php?module=android&method=android_add'
+              : '/api/index.php?module=android&method=android_update';
+
+            const payload = Object.assign({}, form);
+            if (isCreate.value) {
+              delete payload.id;
+              delete payload.update_time;
+            } else {
+              // 编辑时不允许提交 update_time 字段，后端不接收
+              delete payload.update_time;
+            }
+
+            console.log(isCreate.value ? '开始新增' : '开始保存', payload); // 日志：中文
+
+            const res = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            const json = await res.json();
+            if (json.code === 200) {
+              ElementPlus.ElMessage.success(isCreate.value ? '新增成功' : '保存成功');
+              showEdit.value = false;
+              loadData();
+            } else {
+              ElementPlus.ElMessage.error(json.message || (isCreate.value ? '新增失败' : '保存失败'));
+            }
+          } catch (e) {
+            console.error('提交失败', e); // 日志：中文
+            ElementPlus.ElMessage.error('请求异常');
+          }
+        }
+
+        async function confirmDelete(row) {
+          if (row.enabled) {
+            ElementPlus.ElMessage.warning('已启用版本不可删除');
+            return;
+          }
+          try {
+            await ElementPlus.ElMessageBox.confirm('确定要删除该版本吗？', '提示', { type: 'warning' });
+          } catch (_) {
+            return;
+          }
+          try {
+            console.log('开始删除', { id: row.id }); // 日志：中文
+            const res = await fetch('/api/index.php?module=android&method=android_delete', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: row.id })
+            });
+            const json = await res.json();
+            if (json.code === 200) {
+              ElementPlus.ElMessage.success('删除成功');
+              // 若当前页空了，回退一页
+              if (list.value.length === 1 && query.page > 1) {
+                query.page = query.page - 1;
+              }
+              loadData();
+            } else {
+              ElementPlus.ElMessage.error(json.message || '删除失败');
+            }
+          } catch (e) {
+            console.error('删除失败', e); // 日志：中文
+            ElementPlus.ElMessage.error('请求异常');
+          }
+        }
+
+        onMounted(loadData);
+
+        return {
+          query, pagination, list,
+          showEdit, isCreate, form,
+          loadData, handlePageChange,
+          openCreate, openEdit, submitForm, confirmDelete
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

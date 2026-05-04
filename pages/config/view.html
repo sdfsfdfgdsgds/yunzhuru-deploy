@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>控件重写配置</title>
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+</head>
+<body>
+<div id="app" style="padding: 20px">
+  <el-alert title="此功能可用于重写指定窗口的控件属性，如文字、图片、点击行为、可见性等。替换文字和图片，可能无效，此功能通常用于隐藏广告等信息，请开启调试模式，通过调试器查看窗口布局" type="info" style="margin-bottom: 20px">
+  </el-alert>
+
+  <div style="margin-bottom: 20px; display: flex; gap: 10px">
+    <el-select v-model="selectedAppId" placeholder="选择应用" style="width: 300px" @change="loadViews">
+      <el-option v-for="app in appList" :key="app.id" :label="`${app.name} | ${app.version}`" :value="app.id"></el-option>
+    </el-select>
+    <el-button @click="loadApps">刷新应用列表</el-button>
+    <el-button type="primary" @click="openAddView">添加控件规则</el-button>
+  </div>
+
+  <el-table :data="viewList" border>
+    <el-table-column prop="id" label="ID" width="60"></el-table-column>
+    <el-table-column prop="activity" label="窗口类名" width="260"></el-table-column>
+    <el-table-column prop="view_id" label="控件ID" width="160"></el-table-column>
+    <el-table-column prop="view_class" label="控件类名"></el-table-column>
+    <el-table-column prop="textview" label="重写文字"></el-table-column>
+    <el-table-column prop="imageview" label="重写图片" width="200"></el-table-column>
+    <el-table-column label="可见" width="80">
+      <template #default="scope">
+        <span v-if="scope.row.visibility == 0">显示</span>
+        <span v-else-if="scope.row.visibility == 1">隐藏(占位)</span>
+        <span v-else>隐藏(不占位)</span>
+      </template>
+    </el-table-column>
+    <el-table-column label="点击" width="80">
+      <template #default="scope">
+        <span>{{ scope.row.clickable == 0 ? '可点击' : '禁止点击' }}</span>
+      </template>
+    </el-table-column>
+    <el-table-column label="点击事件" width="180">
+      <template #default="scope">
+        <span v-if="scope.row.clickAction == 1">打开网址: {{ scope.row.clickText }}</span>
+        <span v-else-if="scope.row.clickAction == 2">禁止点击</span>
+        <span v-else-if="scope.row.clickAction == 3">打开窗口: {{ scope.row.clickText }}</span>
+        <span v-else>无</span>
+      </template>
+    </el-table-column>
+    <el-table-column prop="created_at" label="创建时间" width="160"></el-table-column>
+    <el-table-column label="启用" width="80">
+      <template #default="scope">
+        <el-switch
+          v-model="scope.row.enabled"
+          :active-value="true"
+          :inactive-value="false"
+          disabled>
+        </el-switch>
+      </template>
+    </el-table-column>
+    <el-table-column label="操作" width="160">
+      <template #default="scope">
+        <el-button size="small" @click="editView(scope.row)">编辑</el-button>
+        <el-button size="small" type="danger" @click="deleteView(scope.row)">删除</el-button>
+      </template>
+    </el-table-column>
+  </el-table>
+
+  <el-dialog v-model="viewDialogVisible" :title="viewEditMode ? '编辑控件规则' : '添加控件规则'">
+    <el-form :model="viewForm" label-width="100px">
+      <el-form-item label="窗口类名">
+        <el-input v-model="viewForm.activity" placeholder="如 com.xx.MainActivity"></el-input>
+      </el-form-item>
+      <el-form-item label="控件ID">
+        <el-input v-model="viewForm.view_id"></el-input>
+      </el-form-item>
+      <el-form-item label="控件类名">
+        <el-input v-model="viewForm.view_class"></el-input>
+      </el-form-item>
+      <el-form-item label="可见性">
+        <el-select v-model="viewForm.visibility">
+          <el-option :value="0" label="显示"></el-option>
+          <el-option :value="1" label="隐藏(占位)"></el-option>
+          <el-option :value="2" label="隐藏(不占位)"></el-option>
+        </el-select>
+      </el-form-item>
+      <el-form-item label="是否可点击">
+        <el-select v-model="viewForm.clickable">
+          <el-option :value="0" label="可点击"></el-option>
+          <el-option :value="1" label="禁止点击"></el-option>
+        </el-select>
+      </el-form-item>
+      <el-form-item label="替换文字">
+        <el-input v-model="viewForm.textview" placeholder="请输入新的文字内容(仅对文字控件有效)"></el-input>
+      </el-form-item>
+      <el-form-item label="替换图片">
+        <el-input v-model="viewForm.imageview" placeholder="请输入图片URL或资源地址(仅对图片控件有效)"></el-input>
+      </el-form-item>
+      <el-form-item label="点击事件">
+        <el-select v-model="viewForm.clickAction">
+          <el-option :value="0" label="无"></el-option>
+          <el-option :value="1" label="打开网址"></el-option>
+          <el-option :value="2" label="禁止点击"></el-option>
+          <el-option :value="3" label="打开窗口类"></el-option>
+        </el-select>
+      </el-form-item>
+      <el-form-item label="事件参数">
+        <el-input v-model="viewForm.clickText" placeholder="如网址或类名"></el-input>
+      </el-form-item>
+      <el-form-item label="是否启用">
+        <el-switch
+          v-model="viewForm.enabled"
+          active-text="启用"
+          inactive-text="禁用"
+          :active-value="true"
+          :inactive-value="false">
+        </el-switch>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="viewDialogVisible = false">取消</el-button>
+      <el-button type="primary" @click="submitViewForm">确定</el-button>
+    </template>
+  </el-dialog>
+</div>
+
+<script>
+const { createApp, ref, reactive, onMounted } = Vue;
+
+createApp({
+  setup() {
+    const appList = ref([]);
+    const selectedAppId = ref(null);
+    const viewList = ref([]);
+
+    const viewDialogVisible = ref(false);
+    const viewEditMode = ref(false);
+    const viewForm = reactive({
+      id: null,
+      activity: '',
+      view_class: '',
+      view_id: '',
+      visibility: 0,
+      clickable: 0,
+      imageview: '',
+      textview: '',
+      clickAction: 0,
+      clickText: '',
+      enabled: true
+    });
+
+    async function loadApps() {
+      const res = await fetch('/api/index.php?module=config&method=getMyApps');
+      const json = await res.json();
+      if (json.code === 200) appList.value = json.data;
+    }
+
+    async function loadViews() {
+      if (!selectedAppId.value) return;
+      const res = await fetch('/api/index.php?module=view&method=getViews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apk_id: selectedAppId.value })
+      });
+      const json = await res.json();
+      // ⚠️ 转换 enabled 为布尔值
+      viewList.value = (json.data || []).map(item => {
+        item.enabled = item.enabled === '1';
+        return item;
+      });
+    }
+
+    function openAddView() {
+      if (!selectedAppId.value) {
+        ElementPlus.ElMessage.warning('请先选择应用');
+        return;
+      }
+      viewEditMode.value = false;
+      Object.assign(viewForm, {
+        id: null, activity: '', view_class: '', view_id: '',
+        visibility: 0, clickable: 0, imageview: '', textview: '',
+        clickAction: 0, clickText: '', enabled: true
+      });
+      viewDialogVisible.value = true;
+    }
+
+    function editView(row) {
+      viewEditMode.value = true;
+      Object.assign(viewForm, {
+        ...row,
+        enabled: row.enabled === true || row.enabled === '1'
+      });
+      viewDialogVisible.value = true;
+    }
+
+    async function submitViewForm() {
+      const method = viewEditMode.value ? 'editView' : 'addView';
+      const payload = {
+        ...viewForm,
+        apk_id: selectedAppId.value,
+        enabled: viewForm.enabled ? 1 : 0
+      };
+      const res = await fetch(`/api/index.php?module=view&method=${method}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const json = await res.json();
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success(json.message || '操作成功');
+        viewDialogVisible.value = false;
+        loadViews();
+      }
+    }
+
+    async function deleteView(row) {
+      await ElementPlus.ElMessageBox.confirm(`确认删除控件规则？`, '提示');
+      await fetch('/api/index.php?module=view&method=deleteView', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: row.id })
+      });
+      loadViews();
+    }
+
+    onMounted(loadApps);
+
+    return {
+      appList,
+      selectedAppId,
+      viewList,
+      viewDialogVisible,
+      viewEditMode,
+      viewForm,
+      loadApps,
+      loadViews,
+      openAddView,
+      editView,
+      submitViewForm,
+      deleteView
+    };
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>壳模板管理</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="/element/css/index.css" />
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/config.js"></script>
+  <style>
+    body { padding: 20px; }
+    .toolbar { margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="toolbar">
+      <el-button type="primary" @click="openUpload">上传壳</el-button>
+    </div>
+
+    <el-table :data="templateList" border>
+      <el-table-column prop="id" label="ID" width="60"></el-table-column>
+      <el-table-column prop="className" label="壳入口" width="280"></el-table-column>
+      <el-table-column prop="name" label="壳名称"></el-table-column>
+      <el-table-column prop="version" label="版本"></el-table-column>
+      <el-table-column prop="description" label="说明"></el-table-column>
+      <el-table-column prop="price" label="价格"></el-table-column>
+      <el-table-column prop="use_count" label="使用次数"></el-table-column>
+      <el-table-column prop="upload_time" label="上传时间" width="200"></el-table-column>
+      <el-table-column label="启用" width="80">
+        <template #default="scope">
+          <el-switch
+            v-model="scope.row.enabled"
+            :active-value="1"
+            :inactive-value="0"
+            @change="() => toggleEnable(scope.row)"
+          ></el-switch>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="240">
+        <template #default="scope">
+            <el-button size="small" type="warning" @click="openOverwriteUpload(scope.row)">更新上传</el-button>
+          <el-button size="small" @click="openEdit(scope.row)">编辑</el-button>
+          <el-button size="small" type="danger" @click="deleteTemplate(scope.row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <!-- 上传 / 编辑弹窗 -->
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="500px">
+      <el-form :model="form" label-width="100px">
+        <el-form-item label="模板名称">
+          <el-input v-model="form.name"></el-input>
+        </el-form-item>
+        <el-form-item label="版本号">
+          <el-input v-model="form.version"></el-input>
+        </el-form-item>
+        <el-form-item label="价格">
+          <el-input-number v-model="form.price" :min="0"></el-input-number>
+        </el-form-item>
+        <el-form-item label="说明">
+          <el-input v-model="form.description" type="textarea" :rows="3"></el-input>
+        </el-form-item>
+        <el-form-item label="选择壳文件" v-if="!form.id">
+          <input type="file" ref="fileInput" accept=".apk" />
+        </el-form-item>
+        <el-form-item label="入口类名">
+          <el-input v-model="form.className" placeholder="留空将默认为系统信息配置的入口"></el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="dialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="submitForm">提交</el-button>
+        </span>
+      </template>
+    </el-dialog>
+    
+    <el-dialog v-model="overwriteDialogVisible" title="更新上传" width="400px">
+      <el-form>
+        <el-form-item label="选择壳文件">
+          <input type="file" ref="overwriteFileInput" accept=".apk" />
+        </el-form-item>
+        <!-- 新增警告提示 -->
+        <el-form-item>
+          <el-alert
+            title="⚠ 覆盖上传后不可恢复，请务必测试稳定后再覆盖！"
+            type="warning"
+            show-icon
+            :closable="false"
+          ></el-alert>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="overwriteDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="submitOverwrite">上传</el-button>
+        </span>
+      </template>
+    </el-dialog>
+    
+    
+    
+  </div>
+
+  <script>
+    const { createApp, ref, reactive, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const templateList = ref([]);
+        const dialogVisible = ref(false);
+        const dialogTitle = ref('');
+        const fileInput = ref(null);
+        const isSwitchInitialized = ref(false);
+        const form = reactive({
+          id: null,
+          name: '',
+          version: '1.0.0',
+          price: 0,
+          description: '',
+          className: ''
+        });
+        const overwriteDialogVisible = ref(false);
+        const overwriteFileInput = ref(null);
+        const overwriteTemplateId = ref(null);
+        
+        function openOverwriteUpload(row) {
+          overwriteTemplateId.value = row.id;
+          overwriteDialogVisible.value = true;
+          if (overwriteFileInput.value) overwriteFileInput.value.value = '';
+        }
+        
+        async function submitOverwrite() {
+          const file = overwriteFileInput.value?.files?.[0];
+          if (!file || !file.name.endsWith('.apk')) {
+            ElementPlus.ElMessage.warning('请选择 APK 文件');
+            return;
+          }
+        
+          const loading = ElementPlus.ElLoading.service({
+            lock: true,
+            text: '上传中...',
+            background: 'rgba(0, 0, 0, 0.5)'
+          });
+        
+          try {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('template_id', overwriteTemplateId.value);
+        
+            const res = await fetch(`/api/index.php?module=app&method=overwriteTemplate`, {
+              method: 'POST',
+              body: formData
+            });
+        
+            const json = await res.json();
+            if (json.code === 200) {
+              ElementPlus.ElMessage.success(json.data.message || '覆盖上传成功');
+              overwriteDialogVisible.value = false;
+              loadTemplates();
+            } else {
+              ElementPlus.ElMessage.error(json.message || '覆盖上传失败');
+            }
+          } catch (e) {
+            ElementPlus.ElMessage.error('请求异常');
+          } finally {
+            loading.close();
+          }
+        }
+        function resetForm() {
+          form.id = null;
+          form.name = '';
+          form.version = '1.0.0';
+          form.price = 0;
+          form.description = '';
+          form.className = '';
+          if (fileInput.value) fileInput.value.value = '';
+        }
+
+        function loadTemplates() {
+          fetch(`/api/index.php?module=app&method=getMyTemplates`)
+            .then(res => res.json())
+            .then(json => {
+              if (json.code === 200) {
+                templateList.value = json.data.map(item => ({
+                  ...item,
+                  enabled: Number(item.enabled) === 1 ? 1 : 0 // 添加 enable 字段，转换为数字
+                }));
+                isSwitchInitialized.value = true;
+              } else {
+                ElementPlus.ElMessage.error(json.message || '加载失败');
+              }
+            });
+        }
+
+
+        function openUpload() {
+          dialogTitle.value = '上传壳';
+          resetForm();
+          dialogVisible.value = true;
+        }
+
+        function openEdit(row) {
+          dialogTitle.value = '编辑壳';
+          form.id = row.id;
+          form.name = row.name;
+          form.version = row.version;
+          form.className = row.className;
+          form.price = Number(row.price);
+          form.description = row.description;
+          dialogVisible.value = true;
+        }
+        async function toggleEnable(row) {
+          if (!isSwitchInitialized.value) return;
+        
+          try {
+            const res = await fetch(`/api/index.php?module=app&method=updateTemplateEnable`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                id: row.id,
+                enabled: row.enabled
+              })
+            });
+            const json = await res.json();
+            if (json.code !== 200) {
+              ElementPlus.ElMessage.error(json.message || '启用状态更新失败');
+              // 回滚状态
+              row.enabled = row.enabled ? 0 : 1;
+            }
+          } catch (e) {
+            ElementPlus.ElMessage.error('请求失败');
+            row.enabled = row.enabled ? 0 : 1;
+          }
+        }
+
+        async function submitForm() {
+          if (!form.name || !form.version) {
+            ElementPlus.ElMessage.warning('请填写完整信息');
+            return;
+          }
+
+          const loading = ElementPlus.ElLoading.service({
+            lock: true,
+            text: '提交中...',
+            background: 'rgba(0, 0, 0, 0.5)'
+          });
+
+          try {
+            if (form.id) {
+              // 编辑
+              const res = await fetch(`/api/index.php?module=app&method=updateTemplate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(form)
+              });
+              const json = await res.json();
+              if (json.code === 200) {
+                ElementPlus.ElMessage.success('修改成功');
+                dialogVisible.value = false;
+                loadTemplates();
+              } else {
+                ElementPlus.ElMessage.error(json.message || '修改失败');
+              }
+            } else {
+              // 上传
+              const file = fileInput.value?.files?.[0];
+              if (!file || !file.name.endsWith('.apk')) {
+                ElementPlus.ElMessage.warning('请选择 APK 文件');
+                return;
+              }
+
+              const formData = new FormData();
+              formData.append('file', file);
+              formData.append('name', form.name);
+              formData.append('version', form.version);
+              formData.append('price', form.price);
+              formData.append('description', form.description);
+
+              const res = await fetch(`/api/index.php?module=app&method=uploadTemplate`, {
+                method: 'POST',
+                body: formData
+              });
+              const json = await res.json();
+              if (json.code === 200) {
+                ElementPlus.ElMessage.success(json.data.message || '上传成功');
+                dialogVisible.value = false;
+                loadTemplates();
+              } else {
+                ElementPlus.ElMessage.error(json.message || '上传失败');
+              }
+            }
+          } catch (e) {
+            ElementPlus.ElMessage.error('请求异常');
+          } finally {
+            loading.close();
+          }
+        }
+
+        function deleteTemplate(row) {
+          ElementPlus.ElMessageBox.confirm(`确认删除模板「${row.name}」吗？`, '提示', { type: 'warning' })
+            .then(async () => {
+              const res = await fetch(`/api/index.php?module=app&method=deleteTemplate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: row.id })
+              });
+              const json = await res.json();
+              if (json.code === 200) {
+                ElementPlus.ElMessage.success('删除成功');
+                loadTemplates();
+              } else {
+                ElementPlus.ElMessage.error(json.message || '删除失败');
+              }
+            }).catch(() => {});
+        }
+
+        onMounted(loadTemplates);
+
+        return {
+          templateList,
+          dialogVisible,
+          dialogTitle,
+          fileInput,
+          form,
+          openUpload,
+          openEdit,
+          submitForm,
+          deleteTemplate,
+          toggleEnable,
+          isSwitchInitialized,
+          overwriteDialogVisible,
+  overwriteFileInput,
+  openOverwriteUpload,
+  submitOverwrite
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

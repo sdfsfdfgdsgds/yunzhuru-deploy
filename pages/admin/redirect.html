@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>应用重定向管理</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="/element/css/index.css" />
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/config.js"></script>
+</head>
+
+<body>
+<div id="app" style="padding: 20px;">
+
+<el-alert
+  title="此功能用于将某个应用的访问重定向到另一个应用。例如：当用户访问 APP A 时，系统会自动改为访问 APP B。常用于删除的应用恢复管理以及违规应用的内容强制接管，接管内容包含：远程配置，卡密验证，卡密解绑，卡密试用(三大接口接管优先级，低于指定appid)。"
+  type="info"
+  show-icon
+  style="margin-bottom: 20px;"
+>
+</el-alert>
+
+  <!-- 查询表单 -->
+  <el-form :inline="true" :model="query">
+
+    <el-form-item label="源 APPID">
+      <div style="display:flex; gap:10px;">
+        <el-input v-model="query.apk_id1" placeholder="源 APPID"></el-input>
+      </div>
+    </el-form-item>
+
+    <el-form-item label="目标 APPID">
+      <div style="display:flex; gap:10px;">
+        <el-input v-model="query.apk_id2" placeholder="重定向到的 APPID"></el-input>
+      </div>
+    </el-form-item>
+
+    <el-form-item>
+      <el-button type="primary" @click="loadData">查询</el-button>
+      <el-button @click="resetForm">重置</el-button>
+    </el-form-item>
+
+    <el-form-item>
+      <el-button type="success" @click="openAdd">新建映射关系</el-button>
+    </el-form-item>
+
+  </el-form>
+
+
+
+  <!-- 表格 -->
+  <el-table :data="tableData" border style="margin-top: 10px;">
+
+    <el-table-column label="ID" prop="id" width="60"></el-table-column>
+    <el-table-column label="源 APPID" prop="apk_id1" width="90"></el-table-column>
+    <el-table-column label="目标 APPID" prop="apk_id2" width="110"></el-table-column>
+
+    <el-table-column label="UID" prop="uid" width="80"></el-table-column>
+    <el-table-column label="应用名" prop="apk_name"></el-table-column>
+    <el-table-column label="版本号" prop="apk_version" width="120"></el-table-column>
+    <el-table-column label="包名" prop="apk_package"></el-table-column>
+
+    <el-table-column label="备注" prop="remark" width="150"></el-table-column>
+    <el-table-column label="创建时间" prop="created_at" width="150"></el-table-column>
+
+    <el-table-column label="操作" width="200">
+      <template #default="scope">
+        <el-button size="small" type="primary" @click="openEdit(scope.row)">编辑映射</el-button>
+        <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除映射</el-button>
+      </template>
+    </el-table-column>
+
+  </el-table>
+
+
+
+  <!-- 分页 -->
+  <el-pagination
+    v-if="total > 0"
+    style="margin-top: 20px; text-align: right;"
+    background
+    layout="total, prev, pager, next, jumper"
+    :current-page="query.page"
+    :page-size="query.limit"
+    :total="total"
+    @current-change="handlePageChange"
+  ></el-pagination>
+
+
+
+  <!-- 新建 / 编辑弹窗 -->
+  <el-dialog :title="editMode ? '编辑映射关系' : '新建映射关系'" v-model="editDialog" width="500px">
+
+    <el-form :model="editForm" label-width="120px">
+
+      <el-form-item label="源 APPID">
+        <div style="display:flex; gap:10px; width:100%;">
+          <el-input v-model="editForm.apk_id1" placeholder="请输入 APPID" style="flex:1"></el-input>
+          <el-button type="primary" @click="queryAppInfoFromInput(1)">查询</el-button>
+        </div>
+      </el-form-item>
+
+      <el-form-item label="目标 APPID">
+        <div style="display:flex; gap:10px; width:100%;">
+          <el-input v-model="editForm.apk_id2" placeholder="请输入 APPID" style="flex:1"></el-input>
+          <el-button type="primary" @click="queryAppInfoFromInput(2)">查询</el-button>
+        </div>
+      </el-form-item>
+
+      <el-form-item label="备注">
+        <el-input v-model="editForm.remark" placeholder="可填可不填"></el-input>
+      </el-form-item>
+
+    </el-form>
+
+    <template #footer>
+      <el-button @click="editDialog = false">取消</el-button>
+      <el-button type="primary" @click="submitEdit">保存</el-button>
+    </template>
+
+  </el-dialog>
+
+
+  <!-- 展示 APP 信息弹窗 -->
+  <el-dialog title="应用信息" v-model="appInfoDialog" width="500px">
+    <div v-if="appInfo">
+      <p><strong>APPID：</strong>{{ appInfo.id }}</p>
+      <p><strong>UID：</strong>{{ appInfo.user_id }}</p>
+      <p><strong>名称：</strong>{{ appInfo.name }}</p>
+      <p><strong>版本：</strong>{{ appInfo.version }}</p>
+      <p><strong>包名：</strong>{{ appInfo.package }}</p>
+      <p><strong>上传时间：</strong>{{ appInfo.upload_time }}</p>
+    </div>
+    <template #footer>
+      <el-button type="primary" @click="appInfoDialog = false">关闭</el-button>
+    </template>
+  </el-dialog>
+
+
+</div>
+
+
+<script>
+const { createApp, ref, reactive, onMounted } = Vue;
+
+createApp({
+  setup() {
+
+    const query = reactive({
+      apk_id1: '',
+      apk_id2: '',
+      page: 1,
+      limit: 20
+    });
+
+    const tableData = ref([]);
+    const total = ref(0);
+
+    /* ========== 加载列表 ========== */
+    async function loadData() {
+      const res = await fetch('/api/index.php?module=redirect&method=getlist', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(query)
+      });
+      const json = await res.json();
+
+      if (json.code === 200) {
+        tableData.value = json.data.list;
+        total.value = json.data.total;
+        query.page = json.data.page;
+      } else {
+        ElementPlus.ElMessage.error(json.message || "加载失败");
+      }
+    }
+
+    function handlePageChange(p) {
+      query.page = p;
+      loadData();
+    }
+
+    function resetForm() {
+      query.apk_id1 = "";
+      query.apk_id2 = "";
+      query.page = 1;
+      loadData();
+    }
+
+
+    /* ========== 编辑弹窗 ========== */
+    const editDialog = ref(false);
+    const editMode = ref(false);
+
+    const editForm = reactive({
+      id: '',
+      apk_id1: '',
+      apk_id2: '',
+      remark: ''
+    });
+
+    function openAdd() {
+      editMode.value = false;
+      editForm.id = '';
+      editForm.apk_id1 = '';
+      editForm.apk_id2 = '';
+      editForm.remark = '';
+      editDialog.value = true;
+    }
+
+    function openEdit(row) {
+      editMode.value = true;
+      editForm.id = row.id;
+      editForm.apk_id1 = row.apk_id1;
+      editForm.apk_id2 = row.apk_id2;
+      editForm.remark = row.remark;
+      editDialog.value = true;
+    }
+
+    /* ========== 查询 APP 信息 ========== */
+    const appInfoDialog = ref(false);
+    const appInfo = ref(null);
+
+    async function fetchAppInfo(apkId) {
+      const res = await fetch('/api/index.php?module=redirect&method=getApkInfo', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ id: apkId })
+      });
+
+      const json = await res.json();
+      if (json.code !== 200 || !json.data) {
+        return null;
+      }
+      return json.data;
+    }
+
+    // 查询按钮（来源：搜索栏）
+    async function queryAppInfoFromSearch(type) {
+      const apkId = type === 1 ? query.apk_id1 : query.apk_id2;
+      if (!apkId) {
+        ElementPlus.ElMessage.warning("请输入 APPID");
+        return;
+      }
+      const info = await fetchAppInfo(apkId);
+      if (!info) {
+        ElementPlus.ElMessage.error("未查询到该 APPID");
+        return;
+      }
+      appInfo.value = info;
+      appInfoDialog.value = true;
+    }
+
+    // 查询按钮（来源：弹窗输入）
+    async function queryAppInfoFromInput(type) {
+      const apkId = type === 1 ? editForm.apk_id1 : editForm.apk_id2;
+      if (!apkId) {
+        ElementPlus.ElMessage.warning("请输入 APPID");
+        return;
+      }
+      const info = await fetchAppInfo(apkId);
+      if (!info) {
+        ElementPlus.ElMessage.error("未查询到该 APPID");
+        return;
+      }
+      appInfo.value = info;
+      appInfoDialog.value = true;
+    }
+
+
+    /* ========== 保存 ========== */
+    async function submitEdit() {
+      if (!editForm.apk_id1 || !editForm.apk_id2) {
+        ElementPlus.ElMessage.warning('请填写完整 APPID');
+        return;
+      }
+
+      if (editForm.apk_id1 == editForm.apk_id2) {
+        ElementPlus.ElMessage.error('源 APPID 和目标 APPID 不能相同');
+        return;
+      }
+
+      const method = editMode.value ? "update" : "add";
+
+      const res = await fetch(`/api/index.php?module=redirect&method=${method}`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(editForm)
+      });
+
+      const json = await res.json();
+
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success(editMode.value ? '修改成功' : '创建成功');
+        editDialog.value = false;
+        loadData();
+      } else {
+        ElementPlus.ElMessage.error(json.message || '操作失败');
+      }
+    }
+
+
+    /* ========== 删除 ========== */
+    async function handleDelete(row) {
+      const ok = await ElementPlus.ElMessageBox.confirm(
+        `确定要删除此映射关系吗？`,
+        "确认删除",
+        { type:"warning" }
+      ).catch(()=>false);
+
+      if (!ok) return;
+
+      const res = await fetch('/api/index.php?module=redirect&method=delete', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ id: row.id })
+      });
+
+      const json = await res.json();
+
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success('删除成功');
+        loadData();
+      } else {
+        ElementPlus.ElMessage.error(json.message || '删除失败');
+      }
+    }
+
+
+    onMounted(loadData);
+
+    return {
+      query,
+      tableData,
+      total,
+      handlePageChange,
+      resetForm,
+
+      editDialog,
+      editMode,
+      editForm,
+      openAdd,
+      openEdit,
+      submitEdit,
+
+      queryAppInfoFromSearch,
+      queryAppInfoFromInput,
+
+      appInfoDialog,
+      appInfo,
+
+      handleDelete
+    };
+
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+
+</body>
+</html>

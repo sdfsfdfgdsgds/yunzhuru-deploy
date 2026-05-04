@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>图片弹窗配置</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+</head>
+<body>
+  <div id="app" style="padding: 20px">
+      <el-alert
+      title="全屏弹窗(开屏广告)一次只会展示一个，展示哪一个是随机的"
+      type="error"
+      style="margin-bottom: 20px;">
+    </el-alert>
+    <!-- 应用选择 -->
+    <div style="margin-bottom: 20px; display: flex; align-items: center; gap: 10px">
+      <el-select v-model="selectedAppId" placeholder="选择应用" style="width: 300px" @change="changeApp">
+        <el-option
+          v-for="app in appList"
+          :key="app.id"
+          :label="`${app.name} | ${app.version} | ${app.package}`"
+          :value="app.id">
+        </el-option>
+      </el-select>
+      <el-button @click="loadApps">刷新应用列表</el-button>
+      <el-button type="primary" @click="openAddDialog">添加弹窗</el-button>
+      <el-button type="warning" @click="openBatchDialog">批量修改弹窗</el-button>
+    </div>
+
+    <!-- 弹窗列表表格 -->
+    <el-table ref="popupTableRef" :data="popupList" border style="margin-top: 10px" @selection-change="handleSelectionChange">
+      <el-table-column type="selection" width="55"></el-table-column>
+      <el-table-column label="ID" prop="id"></el-table-column>
+      <el-table-column label="图标" width="60">
+          <template #default="scope">
+            <img
+              :src="`/icon.php?id=${scope.row.config_id}`"
+              style="width: 32px; height: 32px; object-fit: contain; border-radius: 6px;"
+              alt="icon"
+            />
+          </template>
+      </el-table-column>
+      <el-table-column label="应用信息" prop="apk_info"></el-table-column>
+      <el-table-column label="类型" prop="popup_type"></el-table-column>
+      <el-table-column label="备注" prop="remark"></el-table-column>
+      <el-table-column label="启用" prop="enable">
+        <template v-slot="scope">
+          <el-tag :type="scope.row.enable == 1 ? 'success' : 'info'">
+            {{ scope.row.enable == 1 ? '是' : '否' }}
+          </el-tag>
+        </template>
+      </el-table-column>
+    
+      <!-- 新增列：名单管理 -->
+      <el-table-column label="名单管理">
+        <template v-slot="scope">
+            <el-button size="small" @click="showPopupList('whitelist', scope.row.id)">白名单</el-button>
+            <el-button size="small" type="info" @click="showPopupList('blacklist', scope.row.id)">黑名单</el-button>
+
+        </template>
+      </el-table-column>
+    
+      <el-table-column label="操作">
+        <template v-slot="scope">
+          <el-button type="primary" size="small" @click="editPopup(scope.row)">编辑</el-button>
+          <el-button type="danger" size="small" @click="deletePopup(scope.row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <div style="margin-top: 15px; text-align: right;">
+      <el-pagination
+        background
+        layout="total, prev, pager, next"
+        :total="total"
+        :page-size="limit"
+        :current-page="page"
+        @current-change="loadPopups"
+      ></el-pagination>
+    </div>
+
+
+    <!-- 添加弹窗对话框 -->
+    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="600px">
+      <el-form :model="form" label-width="100px">
+        <el-form-item label="类型">
+          <el-select v-model="form.popup_type">
+            <el-option label="图片弹窗" value="图片弹窗"></el-option>
+            <el-option label="全屏弹窗" value="全屏弹窗"></el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="form.remark"></el-input>
+        </el-form-item>
+        <el-form-item label="图片地址">
+          <!--<el-input v-model="form.imageUrl"></el-input>-->
+          <el-input type="textarea" v-model="form.imageUrl" :rows="4" placeholder="可输入多行图片地址，每行一条，随机展示"></el-input>
+        </el-form-item>
+        <el-form-item label="点击事件">
+          <el-select v-model="form.clickAction" placeholder="选择点击动作" @change="updateClickTextPlaceholder">
+            <el-option label="无动作" :value="0"></el-option>
+            <el-option label="调用浏览器打开URL(需要加http前缀)" :value="1"></el-option>
+            <el-option label="添加QQ群" :value="2"></el-option>
+            <el-option label="退出APP" :value="3"></el-option>
+            <el-option label="分享内容" :value="4"></el-option>
+            <el-option label="复制内容到剪切板" :value="6"></el-option>
+            <el-option label="打开窗口类" :value="7"></el-option>
+          </el-select>
+        </el-form-item>
+        
+        <el-form-item label="点击事件参数">
+          <!--<el-input v-model="form.clickText" :placeholder="clickTextPlaceholder"></el-input>-->
+          <el-input type="textarea" v-model="form.clickText" :rows="4" placeholder="可输入多行链接地址，每行一条，随机展示"></el-input>
+        </el-form-item>
+        <el-form-item label="回调地址">
+          <el-tooltip content="点击广告后广告信息会提交到该接口，用于统计点击次数" placement="top">
+            <el-input v-model="form.callback" placeholder="请输入回调地址"></el-input>
+          </el-tooltip>
+        </el-form-item>
+        <el-form-item label="倒计时(秒)">
+          <el-input-number v-model="form.countdown" :min="1"></el-input-number>
+        </el-form-item>
+        <el-form-item label="防去除">
+          <el-switch v-model="form.lock"></el-switch>
+          <el-alert title="可防止弹窗被第三方程序拦截关闭,不能防逆向破解"></el-alert>
+        </el-form-item>
+        <el-form-item label="允许跳过">
+          <el-switch v-model="form.canSkip"></el-switch>
+        </el-form-item>
+        <el-form-item label="自动关闭">
+          <el-switch v-model="form.autoClose"></el-switch>
+        </el-form-item>
+        <el-form-item label="启用弹窗">
+          <el-switch v-model="form.enable"></el-switch>
+        </el-form-item>
+      </el-form>
+      <template v-slot:footer>
+        <span class="dialog-footer">
+          <el-button @click="dialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="submitForm">保存</el-button>
+        </span>
+      </template>
+    </el-dialog>
+    
+    <el-dialog v-model="popupListDialogVisible" :title="currentListType === 'whitelist' ? '白名单(当窗口为这些类名的时候才会弹出)' : '黑名单(当窗口为这些类名的时候不弹)'">
+        <el-alert title="如果你想让弹窗在指定窗口弹出,则将这个窗口类名加入白名单" type="info" style="margin-bottom: 20px"></el-alert>
+      <el-button type="primary" @click="addListItem" style="margin-bottom: 10px">添加</el-button>
+    
+      <el-table :data="popupListData" border>
+        <el-table-column label="ID" prop="id" width="60"></el-table-column>
+        <el-table-column label="类名" prop="class_name"></el-table-column>
+        <el-table-column label="备注" prop="remark"></el-table-column>
+        <el-table-column label="创建时间" prop="created_at" width="180"></el-table-column>
+        <el-table-column label="操作" width="100">
+          <template #default="scope">
+            <el-button type="danger" size="small" @click="deleteListItem(scope.row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+
+    <el-dialog v-model="batchDialogVisible" title="批量修改弹窗" width="600px">
+        
+
+      <el-form :model="batchForm" label-width="100px">
+        <el-form-item label="选择预设">
+          <el-select
+            v-model="presetPopupId"
+            placeholder="从勾选的弹窗中选择一个作为预设"
+            @change="applyPresetToForm"
+            style="width: 100%">
+            <el-option
+              v-for="popup in selectedPopups"
+              :key="popup.id"
+              :label="`ID: ${popup.id} | 备注: ${popup.remark || '-'}`"
+              :value="popup.id">
+            </el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="类型">
+          <el-select v-model="batchForm.popup_type">
+            <el-option label="图片弹窗" value="图片弹窗"></el-option>
+            <el-option label="全屏弹窗" value="全屏弹窗"></el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="batchForm.remark"></el-input>
+        </el-form-item>
+        <el-form-item label="图片地址">
+          <!--<el-input v-model="batchForm.imageUrl"></el-input>-->
+          <el-input type="textarea" v-model="batchForm.imageUrl" :rows="4" placeholder="可输入多行图片地址，每行一条，随机展示"></el-input>
+          
+        </el-form-item>
+        <el-form-item label="点击事件">
+          <el-select v-model="batchForm.clickAction" @change="updateBatchClickPlaceholder">
+            <el-option label="无动作" :value="0"></el-option>
+            <el-option label="调用浏览器打开URL(需要加http前缀)" :value="1"></el-option>
+            <el-option label="添加QQ群" :value="2"></el-option>
+            <el-option label="退出APP" :value="3"></el-option>
+            <el-option label="分享内容" :value="4"></el-option>
+            <el-option label="复制内容到剪切板" :value="6"></el-option>
+            <el-option label="打开窗口类" :value="7"></el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="点击事件参数">
+          <!--<el-input v-model="batchForm.clickText" :placeholder="batchClickTextPlaceholder"></el-input>-->
+          <el-input type="textarea" v-model="batchForm.clickText" :rows="4" placeholder="可输入多行链接地址，每行一条，随机展示"></el-input>
+        </el-form-item>
+        <el-form-item label="回调地址">
+          <el-input v-model="batchForm.callback"></el-input>
+        </el-form-item>
+        <el-form-item label="防去除">
+          <el-switch v-model="batchForm.lock"></el-switch>
+          <el-alert title="可防止弹窗被第三方程序拦截关闭,不能防逆向破解"></el-alert>
+        </el-form-item>
+        <el-form-item label="倒计时(秒)">
+          <el-input-number v-model="batchForm.countdown" :min="1"></el-input-number>
+        </el-form-item>
+        <el-form-item label="允许跳过">
+          <el-switch v-model="batchForm.canSkip"></el-switch>
+        </el-form-item>
+        <el-form-item label="自动关闭">
+          <el-switch v-model="batchForm.autoClose"></el-switch>
+        </el-form-item>
+        <el-form-item label="启用">
+          <el-switch v-model="batchForm.enable"></el-switch>
+        </el-form-item>
+      </el-form>
+      <template v-slot:footer>
+        <span class="dialog-footer">
+          <el-button @click="batchDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="confirmBatchUpdate">保存</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+<el-dialog v-model="addListDialogVisible" :title="addListDialogTitle" width="500px">
+  <el-form :model="addListForm" label-width="100px">
+    <el-form-item label="类名">
+      <el-input v-model="addListForm.class_name" placeholder="请输入类名"></el-input>
+    </el-form-item>
+
+    <el-form-item label="备注">
+      <el-input v-model="addListForm.remark" placeholder="备注可不填写"></el-input>
+    </el-form-item>
+  </el-form>
+
+  <template #footer>
+    <el-button @click="addListDialogVisible = false">取消</el-button>
+    <el-button type="primary" @click="submitAddList">确认添加</el-button>
+  </template>
+</el-dialog>
+
+    
+    
+  </div>
+
+  <script>
+    const { createApp, reactive, ref, onMounted, getCurrentInstance, nextTick } = Vue;
+    
+    createApp({
+      setup() {
+        const appList = ref([]);
+        const selectedAppId = ref(null);
+        const popupList = ref([]);
+        const dialogVisible = ref(false);
+        const editMode = ref(false);
+        const { proxy } = getCurrentInstance();
+        const popupTableRef = ref(null);
+        const page = ref(1);
+        const limit = ref(20);
+        const total = ref(0);
+
+        const form = reactive({
+          id: null,
+          popup_type: '',
+          remark: '',
+          imageUrl: '',
+          clickAction: 0,
+          clickText: '',
+          callback: '',
+          countdown: 3,
+          canSkip: false,
+          autoClose: false,
+          enable: false,
+          lock: false,
+          clickAction: 0,
+          clickText: ''
+        });
+        const presetPopupId = ref(null);
+        const addListDialogVisible = ref(false)
+        const addListDialogTitle = ref('')
+        const addListType = ref('whitelist') // whitelist / blacklist
+        
+        const addListForm = reactive({
+          class_name: '',
+          remark: ''
+        })
+        function applyPresetToForm(id) {
+          const preset = selectedPopups.value.find(p => p.id === id);
+          if (!preset) return;
+        
+          Object.assign(batchForm, {
+            lock: preset.lock == 1,
+            popup_type: preset.popup_type,
+            remark: preset.remark,
+            imageUrl: preset.imageUrl,
+            clickAction: preset.clickAction,
+            clickText: preset.clickText,
+            callback: preset.callback,
+            countdown: preset.countdown,
+            canSkip: preset.canSkip == 1,
+            autoClose: preset.autoClose == 1,
+            enable: preset.enable == 1
+          });
+        
+          updateBatchClickPlaceholder(preset.clickAction);
+        }
+        const clickTextPlaceholder = ref('无参数');
+        function updateClickTextPlaceholder(val) {
+          switch (val) {
+            case 1:
+              clickTextPlaceholder.value = '请输入要打开的网址，如：https://xxx.com';
+              break;
+            case 2:
+              clickTextPlaceholder.value = '在QQ群官方地址获取安卓加群组件的key值即可';
+              break;
+            case 3:
+              clickTextPlaceholder.value = '不需要参数';
+              break;
+            case 4:
+              clickTextPlaceholder.value = '请输入要分享的文本内容';
+              break;
+            case 6:
+              clickTextPlaceholder.value = '请输入要复制的文本内容';
+              break;
+            case 7:
+              clickTextPlaceholder.value = '请输入要打开的完整窗口类名，例如com.abc.shell.ManiActivity';
+              break;
+            default:
+              clickTextPlaceholder.value = '无参数';
+          }
+        }
+        async function loadApps() {
+          const res = await fetch('/api/index.php?module=config&method=getMyApps');
+          const json = await res.json();
+          if (json.code === 200) {
+            appList.value = json.data;
+          }
+        }
+
+async function loadPopups(p = 1) {
+  page.value = p;
+
+  const params = {
+    page: page.value,
+    limit: limit.value
+  };
+
+  if (selectedAppId.value) {
+    params.apk_id = selectedAppId.value;
+  }
+
+  const res = await fetch('/api/index.php?module=popup_image&method=getList', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  });
+
+  const json = await res.json();
+  if (json.code === 200) {
+    popupList.value = json.data.list;
+    total.value = json.data.total;
+
+    // 恢复勾选
+    const key = `popup_checked_ids_${selectedAppId.value || 'all'}`;
+    const savedIds = JSON.parse(localStorage.getItem(key) || '[]');
+
+    nextTick(() => {
+      if (proxy.$refs.popupTableRef && savedIds.length) {
+        popupList.value.forEach(row => {
+          if (savedIds.includes(row.id)) {
+            proxy.$refs.popupTableRef.toggleRowSelection(row, true);
+          }
+        });
+      }
+    });
+  }
+}
+
+function changeApp() {
+  page.value = 1;
+  loadPopups(1);
+}
+
+
+
+        function openAddDialog() {
+            if (!selectedAppId.value) {
+                ElementPlus.ElMessage.warning('请先选择应用');
+                return;
+              }
+          Object.assign(form, {
+            id: null,
+            popup_type: '',
+            remark: '',
+            imageUrl: '',
+            clickAction: 0,
+            clickText: '',
+            callback: '',
+            countdown: 3,
+            canSkip: false,
+            autoClose: false,
+            lock: false,
+            enable: false
+          });
+          dialogVisible.value = true;
+          editMode.value = false;
+        }
+
+        function editPopup(row) {
+            selectedAppId.value = row.apk_id;
+          Object.assign(form, {
+            ...row,
+            enable: row.enable == 1,
+            canSkip: row.canSkip == 1,
+            autoClose: row.autoClose == 1,
+            lock: row.lock == 1
+          });
+          dialogVisible.value = true;
+          editMode.value = true;
+        }
+
+        async function submitForm() {
+          if (!selectedAppId.value) {
+            ElementPlus.ElMessage.warning('请选择应用');
+            return;
+          }
+          const data = { ...form, apk_id: selectedAppId.value };
+          const method = editMode.value ? 'editPopup' : 'addPopup';
+          const res = await fetch(`/api/index.php?module=popup_image&method=${method}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success(json.message || '保存成功');
+            dialogVisible.value = false;
+            loadPopups();
+          } else {
+            ElementPlus.ElMessage.error(json.message || '保存失败');
+          }
+        }
+
+        async function deletePopup(row) {
+          await ElementPlus.ElMessageBox.confirm(`确认删除弹窗：${row.remark}?`, '警告', { type: 'warning' });
+          const res = await fetch(`/api/index.php?module=popup_image&method=deletePopup`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: row.id })
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('删除成功');
+            loadPopups();
+          } else {
+            ElementPlus.ElMessage.error(json.message || '删除失败');
+          }
+        }
+        const popupListDialogVisible = ref(false);
+        const popupListData = ref([]);
+        const currentListType = ref('whitelist'); // 或 blacklist
+        const currentPopupId = ref(null);
+        
+        async function showPopupList(type, popupId) {
+          currentListType.value = type;
+          currentPopupId.value = popupId;
+        
+          try {
+            const res = await fetch('/api/index.php?module=popup_image&method=getPopupLists', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ popup_id: popupId })
+            });
+            const json = await res.json();
+            if (json.code === 200) {
+              popupListData.value = json.data[type] || [];
+              popupListDialogVisible.value = true;
+            } else {
+              ElementPlus.ElMessage.error(json.message || '加载失败');
+            }
+          } catch {
+            ElementPlus.ElMessage.error('请求失败');
+          }
+        }
+        
+        /*async function addListItem() {
+          const { value } = await ElementPlus.ElMessageBox.prompt('请输入类名', '添加', {
+            confirmButtonText: '添加',
+            cancelButtonText: '取消'
+          });
+        
+          if (!value) return;
+        
+          const method = currentListType.value === 'whitelist' ? 'addWhitelist' : 'addBlacklist';
+          try {
+            const res = await fetch(`/api/index.php?module=popup_image&method=${method}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ popup_id: currentPopupId.value, class_name: value })
+            });
+            const json = await res.json();
+            if (json.code === 200) {
+              ElementPlus.ElMessage.success('添加成功');
+              showPopupList(currentListType.value, currentPopupId.value);
+            } else {
+              ElementPlus.ElMessage.error(json.message || '添加失败');
+            }
+          } catch {
+            ElementPlus.ElMessage.error('请求失败');
+          }
+        }*/
+        function addListItem() {
+          addListForm.class_name = ''
+          addListForm.remark = ''
+        
+          addListType.value = currentListType.value
+          addListDialogTitle.value = currentListType.value === 'whitelist'
+            ? '添加白名单'
+            : '添加黑名单'
+        
+          addListDialogVisible.value = true
+        }
+        
+        async function submitAddList() {
+          if (!addListForm.class_name.trim()) {
+            ElementPlus.ElMessage.error('类名不能为空')
+            return
+          }
+        
+          const method = addListType.value === 'whitelist'
+            ? 'addWhitelist'
+            : 'addBlacklist'
+        
+          const payload = {
+            popup_id: currentPopupId.value,
+            class_name: addListForm.class_name.trim(),
+            remark: addListForm.remark.trim()
+          }
+        
+          const res = await fetch(`/api/index.php?module=popup_image&method=${method}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          })
+        
+          const json = await res.json()
+        
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('添加成功')
+            addListDialogVisible.value = false
+            showPopupList(currentListType.value, currentPopupId.value)
+          } else {
+            ElementPlus.ElMessage.error(json.message || '添加失败')
+          }
+        }
+
+        
+        async function deleteListItem(row) {
+          const method = currentListType.value === 'whitelist' ? 'deleteWhitelist' : 'deleteBlacklist';
+          try {
+            await ElementPlus.ElMessageBox.confirm('确定要删除此条记录？', '提示', {
+              type: 'warning'
+            });
+        
+            const res = await fetch(`/api/index.php?module=popup_image&method=${method}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: row.id })
+            });
+            const json = await res.json();
+            if (json.code === 200) {
+              ElementPlus.ElMessage.success('删除成功');
+              showPopupList(currentListType.value, currentPopupId.value);
+            } else {
+              ElementPlus.ElMessage.error(json.message || '删除失败');
+            }
+          } catch {
+            // 用户取消
+          }
+        }
+
+const batchDialogVisible = ref(false);
+const selectedPopups = ref([]);
+const batchForm = reactive({
+  lock: false,
+  popup_type: '',
+  remark: '',
+  imageUrl: '',
+  clickAction: 0,
+  clickText: '',
+  callback: '',
+  countdown: 3,
+  canSkip: false,
+  autoClose: false,
+  enable: false
+});
+const batchClickTextPlaceholder = ref('无参数');
+
+// 打开批量编辑弹窗
+function openBatchDialog() {
+  if (selectedPopups.value.length === 0) {
+    ElementPlus.ElMessage.warning('请先选择要修改的弹窗');
+    return;
+  }
+  Object.assign(batchForm, {
+    lock: false,
+    popup_type: '',
+    remark: '',
+    imageUrl: '',
+    clickAction: 0,
+    clickText: '',
+    callback: '',
+    countdown: 3,
+    canSkip: false,
+    autoClose: false,
+    enable: false
+  });
+  presetPopupId.value = null;
+  batchDialogVisible.value = true;
+}
+
+// 多选回调
+function handleSelectionChange(val) {
+  selectedPopups.value = val;
+  const ids = val.map(item => item.id);
+  const key = `popup_checked_ids_${selectedAppId.value || 'all'}`;
+  localStorage.setItem(key, JSON.stringify(ids));
+}
+
+
+// 更新点击事件提示
+function updateBatchClickPlaceholder(val) {
+  switch (val) {
+    case 1:
+      batchClickTextPlaceholder.value = '请输入要打开的网址，如：https://xxx.com';
+      break;
+    case 2:
+      batchClickTextPlaceholder.value = '在QQ群官方地址获取安卓加群连接';
+      break;
+    case 3:
+      batchClickTextPlaceholder.value = '不需要参数';
+      break;
+    case 4:
+      batchClickTextPlaceholder.value = '请输入要分享的文本内容';
+      break;
+    case 6:
+      batchClickTextPlaceholder.value = '请输入要复制的文本内容';
+      break;
+    default:
+      batchClickTextPlaceholder.value = '无参数';
+  }
+}
+
+// 批量保存
+async function confirmBatchUpdate() {
+  await ElementPlus.ElMessageBox.confirm(
+    '此操作会将勾选的弹窗统一设置为本次提交的信息，是否继续？',
+    '提示',
+    { type: 'warning' }
+  );
+
+  const ids = selectedPopups.value.map(item => item.id);
+  const payload = { ...batchForm, ids, apk_id: selectedAppId.value };
+
+  const res = await fetch('/api/index.php?module=popup_image&method=batchUpdate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const json = await res.json();
+  if (json.code === 200) {
+    ElementPlus.ElMessage.success('批量修改成功');
+    batchDialogVisible.value = false;
+    loadPopups();
+  } else {
+    ElementPlus.ElMessage.error(json.message || '批量修改失败');
+  }
+}
+
+        onMounted(() => {
+          loadApps();
+          selectedAppId.value = null;
+          loadPopups();
+        });
+
+        return {
+          appList,
+          selectedAppId,
+          popupList,
+          dialogVisible,
+          form,
+          editMode,
+          loadApps,
+          loadPopups,
+          openAddDialog,
+          editPopup,
+          deletePopup,
+          submitForm,
+          updateClickTextPlaceholder,
+          clickTextPlaceholder,
+          popupListDialogVisible,
+          popupListData,
+          currentListType,
+          showPopupList,
+          addListItem,
+          deleteListItem,
+          
+          batchDialogVisible,
+  batchForm,
+  batchClickTextPlaceholder,
+  openBatchDialog,
+  handleSelectionChange,
+  updateBatchClickPlaceholder,
+  confirmBatchUpdate,selectedPopups,
+  popupTableRef,presetPopupId,
+applyPresetToForm,addListDialogVisible,
+addListDialogTitle,
+addListForm,
+submitAddList,changeApp,page,
+limit,
+total,
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

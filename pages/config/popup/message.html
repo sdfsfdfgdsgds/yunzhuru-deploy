@@ -1,0 +1,673 @@
+
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>文字弹窗配置</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+</head>
+<body>
+  <div id="app" style="padding: 20px">
+    <!-- 应用选择 -->
+    <div style="margin-bottom: 20px; display: flex; align-items: center; gap: 10px">
+      <el-select v-model="selectedAppId" placeholder="选择应用" style="width: 300px" @change="loadPopups">
+        <el-option v-for="app in appList" :key="app.id" :label="`${app.name} | ${app.version} | ${app.package}`" :value="app.id"></el-option>
+      </el-select>
+      <el-button @click="loadApps">刷新应用列表</el-button>
+      <el-button type="primary" @click="openAddDialog">添加弹窗</el-button>
+    </div>
+
+    <!-- 弹窗列表表格 -->
+    <el-table :data="popupList" border>
+      <el-table-column label="ID" prop="id"></el-table-column>
+      <el-table-column label="图标" width="60">
+          <template #default="scope">
+            <img
+              :src="`/icon.php?id=${scope.row.config_id}`"
+              style="width: 32px; height: 32px; object-fit: contain; border-radius: 6px;"
+              alt="icon"
+            />
+          </template>
+      </el-table-column>
+      <el-table-column label="应用信息" prop="apk_info"></el-table-column>
+      <el-table-column label="标题" prop="title"></el-table-column>
+      <el-table-column label="启用" prop="enable">
+        <template v-slot="scope">
+          <el-tag :type="scope.row.enable == 1 ? 'success' : 'info'">{{ scope.row.enable == 1 ? '是' : '否' }}</el-tag>
+        </template>
+      </el-table-column>
+        <el-table-column label="黑白名单管理">
+          <template v-slot="scope">
+            <el-button size="small"  @click="openWhitelist(scope.row.id)">白名单</el-button>
+            <el-button size="small" type="info" @click="openBlacklist(scope.row.id)">黑名单</el-button>
+          </template>
+        </el-table-column>
+      <el-table-column label="操作">
+        <template v-slot="scope">
+          <el-button size="small" type="primary" @click="editPopup(scope.row)">编辑</el-button>
+          <el-button size="small" type="warning" @click="manageButtons(scope.row.id)">按钮配置</el-button>
+          <el-button size="small" type="danger" @click="deletePopup(scope.row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+    <div style="margin-top: 15px; text-align: right;">
+        <!-- 分页控件 -->
+        <el-pagination
+          background
+          v-model:current-page="page"
+          :page-size="limit"
+          :total="total"
+          layout="total,prev, pager, next"
+          @current-change="loadPopups"
+          style="margin-top: 20px">
+        </el-pagination>
+    </div>
+    <!-- 添加/编辑弹窗 -->
+    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="600px">
+      <el-form :model="form" label-width="100px">
+        <el-form-item label="标题">
+          <el-input v-model="form.title"></el-input>
+        </el-form-item>
+        <el-form-item label="弹窗类型">
+          <el-select v-model="form.popup_type" placeholder="请选择弹窗类型">
+            <el-option :value="0" label="默认UI弹窗（支持多按钮）"></el-option>
+            <el-option :value="1" label="系统弹窗（支持最多3个按钮,不支持遮罩色）"></el-option>
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="内容">
+          <el-input type="textarea" v-model="form.message"></el-input>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="form.remark"></el-input>
+        </el-form-item>
+        <el-form-item label="弹窗间隔">
+          <el-input v-model="form.interval"></el-input>
+          
+        </el-form-item>
+        <el-alert title="弹窗间隔0代表每次启动都弹,1代表每次关闭后，1小时后再弹(内容无变化的话),时间以此类推，单位为小时" type="info" show-icon style="margin-bottom: 20px"></el-alert>
+        <el-form-item label="背景颜色">
+          <div style="display:flex; gap:10px">
+            <el-input v-model="form.backgroundColor" style="width: 200px"></el-input>
+            <el-color-picker v-model="form.backgroundColor"></el-color-picker>
+          </div>
+        </el-form-item>
+        <el-form-item label="遮罩颜色">
+          <div style="display:flex; flex-direction: column; gap: 6px">
+            <div style="display: flex; gap: 10px; align-items: center">
+              <el-input v-model="form.maskColor" style="width: 200px"></el-input>
+              <el-color-picker v-model="form.maskColor"></el-color-picker>
+              <el-button type="text" @click="showMaskTip = true">遮罩透明度说明</el-button>
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item label="防去除">
+          <el-switch v-model="form.lock"></el-switch>
+          <el-alert title="可防止弹窗被第三方程序拦截关闭,不能防逆向破解"></el-alert>
+        </el-form-item>
+        <el-form-item label="点空白处关闭">
+          <el-switch v-model="form.exitpopus"></el-switch>
+        </el-form-item>
+        <el-form-item label="启用">
+          <el-switch v-model="form.enable"></el-switch>
+        </el-form-item>
+        
+      </el-form>
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitForm">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 按钮管理弹窗 -->
+    <el-dialog v-model="buttonDialogVisible" title="按钮管理">
+      <el-button type="primary" @click="openAddButtonDialog">添加按钮</el-button>
+      <el-table :data="buttonList" style="margin-top: 10px" border>
+        <el-table-column label="标题" prop="title"></el-table-column>
+        <el-table-column label="文字颜色" prop="textcolor"></el-table-column>
+        <el-table-column label="背景颜色" prop="backgroundColor"></el-table-column>
+        <el-table-column label="操作">
+          <template v-slot="scope">
+             <el-button size="small" type="primary" @click="editButton(scope.row)">编辑</el-button>
+            <el-button size="small" type="danger" @click="deleteButton(scope.row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+    
+    <el-dialog v-model="addButtonDialogVisible" :title="buttonEditMode ? '编辑按钮' : '添加按钮'" width="500px">
+  <el-form :model="buttonForm" label-width="100px">
+    <el-form-item label="标题">
+      <el-input v-model="buttonForm.title"></el-input>
+    </el-form-item>
+
+    <el-form-item label="文字颜色">
+      <div style="display: flex; align-items: center">
+        <el-color-picker v-model="buttonForm.textcolor"></el-color-picker>
+        <el-input v-model="buttonForm.textcolor" style="margin-left: 10px; width: 150px"></el-input>
+      </div>
+    </el-form-item>
+
+    <el-form-item label="背景颜色">
+      <div style="display: flex; align-items: center">
+        <el-color-picker v-model="buttonForm.backgroundColor"></el-color-picker>
+        <el-input v-model="buttonForm.backgroundColor" style="margin-left: 10px; width: 150px"></el-input>
+      </div>
+    </el-form-item>
+
+    <el-form-item label="点击事件">
+      <el-select v-model="buttonForm.click" @change="updateClickTextTip">
+        <el-option label="无动作" :value="0"></el-option>
+        <el-option label="打开网页" :value="1"></el-option>
+        <el-option label="添加QQ群" :value="2"></el-option>
+        <el-option label="退出APP" :value="3"></el-option>
+        <el-option label="分享内容" :value="4"></el-option>
+        <el-option label="复制到剪贴板" :value="6"></el-option>
+        <el-option label="打开窗口类" :value="7"></el-option>
+      </el-select>
+    </el-form-item>
+
+    <el-form-item label="事件参数">
+      <el-input v-model="buttonForm.clickText" :placeholder="clickTextTip"></el-input>
+    </el-form-item>
+
+    <el-form-item label="点击后关闭">
+      <el-switch v-model="buttonForm.dismiss"></el-switch>
+    </el-form-item>
+  </el-form>
+
+  <template #footer>
+    <el-button @click="addButtonDialogVisible = false">取消</el-button>
+    <el-button type="primary" @click="submitAddButton">
+      {{ buttonEditMode ? '保存修改' : '确认添加' }}
+    </el-button>
+  </template>
+</el-dialog>
+
+
+    <el-dialog v-model="whitelistDialogVisible" title="白名单(当窗口为这些类名的时候才会弹出)" width="600px">
+      <el-button type="primary" @click="addToWhitelist">添加</el-button>
+      <el-table :data="whitelist" border style="margin-top:10px">
+        <el-table-column label="类名" prop="class_name"></el-table-column>
+        <el-table-column label="备注" prop="remark"></el-table-column>
+        <el-table-column label="创建时间" prop="created_at"></el-table-column>
+        <el-table-column label="操作">
+          <template v-slot="scope">
+            <el-button type="danger" size="small" @click="deleteWhitelist(scope.row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+    
+    <el-dialog v-model="blacklistDialogVisible" title="黑名单(当窗口为这些类名的时候不弹)" width="600px">
+      <el-button type="primary" @click="addToBlacklist">添加</el-button>
+      <el-table :data="blacklist" border style="margin-top:10px">
+        <el-table-column label="类名" prop="class_name"></el-table-column>
+        <el-table-column label="备注" prop="remark"></el-table-column>
+        <el-table-column label="创建时间" prop="created_at"></el-table-column>
+        <el-table-column label="操作">
+          <template v-slot="scope">
+            <el-button type="danger" size="small" @click="deleteBlacklist(scope.row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+
+<el-dialog v-model="showMaskTip" title="遮罩透明度说明" width="400px">
+  <p>遮罩颜色应为 8 位 ARGB 颜色码，前两位为透明度。</p>
+  <p>以下是常见透明度的十六进制值：</p>
+  <ul style="margin-left: 20px; padding-left: 0">
+    <li>10%：1A</li>
+    <li>20%：33</li>
+    <li>30%：4D</li>
+    <li>40%：66</li>
+    <li>50%：80</li>
+    <li>60%：99</li>
+    <li>70%：B3</li>
+    <li>80%：CC</li>
+    <li>90%：E6</li>
+    <li>100%：FF</li>
+  </ul>
+  <p style="margin-top: 10px">例如：<code>#80000000</code> 表示黑色（#000000）加 50% 透明度（80）</p>
+  <template #footer>
+    <el-button @click="showMaskTip = false">关闭</el-button>
+  </template>
+</el-dialog>
+
+
+<!-- 添加黑白名单弹窗（统一UI） -->
+<el-dialog v-model="addListDialogVisible" :title="addListDialogTitle" width="500px">
+  <el-form :model="addListForm" label-width="100px">
+    <el-form-item label="类名">
+      <el-input v-model="addListForm.class_name" placeholder="请输入类名"></el-input>
+    </el-form-item>
+
+    <el-form-item label="备注">
+      <el-input v-model="addListForm.remark" placeholder="备注可不填"></el-input>
+    </el-form-item>
+  </el-form>
+
+  <template #footer>
+    <el-button @click="addListDialogVisible = false">取消</el-button>
+    <el-button type="primary" @click="submitAddList">确认添加</el-button>
+  </template>
+</el-dialog>
+
+    
+    
+  </div>
+
+  <script>
+    const { createApp, ref, reactive, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const appList = ref([]);
+        const selectedAppId = ref(null);
+        const popupList = ref([]);
+        const dialogVisible = ref(false);
+        const editMode = ref(false);
+        const form = reactive({
+          id: null, title: '', message: '', remark: '', backgroundColor: '#FAFAFA', enable: false, exitpopus: false, lock: false, popup_type: 0
+        });
+        const page = ref(1);
+        const limit = ref(20);
+        const total = ref(0);
+        const editButtonMode = ref(false);
+        const buttonEditMode = ref(false); // true为编辑，false为添加
+        const showMaskTip = ref(false);
+        const clickTextTip = ref('无参数');
+        const buttonDialogVisible = ref(false);
+        const buttonList = ref([]);
+        const currentPopupId = ref(null);
+        const addButtonDialogVisible = ref(false);
+        
+        const addListDialogVisible = ref(false)
+        const addListDialogTitle = ref('')
+        const addListType = ref('whitelist') // whitelist 或 blacklist
+        
+        const addListForm = reactive({
+          class_name: '',
+          remark: ''
+        })
+        
+        async function loadApps() {
+          const res = await fetch('/api/index.php?module=config&method=getMyApps');
+          const json = await res.json();
+          if (json.code === 200) appList.value = json.data;
+        }
+
+        async function loadPopups() {
+          const payload = {
+            page: page.value,
+            limit: limit.value
+          };
+        
+          if (selectedAppId.value) {
+            payload.apk_id = selectedAppId.value;
+          }
+        
+          const res = await fetch('/api/index.php?module=popup_message&method=getList', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+        
+          const json = await res.json();
+          if (json.code === 200) {
+            popupList.value = json.data.list;
+            total.value = json.data.total;
+          }
+        }
+
+
+        function openAddDialog() {
+            if (!selectedAppId.value) {
+                ElementPlus.ElMessage.warning('请先选择应用');
+                return;
+              }
+          Object.assign(form, {
+            id: null, title: '', message: '', remark: '', backgroundColor: '#FAFAFA', enable: false, exitpopus: false, lock: false
+          });
+          dialogVisible.value = true;
+          editMode.value = false;
+        }
+
+        function editPopup(row) {
+          Object.assign(form, {
+            ...row,
+            enable: row.enable == 1,
+            exitpopus: row.exitpopus == 1,
+            lock: row.lock == 1,
+            popup_type: Number(row.popup_type)
+          });
+          dialogVisible.value = true;
+          editMode.value = true;
+        }
+        function updateClickTextTip(val) {
+          switch (val) {
+            case 1:
+              clickTextTip.value = '请输入要打开的网址，如：https://xxx.com';
+              break;
+            case 2:
+              clickTextTip.value = '在QQ群官方地址获取安卓加群连接的key值即可';
+              break;
+            case 3:
+              clickTextTip.value = '不需要参数';
+              break;
+            case 4:
+              clickTextTip.value = '请输入要分享的文本内容';
+              break;
+            case 6:
+              clickTextTip.value = '请输入要复制的文本内容';
+              break;
+            case 7:
+              clickTextTip.value = '请输入要打开的完整窗口类名，例如com.abc.shell.ManiActivity';
+              break;
+            default:
+              clickTextTip.value = '无参数';
+          }
+        }
+        async function submitForm() {
+          const payload = { ...form, apk_id: selectedAppId.value };
+          const method = editMode.value ? 'editPopup' : 'addPopup';
+          const res = await fetch(`/api/index.php?module=popup_message&method=${method}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success(json.message || '保存成功');
+            
+            dialogVisible.value = false;
+            await ElementPlus.ElMessageBox.alert(json.message || '保存成功', '提示', {
+              confirmButtonText: '确定',
+              type: 'success'
+            });
+            loadPopups();
+          }
+        }
+
+        async function deletePopup(row) {
+          await ElementPlus.ElMessageBox.confirm(`确认删除弹窗：${row.title}?`, '警告');
+          const res = await fetch('/api/index.php?module=popup_message&method=deletePopup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: row.id })
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('删除成功');
+            loadPopups();
+          }
+        }
+
+        async function manageButtons(popupId) {
+          currentPopupId.value = popupId;
+          const res = await fetch('/api/index.php?module=popup_message&method=getButtons', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ popup_id: popupId })
+          });
+          const json = await res.json();
+          buttonList.value = json.data;
+          buttonDialogVisible.value = true;
+        }
+
+function openAddButtonDialog() {
+  buttonEditMode.value = false; // 设置为添加模式
+  Object.assign(buttonForm, {
+    title: '',
+    textcolor: '#FFFFFF',
+    backgroundColor: '#008577',
+    click: 0,
+    clickText: '',
+    dismiss: true
+  });
+  clickTextTip.value = '无参数';
+  addButtonDialogVisible.value = true;
+}
+
+function openEditButtonDialog(button) {
+  buttonEditMode.value = true;
+  Object.assign(buttonForm, { ...button });
+  updateClickTextTip(button.click);
+  addButtonDialogVisible.value = true;
+}
+const buttonForm = reactive({
+  title: '',
+  textcolor: '#FFFFFF',
+  backgroundColor: '#008577',
+  click: 0,
+  clickText: '',
+  dismiss: true
+});
+
+async function submitAddButton() {
+  const url = buttonEditMode.value
+    ? '/api/index.php?module=popup_message&method=editButton'
+    : '/api/index.php?module=popup_message&method=addButton';
+
+  const payload = {
+    popup_id: currentPopupId.value,
+    title: buttonForm.title,
+    textcolor: buttonForm.textcolor,
+    backgroundColor: buttonForm.backgroundColor,
+    click: buttonForm.click,
+    clickText: buttonForm.clickText,
+    dismiss: buttonForm.dismiss ? 1 : 0
+  };
+
+  if (buttonEditMode.value) {
+    payload.id = buttonForm.id;
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const json = await res.json();
+    if (json.code === 200) {
+      ElementPlus.ElMessage.success(editButtonMode.value ? '更新成功' : '添加成功');
+      addButtonDialogVisible.value = false;
+      buttonEditMode.value = false; // 这里重置为添加状态
+      manageButtons(currentPopupId.value);
+    } else {
+      ElementPlus.ElMessage.error(json.message || '操作失败');
+    }
+  } catch {
+    ElementPlus.ElMessage.error('请求失败');
+  }
+}
+
+function editButton(row) {
+  buttonEditMode.value = true;
+  Object.assign(buttonForm, {
+    ...row,
+    dismiss: row.dismiss == 1,
+    id: row.id
+  });
+  updateClickTextTip(row.click);
+  addButtonDialogVisible.value = true;
+}
+
+
+
+const whitelistDialogVisible = ref(false);
+const blacklistDialogVisible = ref(false);
+const whitelist = ref([]);
+const blacklist = ref([]);
+
+async function openWhitelist(popupId) {
+  currentPopupId.value = popupId;
+  const res = await fetch('/api/index.php?module=popup_message&method=getPopupLists', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ popup_id: popupId })
+  });
+  const json = await res.json();
+  whitelist.value = json.data.whitelist;
+  whitelistDialogVisible.value = true;
+}
+
+async function openBlacklist(popupId) {
+  currentPopupId.value = popupId;
+  const res = await fetch('/api/index.php?module=popup_message&method=getPopupLists', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ popup_id: popupId })
+  });
+  const json = await res.json();
+  blacklist.value = json.data.blacklist;
+  blacklistDialogVisible.value = true;
+}
+
+/*async function addToWhitelist() {
+  const { value } = await ElementPlus.ElMessageBox.prompt('请输入类名', '添加白名单');
+  if (!value) return;
+  await fetch('/api/index.php?module=popup_message&method=addWhitelist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ popup_id: currentPopupId.value, class_name: value })
+  });
+  openWhitelist(currentPopupId.value);
+}*/
+function addToWhitelist() {
+  addListForm.class_name = ''
+  addListForm.remark = ''
+  addListType.value = 'whitelist'
+  addListDialogTitle.value = '添加白名单'
+  addListDialogVisible.value = true
+}
+
+/*async function addToBlacklist() {
+  const { value } = await ElementPlus.ElMessageBox.prompt('请输入类名', '添加黑名单');
+  if (!value) return;
+  await fetch('/api/index.php?module=popup_message&method=addBlacklist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ popup_id: currentPopupId.value, class_name: value })
+  });
+  openBlacklist(currentPopupId.value);
+}*/
+function addToBlacklist() {
+  addListForm.class_name = ''
+  addListForm.remark = ''
+  addListType.value = 'blacklist'
+  addListDialogTitle.value = '添加黑名单'
+  addListDialogVisible.value = true
+}
+async function submitAddList() {
+  if (!addListForm.class_name.trim()) {
+    ElementPlus.ElMessage.error('类名不能为空')
+    return
+  }
+
+  const method = addListType.value === 'whitelist'
+    ? 'addWhitelist'
+    : 'addBlacklist'
+
+  const payload = {
+    popup_id: currentPopupId.value,
+    class_name: addListForm.class_name.trim(),
+    remark: addListForm.remark.trim()
+  }
+
+  const res = await fetch(`/api/index.php?module=popup_message&method=${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+
+  const json = await res.json()
+
+  if (json.code === 200) {
+    ElementPlus.ElMessage.success('添加成功')
+    addListDialogVisible.value = false
+
+    if (addListType.value === 'whitelist') {
+      openWhitelist(currentPopupId.value)
+    } else {
+      openBlacklist(currentPopupId.value)
+    }
+  } else {
+    ElementPlus.ElMessage.error(json.message || '添加失败')
+  }
+}
+
+
+async function deleteWhitelist(row) {
+  await fetch('/api/index.php?module=popup_message&method=deleteWhitelist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: row.id })
+  });
+  openWhitelist(currentPopupId.value);
+}
+
+async function deleteBlacklist(row) {
+  await fetch('/api/index.php?module=popup_message&method=deleteBlacklist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: row.id })
+  });
+  openBlacklist(currentPopupId.value);
+}
+
+        async function deleteButton(row) {
+          await fetch('/api/index.php?module=popup_message&method=deleteButton', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: row.id })
+          });
+          manageButtons(currentPopupId.value);
+        }
+
+onMounted(() => {
+  loadApps();
+  loadPopups(); // 默认首次加载所有应用弹窗
+});
+
+        return {
+          appList, selectedAppId, popupList, dialogVisible, form, editMode,
+          openAddDialog, editPopup, deletePopup, submitForm, loadApps, loadPopups,
+          buttonDialogVisible, buttonList, manageButtons, deleteButton,
+  buttonForm,
+  openAddButtonDialog,
+  submitAddButton,addButtonDialogVisible,editButtonMode,
+editButton,
+buttonEditMode,
+clickTextTip,
+updateClickTextTip,
+openEditButtonDialog,
+whitelistDialogVisible,
+  blacklistDialogVisible,
+  whitelist,
+  blacklist,
+  openWhitelist,
+  openBlacklist,
+  addToWhitelist,
+  addToBlacklist,
+  deleteWhitelist,
+  deleteBlacklist,
+  currentPopupId,page, limit, total,showMaskTip,
+  addListDialogVisible,
+addListDialogTitle,
+addListForm,
+addListType,
+submitAddList,
+addToWhitelist,
+addToBlacklist,
+
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

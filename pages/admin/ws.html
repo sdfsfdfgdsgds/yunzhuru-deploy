@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>服务管理</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+</head>
+<body>
+  <div id="app" style="padding: 20px;">
+    <!-- 注入服务状态 -->
+    <el-card>
+      <template #header>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span>推送服务状态</span>
+          <div>
+            <el-button @click="checkStatus" :loading="loading.status">刷新服务状态</el-button>
+            <el-button type="primary" @click="startService" :loading="loading.start">启动服务</el-button>
+            <el-button type="danger" @click="stopService" :loading="loading.stop">停止服务</el-button>
+          </div>
+        </div>
+      </template>
+
+      <el-descriptions :column="1" border>
+        <el-descriptions-item label="当前状态">{{ statusText }}</el-descriptions-item>
+        <el-descriptions-item label="进程ID">{{ pid }}</el-descriptions-item>
+      </el-descriptions>
+
+      <div style="margin-top: 20px;">
+        <el-select v-model="logSize" placeholder="选择日志大小" style="width: 150px; margin-right: 10px;">
+          <el-option v-for="size in logSizeOptions" :key="size.value" :label="size.label" :value="size.value"></el-option>
+        </el-select>
+        <el-button type="info" @click="loadLog" :loading="loading.log">查看服务日志</el-button>
+        <el-button type="warning" @click="clearLog" :loading="loading.clear">清空日志文件</el-button>
+        <el-input type="textarea" v-model="logContent" :rows="20" ref="logTextarea" readonly style="margin-top: 10px;"></el-input>
+      </div>
+    </el-card>
+  </div>
+
+  <script>
+    const { createApp, ref, onMounted, nextTick } = Vue;
+
+    createApp({
+      setup() {
+        const statusText = ref('未知');
+        const pid = ref('无');
+        const logContent = ref('');
+        const system = ref({
+          cpu_cores: 0,
+          cpu_usage_percent: 0,
+          memory_total_mb: 0,
+          memory_used_mb: 0,
+          disk_total_gb: 0,
+          disk_used_gb: 0,
+          load_percent: 0
+        });
+        const loading = ref({
+          status: false,
+          start: false,
+          stop: false,
+          log: false,
+          clear: false,
+          system: false
+        });
+
+        const logSize = ref(1024);
+        const logSizeOptions = [
+          { label: '1KB', value: 1024 },
+          { label: '10KB', value: 10240 },
+          { label: '20KB', value: 20480 },
+          { label: '30KB', value: 30720 },
+          { label: '40KB', value: 40960 },
+          { label: '50KB', value: 51200 },
+          { label: '60KB', value: 61440 },
+          { label: '70KB', value: 71680 },
+          { label: '80KB', value: 81920 },
+          { label: '90KB', value: 92160 },
+          { label: '100KB', value: 102400 }
+        ];
+
+        const logTextarea = ref(null);
+
+        async function checkStatus() {
+          loading.value.status = true;
+          try {
+            const res = await fetch('/api/index.php?module=ws_service&method=status');
+            const json = await res.json();
+            if (json.code === 200) {
+              statusText.value = json.data.running ? '运行中' : '未运行';
+              pid.value = json.data.pid || '无';
+            } else {
+              ElementPlus.ElMessage.error(json.message || '状态获取失败');
+            }
+          } catch {
+            ElementPlus.ElMessage.error('请求失败');
+          } finally {
+            loading.value.status = false;
+          }
+        }
+
+        async function startService() {
+          loading.value.start = true;
+          try {
+            const res = await fetch('/api/index.php?module=ws_service&method=start');
+            const json = await res.json();
+            if (json.code === 200) {
+              ElementPlus.ElMessage.success('服务已启动');
+              checkStatus();
+            } else {
+              ElementPlus.ElMessage.error(json.message || '启动失败');
+            }
+          } finally {
+            loading.value.start = false;
+          }
+        }
+
+        async function stopService() {
+          loading.value.stop = true;
+          try {
+            const res = await fetch('/api/index.php?module=ws_service&method=stop');
+            const json = await res.json();
+            if (json.code === 200) {
+              ElementPlus.ElMessage.success('服务已停止');
+              checkStatus();
+            } else {
+              ElementPlus.ElMessage.error(json.message || '停止失败');
+            }
+          } finally {
+            loading.value.stop = false;
+          }
+        }
+
+        async function loadLog() {
+          loading.value.log = true;
+          try {
+            const res = await fetch(`/api/index.php?module=ws_service&method=viewLog`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ length: logSize.value })
+            });
+            const json = await res.json();
+            if (json.code === 200) {
+              logContent.value = json.data.content || '（无日志）';
+              nextTick(() => {
+                const el = logTextarea.value?.$el?.querySelector('textarea');
+                if (el) el.scrollTop = el.scrollHeight;
+              });
+            } else {
+              ElementPlus.ElMessage.error(json.message || '日志获取失败');
+            }
+          } finally {
+            loading.value.log = false;
+          }
+        }
+
+        async function clearLog() {
+          loading.value.clear = true;
+          try {
+            const res = await fetch('/api/index.php?module=ws_service&method=clearLog', { method: 'POST' });
+            const json = await res.json();
+            if (json.code === 200) {
+              ElementPlus.ElMessage.success('日志已清空');
+              logContent.value = '';
+            } else {
+              ElementPlus.ElMessage.error(json.message || '清空失败');
+            }
+          } finally {
+            loading.value.clear = false;
+          }
+        }
+
+        
+        function getCpuTagType(percent) {
+          if (percent < 20) return 'success';       // 绿色
+          if (percent < 50) return 'info';          // 蓝色
+          if (percent < 80) return 'warning';       // 橙色
+          return 'danger';                          // 红色
+        }
+        onMounted(() => {
+          checkStatus();
+        });
+
+        return {
+          statusText,
+          pid,
+          logContent,
+          loading,
+          checkStatus,
+          startService,
+          stopService,
+          loadLog,
+          clearLog,
+          logSize,
+          logSizeOptions,
+          logTextarea,
+          system,
+          getCpuTagType
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>签名证书管理</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="/element/css/index.css" />
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/config.js"></script>
+  <style>
+    body { padding: 20px; }
+    .toolbar { margin-bottom: 20px; display: flex; gap: 10px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <!-- 工具栏 -->
+    <div class="toolbar">
+      <el-button type="primary" @click="openUpload">上传证书</el-button>
+      <el-button type="success" @click="openCreate">创建证书</el-button>
+    </div>
+
+    <!-- 列表 -->
+    <el-table :data="signList" border>
+      <el-table-column prop="id" label="ID" width="60"></el-table-column>
+      <el-table-column prop="name" label="备注"></el-table-column>
+      <el-table-column prop="alias" label="别名"></el-table-column>
+      <el-table-column prop="upload_time" label="上传时间"></el-table-column>
+      <el-table-column label="操作" width="180">
+        <template #default="scope">
+          <el-button size="small" @click="openEdit(scope.row)">编辑</el-button>
+          <el-button size="small" type="danger" @click="deleteSign(scope.row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <!-- 上传/编辑弹窗 -->
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="500px">
+      <el-form :model="form" label-width="100px">
+        <el-form-item label="备注">
+          <el-input v-model="form.name"></el-input>
+        </el-form-item>
+        <el-form-item label="别名">
+          <el-input v-model="form.alias"></el-input>
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="form.password" type="password"></el-input>
+        </el-form-item>
+        <el-form-item label="证书密码">
+          <el-input v-model="form.cert_password" type="password"></el-input>
+        </el-form-item>
+        <el-form-item label="选择证书文件" v-if="!form.id">
+          <input type="file" ref="fileInput" accept=".keystore,.jks" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitForm">提交</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 创建弹窗 -->
+    <el-dialog v-model="createDialogVisible" title="创建证书" width="600px">
+      <el-form :model="createForm" label-width="120px">
+        <el-form-item label="备注">
+          <el-input
+            v-model="createForm.name"
+            placeholder="证书的备注名称，例如：生产环境证书"
+          ></el-input>
+        </el-form-item>
+        <el-form-item label="别名 (Alias)">
+          <el-input
+            v-model="createForm.alias"
+            placeholder="例如：mykey，用于引用私钥的别名"
+          ></el-input>
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input
+            v-model="createForm.password"
+            type="password"
+            placeholder="整个证书库的访问密码"
+          ></el-input>
+        </el-form-item>
+        <el-form-item label="证书密码">
+          <el-input
+            v-model="createForm.cert_password"
+            type="password"
+            placeholder="单个私钥的访问密码（一般与密码相同）"
+          ></el-input>
+        </el-form-item>
+        <el-form-item label="有效期（天）">
+          <el-input
+            v-model="createForm.validity"
+            placeholder="证书的有效天数，例如：3650（10年）"
+          ></el-input>
+        </el-form-item>
+    
+        <!-- DName 字段 -->
+        <el-form-item label="CN（通用名）">
+          <el-input
+            v-model="createForm.dname_cn"
+            placeholder="例如：张三 或 yourdomain.com"
+          ></el-input>
+        </el-form-item>
+        <el-form-item label="OU（组织单位）">
+          <el-input
+            v-model="createForm.dname_ou"
+            placeholder="例如：开发部、技术部"
+          ></el-input>
+        </el-form-item>
+        <el-form-item label="O（组织名）">
+          <el-input
+            v-model="createForm.dname_o"
+            placeholder="例如：某某科技有限公司"
+          ></el-input>
+        </el-form-item>
+        <el-form-item label="L（城市/地区）">
+          <el-input
+            v-model="createForm.dname_l"
+            placeholder="例如：上海、北京"
+          ></el-input>
+        </el-form-item>
+        <el-form-item label="ST（省/州）">
+          <el-input
+            v-model="createForm.dname_st"
+            placeholder="例如：上海市、加州"
+          ></el-input>
+        </el-form-item>
+        <el-form-item label="C（国家代码）">
+          <el-input
+            v-model="createForm.dname_c"
+            placeholder="例如：CN（中国）、US（美国）"
+          ></el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="fillDefault">一键填写随机信息</el-button>
+        <el-button @click="createDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitCreate">创建</el-button>
+      </template>
+    </el-dialog>
+
+  </div>
+
+  <script>
+    const { createApp, ref, reactive, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const signList = ref([]);
+        const dialogVisible = ref(false);
+        const createDialogVisible = ref(false);
+        const dialogTitle = ref('');
+        const fileInput = ref(null);
+
+        const form = reactive({
+          id: null,
+          name: '',
+          alias: '',
+          password: '',
+          cert_password: ''
+        });
+
+        const createForm = reactive({
+          name: '',
+          alias: '',
+          password: '',
+          cert_password: '',
+          validity: 10000,
+          dname_cn: '',
+          dname_ou: '',
+          dname_o: '',
+          dname_l: '',
+          dname_st: '',
+          dname_c: ''
+        });
+
+        function resetForm() {
+          form.id = null;
+          form.name = '';
+          form.alias = '';
+          form.password = '';
+          form.cert_password = '';
+          if (fileInput.value) fileInput.value.value = '';
+        }
+
+        function resetCreateForm() {
+          Object.keys(createForm).forEach(key => createForm[key] = '');
+          createForm.validity = 10000;
+        }
+
+        function fillDefault() {
+          const rand = Math.floor(Math.random() * 10000);
+          createForm.name = '默认证书' + rand;
+          createForm.alias = 'alias' + rand;
+          createForm.password = 'pass1234';
+          createForm.cert_password = 'pass1234';
+          createForm.dname_cn = 'User' + rand;
+          createForm.dname_ou = 'Dev';
+          createForm.dname_o = 'Company';
+          createForm.dname_l = 'City';
+          createForm.dname_st = 'State';
+          createForm.dname_c = 'CN';
+        }
+
+        function loadSigns() {
+          fetch(`/api/index.php?module=app&method=getMySigns`)
+            .then(res => res.json())
+            .then(json => {
+              if (json.code === 200) signList.value = json.data;
+            });
+        }
+
+        function openUpload() {
+          dialogTitle.value = '上传签名证书';
+          resetForm();
+          dialogVisible.value = true;
+        }
+
+        function openEdit(row) {
+          dialogTitle.value = '编辑签名证书';
+          Object.assign(form, row);
+          dialogVisible.value = true;
+        }
+
+        function openCreate() {
+          resetCreateForm();
+          createDialogVisible.value = true;
+        }
+
+        async function submitCreate() {
+          const required = ['name', 'alias', 'password', 'cert_password', 'dname_cn', 'dname_ou', 'dname_o', 'dname_l', 'dname_st', 'dname_c'];
+          for (let key of required) {
+            if (!createForm[key]) {
+              ElementPlus.ElMessage.warning('请填写所有必填字段');
+              return;
+            }
+          }
+          const loading = ElementPlus.ElLoading.service({ lock: true, text: '创建中...' });
+          try {
+            const res = await fetch(`/api/index.php?module=app&method=generateSign`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams(createForm)
+            });
+            const json = await res.json();
+            if (json.code === 200) {
+              ElementPlus.ElMessage.success(json.message || '创建成功');
+              createDialogVisible.value = false;
+              loadSigns();
+            } else {
+              ElementPlus.ElMessage.error(json.message || '创建失败');
+            }
+          } catch {
+            ElementPlus.ElMessage.error('请求失败');
+          } finally {
+            loading.close();
+          }
+        }
+
+        async function submitForm() {
+          if (!form.name || !form.alias || !form.password || !form.cert_password) {
+            ElementPlus.ElMessage.warning('请填写完整信息');
+            return;
+          }
+          const loading = ElementPlus.ElLoading.service({ lock: true, text: '提交中...' });
+          try {
+            if (form.id) {
+              const res = await fetch(`/api/index.php?module=app&method=updateSign`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(form)
+              });
+              const json = await res.json();
+              if (json.code === 200) {
+                ElementPlus.ElMessage.success('修改成功');
+                dialogVisible.value = false;
+                loadSigns();
+              } else {
+                ElementPlus.ElMessage.error(json.message || '修改失败');
+              }
+            } else {
+              const file = fileInput.value?.files?.[0];
+              if (!file || (!file.name.endsWith('.keystore') && !file.name.endsWith('.jks'))) {
+                ElementPlus.ElMessage.warning('请选择 keystore 文件');
+                return;
+              }
+              const formData = new FormData();
+              formData.append('file', file);
+              formData.append('name', form.name);
+              formData.append('alias', form.alias);
+              formData.append('password', form.password);
+              formData.append('cert_password', form.cert_password);
+              const res = await fetch(`/api/index.php?module=app&method=uploadSign`, {
+                method: 'POST',
+                body: formData
+              });
+              const json = await res.json();
+              if (json.code === 200) {
+                ElementPlus.ElMessage.success(json.data.message || '上传成功');
+                dialogVisible.value = false;
+                loadSigns();
+              } else {
+                ElementPlus.ElMessage.error(json.message || '上传失败');
+              }
+            }
+          } catch {
+            ElementPlus.ElMessage.error('请求失败');
+          } finally {
+            loading.close();
+          }
+        }
+
+        function deleteSign(row) {
+          ElementPlus.ElMessageBox.confirm(`确定删除签名证书「${row.name}」吗？使用过该证书的注入任务会被一并删除`, '提示', { type: 'warning' })
+            .then(async () => {
+              const res = await fetch(`/api/index.php?module=app&method=deleteSign`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: row.id })
+              });
+              const json = await res.json();
+              if (json.code === 200) {
+                ElementPlus.ElMessage.success('删除成功');
+                loadSigns();
+              } else {
+                ElementPlus.ElMessage.error(json.message || '删除失败');
+              }
+            }).catch(() => {});
+        }
+
+        onMounted(loadSigns);
+
+        return {
+          signList,
+          dialogVisible,
+          createDialogVisible,
+          dialogTitle,
+          form,
+          createForm,
+          fileInput,
+          openUpload,
+          openEdit,
+          openCreate,
+          submitForm,
+          submitCreate,
+          deleteSign,
+          fillDefault
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

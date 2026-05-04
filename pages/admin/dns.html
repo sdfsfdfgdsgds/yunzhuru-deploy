@@ -1,0 +1,209 @@
+<!DOCTYPE html> 
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>DNS异常统计</title>
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/element/js/echarts.min.js"></script>
+  <script src="/element/js/china.js"></script>
+</head>
+<body>
+<div id="app" style="padding: 20px">
+  <el-alert title="DNS异常说明" show-icon style="margin-bottom: 20px"
+    description="仅展示dns_ip与服务器真实IP不一致的记录。默认查询近30天数据。">
+  </el-alert>
+
+  <!-- 地图板块 -->
+  <div style="width: 100%; height: 500px; margin-bottom: 30px; border: 1px solid #dcdfe6; border-radius: 4px;">
+    <div id="mapChart" style="width: 100%; height: 100%;"></div>
+  </div>
+
+  <div style="display: flex; gap: 10px; margin-bottom: 20px; align-items: center">
+    <el-select v-model="quickRange" placeholder="快速选择" style="width: 150px" @change="applyQuickRange">
+      <el-option label="今天" value="today"></el-option>
+      <el-option label="昨天" value="yesterday"></el-option>
+      <el-option label="近3天" value="last3"></el-option>
+      <el-option label="近1周" value="last7"></el-option>
+      <el-option label="近1月" value="last30"></el-option>
+      <el-option label="近3月" value="last90"></el-option>
+      <el-option label="近6月" value="last180"></el-option>
+    </el-select>
+
+    <el-date-picker
+      v-model="dateRange"
+      type="daterange"
+      range-separator="至"
+      start-placeholder="开始日期"
+      end-placeholder="结束日期"
+      format="YYYY-MM-DD"
+      value-format="YYYY-MM-DD"
+    ></el-date-picker>
+
+    <el-button type="primary" @click="loadStat">查询</el-button>
+    <el-button @click="resetForm">重置</el-button>
+  </div>
+
+  <el-table :data="statList" border style="width: 100%; margin-bottom: 20px">
+    <el-table-column label="应用ID" prop="apk_id" width="100"></el-table-column>
+    <el-table-column label="图标" width="60">
+      <template #default="scope">
+        <img
+          :src="`/icon.php?id=${scope.row.apk_id}`"
+          style="width: 32px; height: 32px; object-fit: contain; border-radius: 6px;"
+          alt="icon"
+        />
+      </template>
+    </el-table-column>
+    <el-table-column label="应用名称" prop="apk_name"></el-table-column>
+    <el-table-column label="设备ID" prop="device_id"></el-table-column>
+    <el-table-column label="访问次数" prop="visit_count" width="100"></el-table-column>
+    <el-table-column label="访问时间" prop="visit_time" width="180"></el-table-column>
+    <el-table-column label="访问IP" prop="ip_address" width="160"></el-table-column>
+    <el-table-column label="所在地区" width="180">
+      <template #default="scope">
+        {{ scope.row.ip_location?.location || '未知' }}
+      </template>
+    </el-table-column>
+    <el-table-column label="DNS解析IP" prop="dns_ip" width="160"></el-table-column>
+  </el-table>
+
+  <el-pagination
+    layout="prev, pager, next"
+    :total="total"
+    :current-page="page"
+    :page-size="pageSize"
+    @current-change="changePage"
+  ></el-pagination>
+</div>
+
+<script>
+const { createApp, ref, onMounted } = Vue;
+
+createApp({
+  setup() {
+    const dateRange = ref([]);
+    const statList = ref([]);
+    const page = ref(1);
+    const pageSize = ref(50);
+    const total = ref(0);
+    const quickRange = ref('');
+    let chart = null;
+
+    function resetForm() {
+      dateRange.value = [];
+      quickRange.value = '';
+      page.value = 1;
+      loadStat();
+    }
+
+    function applyQuickRange(value) {
+      const now = new Date();
+      let start = new Date();
+      switch (value) {
+        case 'today': start = now; break;
+        case 'yesterday': start.setDate(now.getDate() - 1); now.setDate(now.getDate() - 1); break;
+        case 'last3': start.setDate(now.getDate() - 2); break;
+        case 'last7': start.setDate(now.getDate() - 6); break;
+        case 'last30': start.setDate(now.getDate() - 29); break;
+        case 'last90': start.setDate(now.getDate() - 89); break;
+        case 'last180': start.setDate(now.getDate() - 179); break;
+      }
+
+      const format = (d) => d.toISOString().split('T')[0];
+      dateRange.value = [format(start), format(now)];
+    }
+
+    async function loadStat() {
+      const params = {
+        page: page.value,
+        pageSize: pageSize.value
+      };
+
+      if (dateRange.value.length === 2) {
+        params.start = dateRange.value[0] + ' 00:00:00';
+        params.end = dateRange.value[1] + ' 23:59:59';
+      }
+
+      const res = await fetch('/api/index.php?module=dns&method=dns_anomaly_list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params)
+      });
+
+      const json = await res.json();
+      if (json.code === 200) {
+        statList.value = json.data.list;
+        total.value = json.data.total;
+        updateMap(json.data.list);
+      }
+    }
+
+    function updateMap(list) {
+      const regionSet = new Set();
+    
+      list.forEach(item => {
+        const region = item.ip_location?.region || '';
+        if (region) {
+          const clean = region.replace(/省|市|自治区|特别行政区/g, '');
+          regionSet.add(clean);
+        }
+      });
+    
+      const mapData = Array.from(regionSet).map(name => ({
+        name: name,
+        value: 1,
+        itemStyle: {
+          areaColor: '#e03b3b'
+        }
+      }));
+    
+      const option = {
+        tooltip: { trigger: 'item' },
+        series: [{
+          name: '屏蔽区域',
+          type: 'map',
+          map: 'china',
+          label: { show: true },
+          data: mapData,
+          itemStyle: {
+            borderColor: '#ccc',
+            borderWidth: 1
+          }
+        }]
+      };
+    
+      if (!chart) {
+        chart = echarts.init(document.getElementById('mapChart'));
+      }
+      chart.setOption(option);
+    }
+
+
+    function changePage(p) {
+      page.value = p;
+      loadStat();
+    }
+
+    onMounted(() => {
+      loadStat();
+    });
+
+    return {
+      dateRange,
+      statList,
+      loadStat,
+      page,
+      pageSize,
+      total,
+      changePage,
+      quickRange,
+      applyQuickRange,
+      resetForm
+    };
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

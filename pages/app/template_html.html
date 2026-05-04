@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>HTML模板管理</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ace.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ext-language_tools.min.js"></script>
+  <style>
+    .custom-dialog .el-dialog__body {
+      display: flex;
+      flex-direction: column;
+      padding: 20px;
+      height: 600px;
+    }
+    .dialog-fullscreen .el-dialog__body {
+      height: calc(100vh - 110px);
+    }
+    .ace-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    #html-editor {
+      flex: 1;
+      width: 100%;
+    }
+  </style>
+</head>
+<body>
+  <div id="app" style="padding: 20px">
+    <el-alert title="管理系统内HTML模板，可用于不同场景的自定义展示" type="success" style="margin-bottom: 20px"></el-alert>
+
+    <div style="margin-bottom: 20px; display: flex; align-items: center; gap: 10px">
+      <el-input v-model="search.title" placeholder="标题关键字" style="width: 200px"></el-input>
+      <el-input v-model="search.remark" placeholder="备注关键字" style="width: 200px"></el-input>
+      <el-input v-model="search.html" placeholder="HTML关键字" style="width: 200px"></el-input>
+      <el-button type="primary" @click="loadData">搜索</el-button>
+      <el-button @click="resetSearch">重置</el-button>
+      <el-button type="success" @click="openAddDialog">添加模板</el-button>
+    </div>
+
+    <el-table :data="list" border style="width: 100%">
+      <el-table-column prop="id" label="ID" width="80"></el-table-column>
+      <el-table-column prop="title" label="标题"></el-table-column>
+      <el-table-column prop="remark" label="备注"></el-table-column>
+      <el-table-column label="启用" width="100">
+        <template #default="scope">
+          <el-tag :type="scope.row.enable == 1 ? 'success' : 'info'">{{ scope.row.enable == 1 ? '是' : '否' }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="created_at" label="创建时间" width="180"></el-table-column>
+      <el-table-column label="操作" width="220">
+        <template #default="scope">
+          <el-button size="small" type="primary" @click="editRow(scope.row)">编辑</el-button>
+          <el-button size="small" type="warning" @click="previewHtml(scope.row.html)">预览</el-button>
+          <el-button size="small" type="danger" @click="deleteRow(scope.row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <div style="margin-top: 20px; text-align: right">
+      <el-pagination
+        background
+        layout="total, prev, pager, next"
+        :total="total"
+        :page-size="limit"
+        :current-page="page"
+        @current-change="pageChange">
+      </el-pagination>
+    </div>
+
+    <!-- 新增/编辑弹窗 -->
+    <el-dialog v-model="dialogVisible"
+      :title="editMode ? '编辑模板' : '添加模板'"
+      width="800px"
+      :fullscreen="dialogFullscreen"
+      :class="['custom-dialog', dialogFullscreen ? 'dialog-fullscreen' : '']">
+      <template #header>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span>{{ editMode ? '编辑模板' : '添加模板' }}</span>
+          <el-button size="small" @click="dialogFullscreen = !dialogFullscreen">
+            {{ dialogFullscreen ? '还原' : '最大化' }}
+          </el-button>
+        </div>
+      </template>
+
+      <el-form :model="form" label-width="100px" class="ace-container">
+        <el-form-item label="标题">
+          <el-input v-model="form.title"></el-input>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="form.remark"></el-input>
+        </el-form-item>
+        <el-form-item label="HTML代码" style="flex:1">
+          <div id="html-editor" style="height: 100%; border: 1px solid #ccc; border-radius: 4px;"></div>
+        </el-form-item>
+        <el-form-item label="预览图地址">
+          <el-input v-model="form.imageUrl"></el-input>
+        </el-form-item>
+        <el-form-item label="启用">
+          <el-switch v-model="form.enable"></el-switch>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="dialogVisible = false">取消</el-button>
+          <el-button type="warning" @click="handlePreview">预览</el-button>
+          <el-button type="primary" @click="submitForm">保存</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <!-- 预览弹窗 -->
+    <el-dialog v-model="previewDialogVisible" title="HTML预览" width="380px">
+      <div style="display: flex; justify-content: center;">
+        <div
+          style="
+            position: relative;
+            width: 360px;
+            aspect-ratio: 9 / 16;
+            background-image: url('/images/phone-frame.jpg');
+            background-size: cover;
+            background-position: center;
+            border-radius: 12px;
+            overflow: hidden;
+          "
+        >
+          <iframe
+            v-if="previewContent"
+            :srcdoc="previewContent"
+            style="
+              position: absolute;
+              top: 0;
+              left: 0;
+              width: 100%;
+              height: 100%;
+              border: none;
+              background-color: transparent;
+            "
+          ></iframe>
+        </div>
+      </div>
+    </el-dialog>
+  </div>
+
+  <script>
+    const { createApp, ref, reactive, onMounted, nextTick, watch } = Vue;
+    createApp({
+      setup() {
+        const list = ref([]);
+        const page = ref(1);
+        const limit = ref(20);
+        const total = ref(0);
+        const search = reactive({ title: '', remark: '', html: '' });
+
+        const dialogVisible = ref(false);
+        const dialogFullscreen = ref(false);
+        const editMode = ref(false);
+        const form = reactive({ id: null, title: '', remark: '', html: '', imageUrl: '', enable: false });
+
+        // 预览相关
+        const previewDialogVisible = ref(false);
+        const previewContent = ref('');
+
+        let editor = null;
+
+        async function loadData() {
+          const res = await fetch('/api/index.php?module=template_html&method=getTemplateHtmlList', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ page: page.value, limit: limit.value, ...search })
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            list.value = json.data.list;
+            total.value = json.data.total;
+          }
+        }
+
+        function resetSearch() {
+          Object.assign(search, { title: '', remark: '', html: '' });
+          loadData();
+        }
+
+        function pageChange(p) {
+          page.value = p;
+          loadData();
+        }
+
+        function openAddDialog() {
+          Object.assign(form, { id: null, title: '', remark: '', html: '', imageUrl: '', enable: false });
+          dialogVisible.value = true;
+          editMode.value = false;
+          nextTick(() => { if (editor) editor.setValue('', -1); });
+        }
+
+        /*function editRow(row) {
+          Object.assign(form, { ...row, enable: row.enable == 1 });
+          dialogVisible.value = true;
+          editMode.value = true;
+        }*/
+        function editRow(row) {
+          // 先完整赋值 form
+          Object.assign(form, {
+            id: row.id,
+            title: row.title,
+            remark: row.remark,
+            html: row.html,
+            imageUrl: row.imageUrl,
+            enable: row.enable == 1
+          });
+        
+          editMode.value = true;
+          dialogVisible.value = true;
+        
+          // ⭐ 关键：如果 editor 已存在，立刻同步
+          nextTick(() => {
+            if (editor) {
+              editor.setValue(form.html || '', -1);
+            }
+          });
+        }
+
+
+        // 列表预览
+        function previewHtml(html) {
+          previewContent.value = html;
+          previewDialogVisible.value = true;
+        }
+
+        // 编辑弹窗内预览
+        function handlePreview() {
+          previewContent.value = form.html;
+          previewDialogVisible.value = true;
+        }
+
+        async function submitForm() {
+          const method = editMode.value ? 'updateTemplateHtml' : 'addTemplateHtml';
+          const res = await fetch(`/api/index.php?module=template_html&method=${method}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(form)
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('保存成功');
+            dialogVisible.value = false;
+            loadData();
+          } else {
+            ElementPlus.ElMessage.error(json.message || '保存失败');
+          }
+        }
+
+        async function deleteRow(row) {
+          await ElementPlus.ElMessageBox.confirm(`确认删除模板：${row.title}?`, '提示', { type: 'warning' });
+          const res = await fetch('/api/index.php?module=template_html&method=deleteTemplateHtml', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: row.id })
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('删除成功');
+            loadData();
+          } else {
+            ElementPlus.ElMessage.error(json.message || '删除失败');
+          }
+        }
+
+        watch([dialogVisible, dialogFullscreen], ([visible]) => {
+          if (visible) {
+            nextTick(() => {
+              if (!editor) {
+                editor = ace.edit('html-editor');
+                editor.setTheme('ace/theme/monokai');
+                editor.session.setMode('ace/mode/html');
+                editor.setOptions({
+                  fontSize: '14px',
+                  showPrintMargin: false,
+                  wrap: true,
+                  tabSize: 2,
+                  useSoftTabs: true,
+                  highlightActiveLine: true,
+                  enableLiveAutocompletion: true,
+                  enableBasicAutocompletion: true
+                });
+                editor.session.on('change', () => {
+                  form.html = editor.getValue();
+                });
+              }
+              editor.setValue(form.html || '', -1);
+              editor.resize();
+              editor.focus();
+            });
+          }
+        });
+
+        onMounted(loadData);
+
+        return {
+          list, page, limit, total, search,
+          dialogVisible, dialogFullscreen, editMode, form,
+          previewDialogVisible, previewContent,
+          loadData, resetSearch, pageChange, openAddDialog, editRow,
+          previewHtml, handlePreview, submitForm, deleteRow
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

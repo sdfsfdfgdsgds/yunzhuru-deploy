@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>应用访问统计</title>
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+</head>
+<body>
+<div id="app" style="padding: 20px">
+  <el-alert title="访问统计说明" show-icon style="margin-bottom: 20px"
+    description="默认查询为当天数据，可按 UID、应用 ID、应用名称、时间范围等进行筛选。">
+  </el-alert>
+
+  <!-- 搜索区域 -->
+  <div style="display: flex; gap: 10px; margin-bottom: 20px; align-items: center; flex-wrap: wrap;">
+
+    <!-- 输入 UID -->
+    <el-input v-model="uid" placeholder="用户UID" style="width: 150px;"></el-input>
+
+    <!-- 输入 应用ID -->
+    <el-input v-model="inputApkId" placeholder="应用ID" style="width: 150px;"></el-input>
+
+    <!-- 输入 应用名称 -->
+    <el-input v-model="inputName" placeholder="应用名称" style="width: 180px;"></el-input>
+
+    <!-- 排序方式 -->
+    <el-select v-model="sort" placeholder="排序方式" style="width: 150px">
+      <el-option label="默认排序" value="0"></el-option>
+      <el-option label="按 IP 数" value="1"></el-option>
+      <el-option label="按设备数" value="2"></el-option>
+      <el-option label="按访问数" value="3"></el-option>
+    </el-select>
+
+    <!-- 快速时间选择 -->
+    <el-select v-model="quickRange" placeholder="快速选择" style="width: 150px" @change="applyQuickRange">
+      <el-option label="今天" value="today"></el-option>
+      <el-option label="昨天" value="yesterday"></el-option>
+      <el-option label="近3天" value="last3"></el-option>
+      <el-option label="近1周" value="last7"></el-option>
+      <el-option label="近1月" value="last30"></el-option>
+      <el-option label="近3月" value="last90"></el-option>
+      <el-option label="近6月" value="last180"></el-option>
+    </el-select>
+
+    <!-- 日期范围 -->
+    <el-date-picker
+      v-model="dateRange"
+      type="daterange"
+      range-separator="至"
+      start-placeholder="开始日期"
+      end-placeholder="结束日期"
+      format="YYYY-MM-DD"
+      value-format="YYYY-MM-DD"
+    ></el-date-picker>
+
+    <el-button type="primary" @click="loadStat">查询</el-button>
+    <el-button @click="resetForm">重置</el-button>
+  </div>
+
+  <!-- 表格 -->
+  <el-table :data="statList" border style="width: 100%; margin-bottom: 20px">
+    <el-table-column label="应用ID" prop="apk_id" width="100"></el-table-column>
+
+    <el-table-column label="图标" width="60">
+      <template #default="scope">
+        <img
+          :src="`/icon.php?id=${scope.row.apk_id}`"
+          style="width: 32px; height: 32px; object-fit: contain; border-radius: 6px;"
+          alt="icon"
+        />
+      </template>
+    </el-table-column>
+
+    <el-table-column label="应用名称" prop="apk_name"></el-table-column>
+    <el-table-column label="访问IP数" prop="ip_count" width="120"></el-table-column>
+    <el-table-column label="设备数" prop="device_count" width="120"></el-table-column>
+    <el-table-column label="访问总次数" prop="total_visits" width="150"></el-table-column>
+  </el-table>
+
+  <el-pagination
+    layout="prev, pager, next"
+    :total="total"
+    :current-page="page"
+    :page-size="pageSize"
+    @current-change="changePage">
+  </el-pagination>
+</div>
+
+<script>
+const { createApp, ref, onMounted } = Vue;
+
+createApp({
+  setup() {
+    /* 数据模型 */
+    const statList = ref([]);
+    const page = ref(1);
+    const pageSize = ref(50);
+    const total = ref(0);
+
+    const uid = ref("");            // 新增：UID 查询
+    const inputApkId = ref("");     // 新增：应用 ID 查询
+    const inputName = ref("");      // 新增：名称模糊查询
+    const sort = ref("0");          // 新增：排序方式查询
+
+    const dateRange = ref([]);
+    const quickRange = ref("");
+
+    /* 重置 */
+    function resetForm() {
+      uid.value = "";
+      inputApkId.value = "";
+      inputName.value = "";
+      sort.value = "0";
+      dateRange.value = [];
+      quickRange.value = "";
+      page.value = 1;
+      loadStat();
+    }
+
+    /* 快速时间选择 */
+    function applyQuickRange(value) {
+      const now = new Date();
+      let start = new Date();
+      switch (value) {
+        case 'today': start = now; break;
+        case 'yesterday': start = new Date(now); start.setDate(now.getDate() - 1); now.setDate(now.getDate() - 1); break;
+        case 'last3': start.setDate(now.getDate() - 2); break;
+        case 'last7': start.setDate(now.getDate() - 6); break;
+        case 'last30': start.setDate(now.getDate() - 29); break;
+        case 'last90': start.setDate(now.getDate() - 89); break;
+        case 'last180': start.setDate(now.getDate() - 179); break;
+      }
+      const f = (d) => d.toISOString().split("T")[0];
+      dateRange.value = [f(start), f(now)];
+    }
+
+    /* 查询接口 */
+    async function loadStat() {
+      const params = {
+        page: page.value,
+        pageSize: pageSize.value,
+        sort: sort.value
+      };
+
+      if (uid.value) params.uid = uid.value;
+      if (inputApkId.value) params.apk_id = inputApkId.value;
+      if (inputName.value) params.name = inputName.value;
+
+      if (dateRange.value.length === 2) {
+        params.start = dateRange.value[0] + " 00:00:00";
+        params.end = dateRange.value[1] + " 23:59:59";
+      }
+
+      const res = await fetch("/api/index.php?module=stat&method=apk_request_stat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(params)
+      });
+
+      const json = await res.json();
+      if (json.code === 200) {
+        statList.value = json.data.list;
+        total.value = json.data.total;
+      }
+    }
+
+    /* 翻页 */
+    function changePage(p) {
+      page.value = p;
+      loadStat();
+    }
+
+    onMounted(() => {
+      loadStat();
+    });
+
+    return {
+      statList, page, pageSize, total,
+      uid, inputApkId, inputName, sort,
+      dateRange, quickRange,
+      applyQuickRange, resetForm, loadStat, changePage
+    };
+  }
+}).use(ElementPlus).mount("#app");
+</script>
+</body>
+</html>

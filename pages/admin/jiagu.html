@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>加固特征管理</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/config.js"></script>
+  <style>
+    body { padding: 20px; }
+    .toolbar { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+    .search-bar { display: flex; gap: 10px; align-items: center; }
+    .note-ellipsis { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    textarea { width: 100%; resize: vertical; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div class="toolbar">
+    <div class="search-bar">
+      <el-input v-model="query.type" placeholder="按加固类型搜索" clearable @keyup.enter="search" style="width: 200px;"></el-input>
+      <el-select v-model="query.detection" placeholder="检测类型" clearable style="width: 120px;">
+          <el-option label="上传检测" :value="0"></el-option>
+          <el-option label="注入检测" :value="1"></el-option>
+        </el-select>
+      <el-input v-model="query.keyword" placeholder="按关键字搜索" clearable @keyup.enter="search" style="width: 200px;"></el-input>
+      <el-button type="primary" @click="search">搜索</el-button>
+      <el-button @click="resetSearch">重置</el-button>
+    </div>
+    <div>
+      <el-button type="primary" @click="openImport">一键导入规则</el-button>
+      <el-button type="primary" @click="openCreate">新增加固特征</el-button>
+    </div>
+  </div>
+
+  <el-table :data="list" border style="width: 100%">
+    <el-table-column label="ID" prop="id" width="70"></el-table-column>
+    <el-table-column label="加固壳名称" prop="type" min-width="120"></el-table-column>
+    <el-table-column label="检测类型" width="100">
+      <template #default="scope">
+        <el-tag :type="scope.row.detection == 1 ? 'success' : 'info'">
+          {{ scope.row.detection == 1 ? '注入检测' : '上传检测' }}
+        </el-tag>
+      </template>
+    </el-table-column>
+    <el-table-column label="命中提示信息" min-width="250">
+      <template #default="scope">
+        <span class="note-ellipsis" :title="scope.row.message || ''">{{ scope.row.message || '' }}</span>
+      </template>
+    </el-table-column>
+    <el-table-column label="操作" width="240" fixed="right">
+      <template #default="scope">
+        <el-button size="small" @click="openEdit(scope.row)">编辑</el-button>
+        <el-button size="small" @click="openKeyword(scope.row)">关键字</el-button>
+        <el-button size="small" type="danger" @click="confirmDelete(scope.row)">删除</el-button>
+      </template>
+    </el-table-column>
+  </el-table>
+
+  <el-pagination
+    v-if="pagination.total > 0"
+    style="margin-top: 20px; text-align: right"
+    background
+    layout="total, prev, pager, next, jumper"
+    :current-page="query.page"
+    :page-size="query.page_size"
+    :total="pagination.total"
+    @current-change="handlePageChange">
+  </el-pagination>
+
+  <!-- 新增/编辑规则弹窗 -->
+  <el-dialog v-model="showEdit" :title="isCreate ? '新增加固特征' : '编辑加固特征'" width="600px">
+    <el-form :model="form" label-width="100px">
+      <el-form-item label="加固壳名称">
+        <el-input v-model="form.type" placeholder="请输入加固壳名称"></el-input>
+      </el-form-item>
+      <el-form-item label="检测类型">
+        <el-select v-model="form.detection" placeholder="请选择">
+          <el-option label="上传检测(存在这些特征文件将会被禁止上传)" :value="0"></el-option>
+          <el-option label="注入检测(会展示在注入加固检测信息中)" :value="1"></el-option>
+        </el-select>
+      </el-form-item>
+      <el-form-item label="提示信息">
+        <el-input v-model="form.message" type="textarea" :rows="3" placeholder="命中规则后提示的信息"></el-input>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="showEdit = false">取消</el-button>
+      <el-button type="primary" @click="submitForm">{{ isCreate ? '新增' : '保存' }}</el-button>
+    </template>
+  </el-dialog>
+
+  <!-- 管理关键字弹窗 -->
+  <el-dialog v-model="showKeywords" :title="'管理关键字 - ' + currentRule.type" width="600px">
+    <div style="margin-bottom:10px;">
+      <el-input v-model="newKeyword" placeholder="请输入关键字(支持*，一个*代表一个字符)" style="width:70%;margin-right:10px;"></el-input>
+      <el-button type="primary" @click="addKeyword">添加关键字</el-button>
+    </div>
+    <el-table :data="keywords" border style="width:100%">
+      <el-table-column label="ID" prop="id" width="70"></el-table-column>
+      <el-table-column label="关键字" prop="keyword" min-width="200"></el-table-column>
+      <el-table-column label="操作" width="120">
+        <template #default="scope">
+          <el-button size="small" type="danger" @click="deleteKeyword(scope.row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+  </el-dialog>
+
+  <!-- 一键导入弹窗 -->
+  <el-dialog v-model="showImport" title="一键导入规则" width="600px">
+    <el-alert
+      title="每行一个规则，格式：加固名称|检测类型(0或1)|返回信息|关键字1,关键字2"
+      type="info"
+      show-icon
+      style="margin-bottom:10px;">
+    </el-alert>
+    <el-input
+      type="textarea"
+      v-model="importData"
+      :rows="10"
+      placeholder="请输入规则，每行一个"></el-input>
+    <template #footer>
+      <el-button @click="showImport = false">取消</el-button>
+      <el-button type="primary" @click="submitImport">导入</el-button>
+    </template>
+  </el-dialog>
+</div>
+
+<script>
+const { createApp, ref, reactive, onMounted } = Vue;
+
+createApp({
+  setup() {
+    // 查询参数与分页
+    const query = reactive({ page: 1, page_size: 20, type: '', keyword: '', detection: '' });
+    const pagination = reactive({ total: 0, pages: 0 });
+
+    // 列表数据
+    const list = ref([]);
+
+    // 编辑/新增
+    const showEdit = ref(false);
+    const isCreate = ref(false);
+    const form = reactive({
+      id: '',
+      type: '',
+      detection: 0,
+      message: ''
+    });
+
+    // 一键导入
+    const showImport = ref(false);
+    const importData = ref('');
+
+    // 关键字管理
+    const showKeywords = ref(false);
+    const keywords = ref([]);
+    const currentRule = reactive({ id: '', type: '' });
+    const newKeyword = ref('');
+
+    // 加载列表数据
+    async function loadData() {
+      try {
+        const res = await fetch('/api/index.php?module=jiagu&method=listRules', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+              page: query.page, 
+              limit: query.page_size,
+              type: query.type,
+              keyword: query.keyword,
+              detection: query.detection
+            })
+        });
+        const json = await res.json();
+        if (json.code === 200) {
+          const data = json.data || {};
+          list.value = data.list || [];
+          pagination.total = data.total || 0;
+          pagination.pages = data.pages || 0;
+          query.page = data.page || query.page;
+          query.page_size = data.limit || query.page_size;
+        } else {
+          ElementPlus.ElMessage.error(json.message || '加载失败');
+        }
+      } catch (e) {
+        ElementPlus.ElMessage.error('请求异常');
+      }
+    }
+
+    function handlePageChange(p) {
+      query.page = p;
+      loadData();
+    }
+
+    function search() {
+      query.page = 1;
+      loadData();
+    }
+
+    function resetSearch() {
+      query.type = '';
+      query.keyword = '';
+      query.detection = '';
+      search();
+    }
+
+    function resetForm() {
+      form.id = '';
+      form.type = '';
+      form.detection = 0;
+      form.message = '';
+    }
+
+    function openCreate() {
+      isCreate.value = true;
+      resetForm();
+      showEdit.value = true;
+    }
+
+    function openEdit(row) {
+      isCreate.value = false;
+      form.id = row.id;
+      form.type = row.type;
+      form.detection = row.detection;
+      form.message = row.message || '';
+      showEdit.value = true;
+    }
+
+    async function submitForm() {
+      try {
+        const url = '/api/index.php?module=jiagu&method=saveRule';
+        const payload = Object.assign({}, form);
+        if (isCreate.value) delete payload.id;
+
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const json = await res.json();
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success(isCreate.value ? '新增成功' : '保存成功');
+          showEdit.value = false;
+          loadData();
+        } else {
+          ElementPlus.ElMessage.error(json.message || (isCreate.value ? '新增失败' : '保存失败'));
+        }
+      } catch (e) {
+        ElementPlus.ElMessage.error('请求异常');
+      }
+    }
+
+    async function confirmDelete(row) {
+      try {
+        await ElementPlus.ElMessageBox.confirm('确定要删除该规则吗？', '提示', { type: 'warning' });
+      } catch (_) {
+        return;
+      }
+      try {
+        const res = await fetch('/api/index.php?module=jiagu&method=deleteRule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: row.id })
+        });
+        const json = await res.json();
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success('删除成功');
+          if (list.value.length === 1 && query.page > 1) {
+            query.page = query.page - 1;
+          }
+          loadData();
+        } else {
+          ElementPlus.ElMessage.error(json.message || '删除失败');
+        }
+      } catch (e) {
+        ElementPlus.ElMessage.error('请求异常');
+      }
+    }
+
+    // 一键导入规则
+    function openImport() {
+      importData.value = '';
+      showImport.value = true;
+    }
+
+    async function submitImport() {
+      if (!importData.value.trim()) {
+        ElementPlus.ElMessage.warning('请输入规则内容');
+        return;
+      }
+      try {
+        const res = await fetch('/api/index.php?module=jiagu&method=addRulesBatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: importData.value })
+        });
+        const json = await res.json();
+        if (json.code === 200) {
+          const d = json.data || {};
+          ElementPlus.ElMessageBox.alert(
+            `成功规则：${d.success_rules || 0} 条<br>
+             成功关键字：${d.success_keywords || 0} 条<br>
+             失败规则：${d.fail_rules || 0} 条<br>
+             失败关键字：${d.fail_keywords || 0} 条`,
+            '导入完成',
+            { dangerouslyUseHTMLString: true }
+          );
+          showImport.value = false;
+          loadData();
+        } else {
+          ElementPlus.ElMessage.error(json.message || '导入失败');
+        }
+      } catch (e) {
+        ElementPlus.ElMessage.error('请求异常');
+      }
+    }
+
+    // 关键字管理
+    async function openKeyword(row) {
+      currentRule.id = row.id;
+      currentRule.type = row.type;
+      newKeyword.value = '';
+      showKeywords.value = true;
+      await loadKeywords();
+    }
+
+    async function loadKeywords() {
+      const res = await fetch('/api/index.php?module=jiagu&method=listKeywords', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rule_id: currentRule.id })
+      });
+      const json = await res.json();
+      if (json.code === 200) {
+        keywords.value = json.data || [];
+      } else {
+        ElementPlus.ElMessage.error(json.message || '加载关键字失败');
+      }
+    }
+
+    async function addKeyword() {
+      if (!newKeyword.value) {
+        ElementPlus.ElMessage.warning('请输入关键字');
+        return;
+      }
+      const res = await fetch('/api/index.php?module=jiagu&method=addKeyword', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rule_id: currentRule.id, keyword: newKeyword.value })
+      });
+      const json = await res.json();
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success('添加成功');
+        newKeyword.value = '';
+        await loadKeywords();
+      } else {
+        ElementPlus.ElMessage.error(json.message || '添加失败');
+      }
+    }
+
+    async function deleteKeyword(row) {
+      const res = await fetch('/api/index.php?module=jiagu&method=deleteKeyword', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: row.id })
+      });
+      const json = await res.json();
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success('删除成功');
+        await loadKeywords();
+      } else {
+        ElementPlus.ElMessage.error(json.message || '删除失败');
+      }
+    }
+
+    onMounted(loadData);
+
+    return {
+      query, pagination, list,
+      showEdit, isCreate, form,
+      showImport, importData,
+      showKeywords, keywords, currentRule, newKeyword,
+      loadData, handlePageChange,
+      search, resetSearch,
+      openCreate, openEdit, submitForm, confirmDelete,
+      openImport, submitImport,
+      openKeyword, loadKeywords, addKeyword, deleteKeyword
+    };
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

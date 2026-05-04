@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>可疑注入特征</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="/element/css/index.css" />
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/config.js"></script>
+  <style>
+    body { padding: 20px; }
+    .toolbar { margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <el-alert
+      title="添加后，该特征就会在客户端进行注入检测或可疑代码去除的时候被标记出来，有方法名称的代表是invoke注入，没有方法名称的代表是入口链路注入"
+      type="error"
+      style="margin-bottom: 20px;">
+    </el-alert>
+
+    <div class="toolbar">
+      <el-button type="primary" @click="openAdd">添加特征</el-button>
+    </div>
+
+    <el-table :data="list" border style="width: 100%">
+      <el-table-column prop="id" label="ID" width="60"></el-table-column>
+      <el-table-column prop="className" label="类名"></el-table-column>
+      <el-table-column prop="methodName" label="方法名"></el-table-column>
+      <el-table-column prop="message" label="特征名称"></el-table-column>
+      <el-table-column prop="remark" label="备注"></el-table-column>
+      <el-table-column prop="exit" label="移除exit" width="100">
+        <template #default="scope">
+          <el-tag :type="scope.row.exit == 1 ? 'success' : 'info'">
+            {{ scope.row.exit == 1 ? '开' : '关' }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="upload_time" label="创建时间" width="180"></el-table-column>
+      <el-table-column label="操作" width="160">
+        <template #default="scope">
+          <el-button size="small" @click="openEdit(scope.row)">编辑</el-button>
+          <el-button size="small" type="danger" @click="deleteRow(scope.row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <el-pagination
+      style="margin-top: 20px"
+      layout="total, prev, pager, next"
+      :total="total"
+      :page-size="limit"
+      :current-page="page"
+      @current-change="changePage"
+    ></el-pagination>
+
+    <!-- 弹窗 -->
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="500px">
+      <el-form :model="form" label-width="100px">
+        <el-form-item label="类名">
+          <el-input v-model="form.className"></el-input>
+        </el-form-item>
+
+        <el-form-item label="方法名">
+          <el-input v-model="form.methodName"></el-input>
+        </el-form-item>
+
+        <el-form-item label="特征名称">
+          <el-input v-model="form.message"></el-input>
+        </el-form-item>
+
+        <el-form-item label="备注">
+          <el-input v-model="form.remark"></el-input>
+        </el-form-item>
+
+        <!-- 新增 exit 开关 -->
+        <el-form-item label="移除exit">
+          <el-switch
+            v-model="form.exit"
+            :active-value="1"
+            :inactive-value="0"
+            active-text="开"
+            inactive-text="关"
+          />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitForm">提交</el-button>
+      </template>
+    </el-dialog>
+  </div>
+
+  <script>
+    const { createApp, ref, reactive, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const list = ref([]);
+        const page = ref(1);
+        const limit = ref(20);
+        const total = ref(0);
+        const dialogVisible = ref(false);
+        const dialogTitle = ref('');
+        const form = reactive({
+          id: null,
+          className: '',
+          methodName: '',
+          remark: '',
+          message: '',
+          exit: 0 // 1=开，0=关
+        });
+
+        function resetForm() {
+          form.id = null;
+          form.className = '';
+          form.methodName = '';
+          form.remark = '';
+          form.message = '';
+          form.exit = 0;
+        }
+
+        async function loadData() {
+          const res = await fetch(`/api/index.php?module=invoke&method=getinvoke`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ page: page.value, limit: limit.value })
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            list.value = json.data.list;
+            total.value = json.data.total;
+            limit.value = json.data.limit;
+            page.value = json.data.page;
+          } else {
+            ElementPlus.ElMessage.error(json.message || '加载失败');
+          }
+        }
+
+        function changePage(p) {
+          page.value = p;
+          loadData();
+        }
+
+        function openAdd() {
+          dialogTitle.value = '添加特征';
+          resetForm();
+          dialogVisible.value = true;
+        }
+
+        function openEdit(row) {
+          dialogTitle.value = '编辑特征';
+          form.id = row.id;
+          form.className = row.className;
+          form.methodName = row.methodName;
+          form.remark = row.remark;
+          form.message = row.message;
+          form.exit = row.exit ?? 0;
+          dialogVisible.value = true;
+        }
+
+        async function submitForm() {
+          if (!form.className) {
+            ElementPlus.ElMessage.warning('请填写类名');
+            return;
+          }
+
+          const url = form.id
+            ? `/api/index.php?module=invoke&method=updateinvoke`
+            : `/api/index.php?module=invoke&method=addinvoke`;
+
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(form)
+          });
+
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('保存成功');
+            dialogVisible.value = false;
+            loadData();
+          } else {
+            ElementPlus.ElMessage.error(json.message || '保存失败');
+          }
+        }
+
+        async function deleteRow(row) {
+          ElementPlus.ElMessageBox.confirm(`确认删除类名「${row.className}」吗？`, '提示', { type: 'warning' })
+            .then(async () => {
+              const res = await fetch(`/api/index.php?module=invoke&method=deleteinvoke`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: row.id })
+              });
+              const json = await res.json();
+              if (json.code === 200) {
+                ElementPlus.ElMessage.success('删除成功');
+                loadData();
+              } else {
+                ElementPlus.ElMessage.error(json.message || '删除失败');
+              }
+            }).catch(() => {});
+        }
+
+        onMounted(loadData);
+
+        return {
+          list,
+          page,
+          limit,
+          total,
+          dialogVisible,
+          dialogTitle,
+          form,
+          openAdd,
+          openEdit,
+          submitForm,
+          deleteRow,
+          changePage
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

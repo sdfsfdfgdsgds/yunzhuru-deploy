@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>注入任务管理</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/config.js"></script>
+  <style>
+    body { padding: 20px; }
+    .toolbar { margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <!-- 顶部提示条 -->
+    <el-alert
+      title="请在编译成功后自行下载保存安装包或一键转存到蓝奏云，服务器对于已编译成功的安装包最多保留3天(或不定期人工清理)，超时自动删除"
+      type="success"
+      show-icon
+      style="margin-bottom: 20px;">
+    </el-alert>
+    <el-alert
+      title="编译完成后如果不能正常运行，可以点击【编辑】更换注入模式后，点击重试，一些flutter框架的应用，推荐使用链路注入模式"
+      type="error"
+      style="margin-bottom: 20px;">
+    </el-alert>
+    <el-alert
+      title="云实机检测，会有一台真实的手机自动运行注入后的应用，并检测是否闪退。设备系统为安卓14，澎湃OS系统，设备为红米K40，未Root，检测运行时间为5秒"
+      type="warning"
+      style="margin-bottom: 20px;">
+    </el-alert>
+    
+    <el-form :inline="true" :model="query" class="toolbar">
+      <el-form-item label="状态">
+        <el-input v-model="query.status_text" placeholder="如 失败、等待处理"></el-input>
+      </el-form-item>
+      <el-form-item>
+        <el-button type="primary" @click="loadData">查询</el-button>
+        <el-button @click="resetForm">重置</el-button>
+        <el-switch v-model="autoRefresh" active-text="自动刷新" inactive-text="" style="margin-left: 15px;"></el-switch>
+      </el-form-item>
+    </el-form>
+
+    <el-table :data="taskList" border style="width: 100%">
+      <el-table-column label="ID" prop="id" width="60"></el-table-column>
+      <el-table-column label="应用ID" prop="apk_id" width="70"></el-table-column>
+      <el-table-column label="UID" prop="user_id" width="60"></el-table-column>
+      <el-table-column label="图标" width="60">
+          <template #default="scope">
+            <img
+              :src="`/icon.php?id=${scope.row.apk_id}`"
+              style="width: 32px; height: 32px; object-fit: contain; border-radius: 6px;"
+              alt="icon"
+            />
+          </template>
+      </el-table-column>
+      
+      
+      <el-table-column label="应用">
+        <template #default="scope">
+          <div>{{ scope.row.apk_name }}<!--<br>{{ scope.row.apk_package }}--></div>
+        </template>
+      </el-table-column>
+      <el-table-column label="模板" width="90">
+        <template #default="scope">
+          <div>{{ scope.row.template_name }}<br>{{ scope.row.template_version }}</div>
+        </template>
+      </el-table-column>
+      <el-table-column label="签名" prop="sign_name"></el-table-column>
+      <el-table-column label="大小" prop="size" :formatter="formatSize" width="90"></el-table-column>
+      <el-table-column label="时间"  width="230">
+        <template #default="scope">
+          <div>创建：{{ scope.row.created_at }}</div>
+          <div v-if="scope.row.completed_at">完成：{{ scope.row.completed_at }}</div>
+        </template>
+      </el-table-column>
+        <el-table-column label="备注" prop="remark"></el-table-column>
+        <el-table-column label="注入点" prop="mode" width="90" :formatter="formatMode"></el-table-column>
+        <el-table-column label="加固检测" prop="encry" width="180"></el-table-column>
+        <el-table-column label="状态" prop="status_text" width="90"></el-table-column>
+
+        <!-- 云实机检测列放在状态之后 -->
+        <el-table-column label="云实机检测" prop="debugrun" width="100">
+          <template #default="scope">
+            <el-tag v-if="scope.row.debugrun == 0" type="info">待测试</el-tag>
+            <el-tag v-else-if="scope.row.debugrun == 1" type="success">通过</el-tag>
+            <el-tag v-else-if="scope.row.debugrun == 2" type="danger">未通过</el-tag>
+            <el-tag v-else-if="scope.row.debugrun == 3" type="warning">检测中</el-tag>
+            <el-tag v-else type="warning">未知</el-tag>
+          </template>
+        </el-table-column>
+        
+        <!-- 提示列 -->
+        <el-table-column label="提示">
+          <template #default="scope">
+            <!-- 如果 debugrun 为 1，则显示查看截图按钮 -->
+            <template v-if="scope.row.debugrun == 1">
+              <el-button
+                size="small"
+                type="primary"
+                @click="openInNewTab(scope.row.debugimg)">
+                查看截图
+              </el-button>
+            </template>
+        
+            <!-- 失败提示 -->
+            <template v-else-if="scope.row.status_text.includes('失败')">
+              <el-button
+                size="small"
+                type="danger"
+                @click="showStatusInfo(scope.row.status_info)">
+                查看失败原因
+              </el-button>
+            </template>
+        
+            <!-- 其他正常信息 -->
+            <template v-else>
+              <div style="white-space: pre-wrap;">{{ scope.row.status_info }}</div>
+            </template>
+          </template>
+        </el-table-column>
+
+        
+        <el-table-column label="操作" width="260">
+          <template #default="scope">
+            <el-row gutter="5" style="margin-bottom: 5px;">
+              <el-col :span="8">
+                <el-button size="small" @click="editRemark(scope.row)">编辑任务</el-button>
+              </el-col>
+              <el-col :span="8">
+                <el-button
+                  size="small"
+                  type="warning"
+                  v-if="scope.row.status_text.includes('失败') || scope.row.status_text.includes('成功')"
+                  @click="retryTask(scope.row)">
+                  重新注入
+                </el-button>
+              </el-col>
+              <el-col :span="8">
+                <el-button size="small" type="danger" @click="deleteTask(scope.row)">删除任务</el-button>
+              </el-col>
+            </el-row>
+            <el-row gutter="5">
+              
+              
+              <el-col :span="8" v-if="scope.row.status_text === '编译成功' && scope.row.injected_apk !== ''">
+                <el-button size="small" type="primary" @click="openLanzouDialog(scope.row)">转存蓝奏</el-button>
+              </el-col>
+              
+              <el-col :span="8" v-if="scope.row.status_text === '编译成功' && scope.row.injected_apk !== ''">
+                <el-button size="small" type="info" @click="debugrunTask(scope.row)">云端运行</el-button>
+              </el-col>
+              
+              <el-col :span="8" v-if="scope.row.status_text === '编译成功' && scope.row.injected_apk !== ''">
+                <el-button size="small" type="success" @click="downloadInjected(scope.row)">下载文件</el-button>
+              </el-col>
+
+              <el-col :span="8" v-if="scope.row.status_text === '编译成功' && scope.row.injected_apk && scope.row.injected_apk !== ''">
+                <el-button size="small" type="warning" @click="uploadToS3(scope.row)">上传S3</el-button>
+              </el-col>
+              
+            </el-row>
+          </template>
+        </el-table-column>
+
+    </el-table>
+
+    <el-pagination
+      v-if="total > 0"
+      style="margin-top: 20px; text-align: right"
+      background
+      layout="total, prev, pager, next, jumper"
+      :current-page="query.page"
+      :page-size="query.limit"
+      :total="total"
+      @current-change="handlePageChange">
+    </el-pagination>
+
+    <!-- 备注编辑弹窗 -->
+    <el-dialog title="编辑" v-model="dialogVisible" width="600px">
+        <div style="margin-top: 20px;">
+            <el-form-item label="注入模式">
+              <el-select v-model="editForm.mode" placeholder="请选择注入模式">
+                <el-option label="启动入口注入.反射(默认)" value="3"></el-option>
+                <el-option label="基类链路注入(未加固应用使用最佳)" value="1"></el-option>
+                <el-option label="启动入口注入.继承(次推荐)" value="0"></el-option>
+                <el-option label="组件工厂注入(速度快,优先级高)" value="2"></el-option>
+                
+              </el-select>
+            </el-form-item>
+            <el-form-item label="设备码算法">
+              <el-select v-model="editForm.devices" placeholder="请选择设备码计算方式">
+                <el-option label="[默认]硬件信息(相同的手机会重复)" value="0"></el-option>
+                <el-option label="AndroidID(换签名证书会变)" value="1"></el-option>
+                
+              </el-select>
+            </el-form-item>
+            
+            <el-checkbox v-if="false" v-model="editForm.allowHttp">解除 HTTP 限制 (若远程dex或者应用中存在http访问,则需改勾选此项)</el-checkbox>
+            <el-checkbox v-model="editForm.process">进程隔离(沙盒类应用需要勾选此项)</el-checkbox>
+            <el-checkbox v-model="editForm.network">禁止无网络运行(若APP无网络，则会自动退出)</el-checkbox>
+            <el-checkbox v-model="editForm.vpncheck">禁止VPN环境(检测到VPN自动结束运行,防止抓包)</el-checkbox>
+            <el-checkbox v-model="editForm.launcher">开屏窗口替换 (模板141版本及以上推荐勾选)</el-checkbox>
+            <el-checkbox v-model="editForm.debug">debuggable (开启后可用于调试，部分 API 可用性增强)</el-checkbox>
+            <el-checkbox v-model="editForm.killsign">去除签名校验<span style="color:red;">(推荐用MT管理器手动去除再上传)</span></el-checkbox>
+            <el-checkbox v-if="true" v-model="editForm.killpath" :disabled="!editForm.killsign">去除签名校验加强版(会塞入源安装包,怕破解别勾)</el-checkbox>
+            <el-checkbox v-model="editForm.kill_Inject">铲除别人的云注入(可以将这个云注入👉<img src="/images/inject.png" style="width: 28px; height: 28px; vertical-align: middle; margin-right: 5px">直接铲掉)</el-checkbox>
+            <el-checkbox v-model="editForm.dexmerge">DEX合并 (减少dex数量,小概率闪退)</el-checkbox>
+            <el-checkbox v-model="editForm.jiagu">APK加固(可能会闪退,有需要才勾选勾选)</el-checkbox>
+            <el-checkbox v-model="editForm.confuse">合并apk包(用于对抗乱码混淆,一般不建议启用)</el-checkbox>
+            <el-checkbox v-model="editForm.fake">AndroidManifest.xml伪加密(安卓15+会无法安装)</el-checkbox>
+            
+            
+        </div>
+        
+      
+      <el-form>
+        <el-form-item label="备注信息">
+          <el-input v-model="editForm.remark"></el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitRemark">保存</el-button>
+      </template>
+    </el-dialog>
+    
+    <el-dialog title="提示内容" v-model="infoDialogVisible" width="500px">
+      <pre style="white-space:pre-wrap">{{ infoText }}</pre>
+      <template #footer>
+        <el-button @click="infoDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+    
+    <!-- 上传蓝奏弹窗 -->
+    <el-dialog v-model="lanzouDialogVisible" title="选择蓝奏云盘目录" width="430px">
+      
+      <!-- 提示信息 -->
+      <el-alert
+        title="不选择目录则会上传到根目录,点击前面小三角展开目录"
+        type="error"
+        style="margin-bottom: 10px;"
+        :closable="false"
+      ></el-alert>
+      <el-alert
+        title="如果无法获取到目录,请刷新页面"
+        type="info"
+        style="margin-bottom: 10px;"
+        :closable="false"
+      ></el-alert>
+    
+      <!-- 树形目录 -->
+      <el-tree
+        :data="lanzouDirTree"
+        :props="{ children: 'children', label: 'label' }"
+        lazy
+        :load="loadLanzouSubDirs"
+        :expand-on-click-node="false"
+        node-key="id"
+        highlight-current
+        @node-click="handleNodeClick"
+      >
+      </el-tree>
+    
+      <!-- 按钮区域 -->
+      <template #footer>
+        <el-button @click="lanzouDialogVisible = false">取消</el-button>
+        <el-button @click="clearLanzouSelection">上传到根目录</el-button>
+        <el-button type="primary" :loading="uploading" @click="confirmLanzouUpload">确定上传</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="qrDialogVisible" title="扫码下载" width="360px">
+      <div style="text-align: center;">
+        <p style="margin-bottom: 10px; color: #666;">
+          检测到您在电脑端下载，您可以使用手机扫码快速下载，也可以直接下载到电脑上
+        </p>
+        <img :src="qrImageUrl" style="width: 200px; height: 200px; margin-bottom: 10px;">
+        <p style="color: red; font-size: 14px; margin-bottom: 10px;">
+          若不能正常运行，请更换注入模式后重新注入
+        </p>
+        <el-button type="primary" @click="handleDirectDownload">直接下载</el-button>
+      </div>
+    </el-dialog>
+
+    <el-image-viewer
+      v-if="imageViewerVisible"
+      :url-list="imageList"
+      @close="imageViewerVisible = false"
+    ></el-image-viewer>
+    
+  </div>
+
+  <script>
+    const { createApp, ref, reactive, onMounted, watch } = Vue;
+
+    createApp({
+      setup() {
+        const query = reactive({
+          page: 1,
+          limit: 20,
+          status_text: ''
+        });
+
+        const taskList = ref([]);
+        const total = ref(0);
+
+        const dialogVisible = ref(false);
+        const editForm = reactive({
+          id: null,
+          remark: '',
+          mode: '0',
+          confuse: false,
+          process: false,
+          devices: '0',
+          allowHttp: false,
+          debug: false,
+          killsign: false,
+          killpath: false,
+          kill_Inject: false,
+          network: true,
+          jiagu: false,
+          fake: false,
+          vpncheck: false,
+          dexmerge: false,
+          launcher: false,
+        });
+        watch(() => editForm.killsign, (val) => {
+          if (!val) {
+            // 如果取消勾选 killsign，则取消勾选 killpath
+            editForm.killpath = false;
+          }
+        });
+        function formatSize(row) {
+          const sizeInMB = row.size / 1024 / 1024;
+          return sizeInMB.toFixed(2) + ' MB';
+        }
+        async function loadData() {
+          const res = await fetch('/api/index.php?module=app&method=getInjectTaskList', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(query)
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            taskList.value = json.data.list;
+            total.value = json.data.total;
+            query.page = json.data.page;
+          } else {
+            ElementPlus.ElMessage.error(json.message || '加载失败');
+          }
+        }
+function formatMode(row) {
+  const mode = String(row.mode);
+  if (mode === '0') return '入口注入.继承';
+  if (mode === '3') return '入口注入.反射';
+  if (mode === '1') return '链路注入';
+  if (mode === '2') return '工厂注入';
+  return '未知注入';
+}
+
+const imageViewerVisible = ref(false);
+const imageList = ref([]);
+
+//https打开方案
+/*function previewImage(url) {
+  if (!url) {
+    ElementPlus.ElMessage.warning('图片地址为空');
+    return;
+  }
+  const fullUrl = '/image.php?url=' + encodeURIComponent(url);
+  imageList.value = [fullUrl];
+  imageViewerVisible.value = true;
+}*/
+function previewImage(url) {
+  if (!url) {
+    ElementPlus.ElMessage.warning('图片地址为空');
+    return;
+  }
+  const encodedUrl = encodeURIComponent(url);
+  window.open('http://115.190.43.236/image.php?url=' + encodedUrl, '_blank');
+}
+        const openInNewTab = (url) => {
+            if (!url) {
+                ElementPlus.ElMessage.warning('链接地址为空');
+                return;
+              }
+            const a = document.createElement('a');
+            a.href = url;
+            a.target = '_blank';
+            a.rel = 'noreferrer';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        };
+        function resetForm() {
+          query.page = 1;
+          query.status_text = '';
+          loadData();
+        }
+
+        function handlePageChange(p) {
+          query.page = p;
+          loadData();
+        }
+
+        function editRemark(row) {
+          editForm.id = row.id;
+          editForm.remark = row.remark;
+          editForm.mode = String(row.mode ?? '0');
+          editForm.devices = String(row.devices ?? '0');
+          // 字符串转布尔
+          editForm.allowHttp = row.allowHttp == '1';
+          editForm.debug = row.debug == '1';
+          editForm.killsign = row.killsign == '1';
+          editForm.killpath = row.killpath == '1';
+          editForm.kill_Inject = row.kill_Inject == '1';
+          editForm.confuse = row.confuse == '1';
+          editForm.process = row.isMainProcess == '1';
+          editForm.network = row.network == '1';
+          editForm.jiagu = row.jiagu == '1';
+          editForm.fake = row.fake == '1';
+          editForm.vpncheck = row.vpncheck == '1';
+          editForm.dexmerge = row.dexmerge == '1';
+          editForm.launcher = row.launcher == '1';
+          dialogVisible.value = true;
+        }
+        /*async function downloadInjected(row) {
+          if (!row.injected_apk) {
+            ElementPlus.ElMessage.warning('文件路径不存在');
+            return;
+          }
+        
+          const confirm = await ElementPlus.ElMessageBox.confirm(
+            '您确定要下载这个注入后的应用吗？',
+            '提示',
+            { type: 'warning' }
+          ).catch(() => null);
+        
+          if (!confirm) return;
+        
+          const url = '/down.php?file=' + encodeURIComponent(row.injected_apk) + '&name=' + encodeURIComponent(row.apk_name);
+          window.open(url, '_blank');
+        }*/
+        const qrDialogVisible = ref(false);
+        const qrImageUrl = ref('');
+        const qrDownloadUrl = ref('');
+        // 上传到 S3 桶
+        async function uploadToS3(row) {
+          try {
+            await ElementPlus.ElMessageBox.confirm(
+              `确定将【${row.apk_name}】上传到 S3 桶？`, '上传确认', { type: 'info' }
+            );
+          } catch { return; }
+          try {
+            const res = await fetch('/api/?module=s3config&method=uploadTaskToS3', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ task_id: row.id })
+            });
+            const json = await res.json();
+            if (json.code === 200) {
+              ElementPlus.ElMessage.success(json.data || '上传已启动');
+            } else {
+              ElementPlus.ElMessage.error(json.message || '上传失败');
+            }
+          } catch (e) {
+            ElementPlus.ElMessage.error('请求失败：' + e.message);
+          }
+        }
+
+        async function downloadInjected(row) {
+          if (!row.injected_apk) {
+            ElementPlus.ElMessage.warning('文件路径不存在');
+            return;
+          }
+
+          const confirm = await ElementPlus.ElMessageBox.confirm(
+            `您确定要下载<span style="color: red">注入后</span>的【${row.apk_name}】吗？`,
+            '提示',
+            {
+              type: 'warning',
+              dangerouslyUseHTMLString: true
+            }
+          ).catch(() => null);
+        
+          if (!confirm) return;
+        
+          const fullUrl = location.origin + '/down.php?file=' +
+            encodeURIComponent(row.injected_apk) +
+            '&name=' + encodeURIComponent(row.apk_name);
+        
+          const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+        
+          if (isMobile) {
+            window.open(fullUrl, '_blank');
+          } else {
+            qrDownloadUrl.value = fullUrl;
+            qrImageUrl.value = '/qrcode.php?text=' + encodeURIComponent(fullUrl);
+            qrDialogVisible.value = true;
+          }
+        }
+        function handleDirectDownload() {
+          if (qrDownloadUrl.value) {
+            window.open(qrDownloadUrl.value, '_blank');
+          } else {
+            ElementPlus.ElMessage.error('下载链接无效');
+          }
+        }
+
+
+        async function submitRemark() {
+          const res = await fetch('/api/index.php?module=app&method=updateInjectTaskRemark', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(editForm)
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('更新成功');
+            dialogVisible.value = false;
+            loadData();
+          } else {
+            ElementPlus.ElMessage.error(json.message || '更新失败');
+          }
+        }
+
+        async function retryTask(row) {
+          const confirm = await ElementPlus.ElMessageBox.confirm('确认重试该任务？', '提示', { type: 'warning' }).catch(() => null);
+          if (!confirm) return;
+
+          const res = await fetch('/api/index.php?module=app&method=retryInjectTask', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: row.id })
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('已重置为等待处理');
+            loadData();
+          } else {
+            ElementPlus.ElMessage.error(json.message || '操作失败');
+          }
+        }
+
+        async function deleteTask(row) {
+          const confirm = await ElementPlus.ElMessageBox.confirm('确认删除该任务？', '警告', { type: 'warning' }).catch(() => null);
+          if (!confirm) return;
+
+          const res = await fetch('/api/index.php?module=app&method=deleteInjectTask', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: row.id })
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('任务已删除');
+            loadData();
+          } else {
+            ElementPlus.ElMessage.error(json.message || '删除失败');
+          }
+        }
+        
+        async function debugrunTask(row) {
+          const confirm = await ElementPlus.ElMessageBox.confirm('确定让云端帮忙运行调试？', '提示', {
+            type: 'info'
+          }).catch(() => null);
+          if (!confirm) return;
+        
+          const res = await fetch('/api/index.php?module=app&method=startInjectDebugTask', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: row.id })
+          });
+        
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('已提交云调试任务');
+            loadData(); // 重新加载任务列表
+          } else {
+            ElementPlus.ElMessage.error(json.message || '提交失败');
+          }
+        }
+        const infoDialogVisible = ref(false);
+        const infoText = ref('');
+        
+        function showStatusInfo(text) {
+          infoText.value = text || '无内容';
+          infoDialogVisible.value = true;
+        }
+        
+const lanzouDialogVisible = ref(false);
+const lanzouFolderTree = ref([]);
+const selectedFolderId = ref('');
+const selectedFolderLabel = ref('');
+const currentUploadTask = ref(null);
+const uploading = ref(false);
+
+const treeProps = {
+  label: 'name',
+  children: 'children',
+  isLeaf: (data) => false
+};
+function clearLanzouSelection() {
+  selectedFolderId.value = '';
+  selectedFolderLabel.value = '';
+  ElementPlus.ElMessage.success('已选中根目录');
+}
+async function openLanzouDialog(row) {
+  currentUploadTask.value = row;
+  lanzouDialogVisible.value = true;
+  lanzouFolderTree.value = []; // 先清空
+
+  // 加载根目录（dir_id = -1）
+  const rootNode = { data: { id: '-1' } };
+  await loadLanzouSubDirs(rootNode, (nodes) => {
+    lanzouFolderTree.value = nodes;
+  });
+}
+
+async function loadLanzouSubDirs(node, resolve) {
+    
+  const id = node.data.id;
+
+  try {
+    const res = await fetch('/api/?module=lanzou&method=getdir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir_id: id })
+    });
+
+    const json = await res.json();
+
+    if (
+      json &&
+      json.code === 200 &&
+      json.data &&
+      (json.data.zt === 1 || json.data.zt === 2)
+    ) {
+      const children = Array.isArray(json.data.text)
+        ? json.data.text.map(item => ({
+            id: item.fol_id,
+            label: item.name,
+            children: undefined // 懒加载
+          }))
+        : [];
+
+      resolve(children);
+    } else {
+        if (json && json.code === 200 && json.data && (json.data.zt === 9)){
+            ElementPlus.ElMessage.error('请点击右上角昵称,登录蓝奏账号');
+            lanzouFolderTree.value = []; // 清空整个目录树
+        }
+      resolve([]); // 没有子目录或返回结构不符
+    }
+  } catch (e) {
+    console.error('获取目录失败', e);
+    resolve([]); // 接口异常，返回空
+  }
+}
+
+
+
+function selectLanzouDir(node) {
+  selectedFolderId.value = node.fol_id;
+}
+
+function handleNodeClick(data, node) {
+  selectedFolderId.value = data.id;
+  selectedFolderLabel.value = data.label || data.name || '未知目录';
+}
+async function confirmLanzouUpload() {
+  let folderId = selectedFolderId.value;
+  let folderLabel = selectedFolderLabel.value;
+
+  // 如果没有选择目录，默认上传到根目录
+  if (!folderId) {
+    folderId = '-1';
+    folderLabel = '根目录';
+  }
+
+  const confirm = await ElementPlus.ElMessageBox.confirm(
+    `确定上传到【${folderLabel}】？`,
+    '提示',
+    { type: 'warning' }
+  ).catch(() => null);
+  if (!confirm) return;
+
+  uploading.value = true;
+  try {
+    const res = await fetch('/api/?module=lanzou&method=savefile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: currentUploadTask.value.id,
+        folderId: folderId
+      })
+    });
+    const json = await res.json();
+    if (json.code === 200) {
+      ElementPlus.ElMessage.success(json.data.info || '上传成功');
+      lanzouDialogVisible.value = false;
+      // 上传成功后弹出询问框是否下载
+      const confirmDownload = await ElementPlus.ElMessageBox.confirm(
+        '上传成功，是否立即下载？',
+        '提示',
+        { type: 'info' }
+      ).catch(() => null);
+    
+      if (confirmDownload) {
+        const downloadUrl = `/down/?id=${json.data.text[0].f_id}`;
+        window.open(downloadUrl, '_blank');
+      }
+    } else {
+      ElementPlus.ElMessage.error(json.message || '上传失败');
+    }
+  } catch (e) {
+    ElementPlus.ElMessage.error('请求异常');
+  } finally {
+    uploading.value = false;
+  }
+}
+        
+        
+        const autoRefresh = ref(true);
+        let refreshTimer = null;
+
+        onMounted(() => {
+          loadData();
+          refreshTimer = setInterval(() => {
+            if (autoRefresh.value) loadData();
+          }, 3000);
+        });
+
+        return {
+          query,
+          taskList,
+          total,
+          loadData,
+          resetForm,
+          handlePageChange,
+          editRemark,
+          dialogVisible,
+          editForm,
+          submitRemark,
+          retryTask,
+          deleteTask,
+          downloadInjected,
+          uploadToS3,
+          autoRefresh,
+          infoDialogVisible,
+          infoText,
+          showStatusInfo,
+          formatSize,
+          // 新增上传蓝奏相关
+          debugrunTask,
+          lanzouDialogVisible,
+          lanzouFolderTree,
+          treeProps,
+          selectedFolderId,
+          currentUploadTask,
+          uploading,
+          openLanzouDialog,
+          loadLanzouSubDirs,
+          selectLanzouDir,
+          confirmLanzouUpload,
+          handleNodeClick,
+          clearLanzouSelection,
+          formatMode,
+          qrDialogVisible,
+          qrImageUrl,
+          qrDownloadUrl,
+          handleDirectDownload,
+          imageViewerVisible,
+          imageList,
+          previewImage,
+          openInNewTab
+
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

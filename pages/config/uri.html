@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>URI劫持配置</title>
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+</head>
+<body>
+<div id="app" style="padding: 20px">
+  <el-alert title="当APP打开外部浏览器的时候，可以通过此功能，替换掉要打开的网址。" type="info" show-icon style="margin-bottom: 20px"></el-alert>
+
+  <div style="margin-bottom: 20px; display: flex; gap: 10px">
+    <el-select v-model="selectedAppId" placeholder="选择应用" style="width: 300px" @change="loadList">
+      <el-option v-for="app in appList" :key="app.id" :label="`${app.name} | ${app.version}`" :value="app.id"></el-option>
+    </el-select>
+    <el-button @click="loadApps">刷新应用列表</el-button>
+    <el-button type="primary" @click="openAddDialog">添加URI劫持</el-button>
+  </div>
+
+  <el-table :data="list" border>
+    <el-table-column label="ID" prop="id" width="80"></el-table-column>
+    <el-table-column label="类名" prop="class_name"></el-table-column>
+    <el-table-column label="URI值" prop="uri_value"></el-table-column>
+    <el-table-column label="备注" prop="remark"></el-table-column>
+    <el-table-column label="创建时间" prop="created_at"></el-table-column>
+    <el-table-column label="操作" width="220">
+      <template v-slot="scope">
+        <el-button size="small" @click="editRow(scope.row)">编辑</el-button>
+        <el-button size="small" type="danger" @click="deleteRow(scope.row)">删除</el-button>
+      </template>
+    </el-table-column>
+  </el-table>
+
+  <!-- 添加/编辑弹窗 -->
+  <el-dialog v-model="dialogVisible" :title="editMode ? '编辑URI劫持' : '添加URI劫持'">
+    <el-form :model="form" label-width="100px">
+      <el-form-item label="类名">
+        <el-select
+          v-model="form.class_name"
+          filterable
+          allow-create
+          default-first-option
+          placeholder="请选择或输入类名"
+        >
+          <el-option v-for="item in commonClasses" :key="item.value" :label="`${item.value} - ${item.label}`" :value="item.value"></el-option>
+        </el-select>
+      </el-form-item>
+      <el-form-item label="URI值">
+        <el-input v-model="form.uri_value"></el-input>
+      </el-form-item>
+      <el-form-item label="备注">
+        <el-input v-model="form.remark" type="textarea" :rows="2"></el-input>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="dialogVisible = false">取消</el-button>
+      <el-button type="primary" @click="submitForm">确认</el-button>
+    </template>
+  </el-dialog>
+</div>
+
+<script>
+const { createApp, ref, reactive, onMounted } = Vue;
+
+createApp({
+  setup() {
+    const appList = ref([]);
+    const selectedAppId = ref(null);
+    const list = ref([]);
+    const form = reactive({ id: null, class_name: '', uri_value: '', remark: '' });
+    const dialogVisible = ref(false);
+    const editMode = ref(false);
+
+    // 常见类名下拉项（安卓组件）
+    const commonClasses = [
+      { value: 'com.tencent.mobileqq.activity.JumpActivity', label: 'QQ加群' },
+      { value: 'com.android.browser.BrowserActivity', label: '系统浏览器' },
+      { value: 'com.android.chrome.Main', label: 'Chrome浏览器' },
+      { value: 'com.uc.browser.InnerUCMobile', label: 'UC浏览器' },
+      { value: 'com.tencent.mtt.MainActivity', label: 'QQ浏览器' },
+      { value: 'com.baidu.browser.apps.BrowserActivity', label: '百度浏览器' },
+      { value: 'com.sec.android.app.sbrowser.SBrowserMainActivity', label: '三星浏览器' },
+      { value: 'com.android.settings.Settings', label: '系统设置' },
+      { value: 'com.tencent.mm.ui.LauncherUI', label: '微信首页' },
+      { value: 'com.tencent.mobileqq.activity.SplashActivity', label: 'QQ首页' },
+      { value: 'com.android.contacts.DialtactsActivity', label: '系统拨号界面' },
+      { value: 'com.android.email.activity.Welcome', label: '系统邮件程序' },
+      { value: 'com.android.documentsui.DocumentsActivity', label: '系统文件管理器' },
+      { value: 'com.huawei.filemanager.FileManager', label: '华为文件管理器' },
+      { value: 'com.mi.android.globallauncher.Launcher', label: 'MIUI桌面启动器' },
+      { value: 'com.oppo.browser.BrowserActivity', label: 'OPPO浏览器' },
+      { value: 'com.eg.android.AlipayGphone.AlipayLogin', label: '支付宝登录页' },
+      { value: 'com.taobao.tao.welcome.Welcome', label: '淘宝欢迎页' }
+    ];
+
+
+    async function loadApps() {
+      const res = await fetch('/api/index.php?module=config&method=getMyApps');
+      const json = await res.json();
+      if (json.code === 200) appList.value = json.data;
+    }
+
+    async function loadList() {
+      if (!selectedAppId.value) return;
+      const res = await fetch('/api/index.php?module=uri_hijack&method=getList', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apk_id: selectedAppId.value })
+      });
+      const json = await res.json();
+      list.value = json.data || [];
+    }
+
+    function openAddDialog() {
+        if (!selectedAppId.value) {
+            ElementPlus.ElMessage.warning('请先选择应用');
+            return;
+          }
+      editMode.value = false;
+      Object.assign(form, { id: null, class_name: '', uri_value: '', remark: '' });
+      dialogVisible.value = true;
+    }
+
+    function editRow(row) {
+      editMode.value = true;
+      Object.assign(form, row);
+      dialogVisible.value = true;
+    }
+
+    async function submitForm() {
+      const method = editMode.value ? 'edit' : 'add';
+      const payload = { ...form, apk_id: selectedAppId.value };
+      const res = await fetch(`/api/index.php?module=uri_hijack&method=${method}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const json = await res.json();
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success(json.message || '操作成功');
+        dialogVisible.value = false;
+        loadList();
+      }
+    }
+
+    async function deleteRow(row) {
+      await ElementPlus.ElMessageBox.confirm('确认删除该记录？', '提示', { type: 'warning' });
+      await fetch('/api/index.php?module=uri_hijack&method=delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: row.id })
+      });
+      loadList();
+    }
+
+    onMounted(loadApps);
+
+    return {
+      appList,
+      selectedAppId,
+      list,
+      form,
+      dialogVisible,
+      editMode,
+      openAddDialog,
+      editRow,
+      submitForm,
+      deleteRow,
+      loadApps,
+      loadList,
+      commonClasses
+    };
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

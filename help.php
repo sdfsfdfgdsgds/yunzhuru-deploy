@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>疑难解答与使用帮助</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <style>
+    body { padding: 20px; }
+    .search-bar { margin-bottom: 20px; width: 100%; }
+    .category-title { font-weight: bold; font-size: 16px; margin-bottom: 10px; }
+    .question-list { margin-bottom: 30px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+      <el-alert
+      title="更多问题可以在QQ群内反馈，2群：793107266 "
+      type="error"
+      style="margin-bottom: 20px;">
+    </el-alert>
+     <el-alert
+      title="MIUI 系统请注意：调试安装时需在开发者选项中关闭「MIUI 优化」，否则无法看到详细的调试错误信息！"
+      type="warning"
+      show-icon
+      style="margin-bottom: 20px;">
+    </el-alert>
+    <el-alert
+      title="以下是常见问题分类及详细解答，可搜索内容快速定位"
+      type="info"
+      show-icon
+      style="margin-bottom: 20px;">
+    </el-alert>
+
+    <el-input
+      v-model="keyword"
+      placeholder="搜索分类、问题或内容..."
+      class="search-bar"
+      clearable>
+    </el-input>
+
+    <div v-for="(category, cIdx) in filteredCategories" :key="cIdx" class="question-list">
+      <div class="category-title">{{ category.name }}</div>
+      <el-collapse accordion>
+        <el-collapse-item
+          v-for="(item, iIdx) in category.items"
+          :key="iIdx"
+          :title="item.title">
+          <div v-html="item.content"></div>
+        </el-collapse-item>
+      </el-collapse>
+    </div>
+  </div>
+
+  <script>
+    const { createApp, ref, computed } = Vue;
+
+    createApp({
+      setup() {
+        const keyword = ref('');
+
+        const categories = ref([
+            {
+                name: '使用说明/常见问题答疑',
+                items: [
+                  {
+                    title: '怎么使用注入？',
+                    content: '先在「应用管理-我的应用」中上传你要加注入的应用,然后在「应用管理-证书管理」上传你的应用证书,然后在「我的应用」中点击注入,按照步骤操作即可。',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '可不可以注入苹果，Windows，纯鸿蒙软件？',
+                    content: '不可以，操作系统完全不同。',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '如何选择注模式',
+                    content: '默认为链路注入，若在此注入后导致应用无法运行或者卡启动页，则可以尝试更换为入口反射，如果注入的应用没有弹窗效果，则可以尝试使用组件工厂模式注入',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '不同的注入模式都有什么用',
+                    content: '入口继承(代表由壳先启动,然后启动原入口,但是部分应用会检测入口导致闪退)。入口反射(和入口继承一样,不过是反射调用原入口,通常不会被检测到)。组件工厂(执行优先级最高,是入口动态劫持的一种)。基类链路(由原本的程序先启动,壳再启动,比较好隐藏壳链,但是对加固混淆的应用无效,会编译失败)',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '无法删除注入任务',
+                    content: '注入任务默认不允许删除正在处理中的任务，如果确实该任务卡的很久，请联系管理员手工删除和清理。',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '远程DEX如何使用',
+                    content: '这个功能主要是为一些专业人士提供,需要使用者本身会开发dex,不推荐小白使用,远程dex的启动方法必须接收一个context参数,开发的时候请注意,远程dex的启动方法是在主线程被启动的。声明:若使用第三方未知dex造成的后果,自行承担。',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '如何创建卡密弹窗',
+                    content: '【应用配置】-【弹窗配置】-【卡密弹窗】，选择应用，创建弹窗，然后点击“按钮配置”，创建一个按钮，点击事件设置为“提交输入内容”，事件参数填写“ https://yunzhuru.com/kami/ ”即可。',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '如何去除云注入/或其他弹窗',
+                    content: '【应用配置】-【窗口拦截】-【关键词拦截】，选择应用，创建弹窗，然后点击“添加关键词”，例如关键词“请输入卡密”，然后添加拦截类型为“弹窗”即可。只要出现关键词的弹窗,都会被自动关闭,本功能仅限于安卓原生弹窗布局,对一些内嵌网页或者框架应用无效',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: 'URI劫持怎么用',
+                    content: '应用内有一些跳转操作,比如打开外部浏览器,打开外部应用,会传递一个URI,URI劫持的作用就是修改传递参数,比如应用本来是打开百度,你可以将其修改为打开腾讯。目标本来是添加某个群,你可以修改为添加你的群',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: 'activity拦截怎么用',
+                    content: 'activity拦截就是窗口拦截,填写某个窗口类名,则这个窗口就无法被启动了,用于禁止启动一些强制更新窗口等,切记不要将主窗口加在这里,否则应用会无法启动',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: 'activity替换怎么用',
+                    content: 'activity替换就是用于窗口替换,比如应用中，点击“设置”是跳转的设置页面，经过修改后可以实现点击“设置”后，跳转其他窗口，可用于跳过一些验证窗口(直接由启动窗口切换到主窗口)，也可以用于启动一些隐藏窗口',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '怎么转存到蓝奏云盘(该功能已停用)',
+                    content: '点击右上角昵称,点击【蓝奏云盘】,填写账号密码登录,即可对接蓝奏云盘,您可以将注入好的应用,一键转存到蓝奏云盘,不过上传最大文件限制100MB',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '平台自带的加固功能',
+                    content: '本平台加固功能为真加固,但是并不是360企业加固,只是特征是360企业加固,加固功能并不适用于所有APP,可能会存在兼容性问题,导致的闪退或无法运行的问题,初次注入最好不要勾选加固',
+                    searchKeywords: '加固'
+                  },
+                  {
+                    title: '如何上传大文件',
+                    content: '本平台为免费公益平台,为了能够长期稳定的运行,对于上传的文件大小做了限制,并不是很愿意让您上传大文件,但是针对会员用户,是允许上传更大文件的(也有限制),开通会员可以联系管理员,本平台也不建议开通会员',
+                    searchKeywords: '大文件 会员 VIP'
+                  },
+                  {
+                    title: '平台禁止哪些内容应用',
+                    content: '本平台严格遵守中国法律,不会对违法应用提供任何服务,包括但不限于以下类型的APP：色情、赌博、诈骗、木马等违法APP。一经发现,直接删除,若引发严重后果,将移交网安处理。',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '图片弹窗中的图片链接怎么填',
+                    content: '将你的图片上传到第三方图床中，此时会得到一个http开头的图片链接，将这个链接填写到弹窗配置中即可，你需要自己去找图床。不知道什么是图床的，问AI去。',
+                    searchKeywords: '图片弹窗 图片链接 图床'
+                  },
+                  {
+                    title: 'APK合并功能有什么用',
+                    content: '在少部分应用中,可能存在一些特殊的混淆(例如超深的特殊编码的目录结构),此类应用注入后会无法回编译,注入任务会提示你让你开启APK合并,常规情况下不建议开启此功能,可能会导致APK体积异常或者无法运行。',
+                    searchKeywords: '乱码 合并 混淆'
+                  },
+                  {
+                    title: '储存空间太小',
+                    content: '本平台为免费平台,用户上传的文件并不会长期保存,且限制储存空间,当您储存空间不足的时候,可以删除应用安装包来清理储存空间,此操作并不会影响你注入后的应用以及远程管理,上传的应用数量目前是没有限制的,仅仅只是限制安装包占用的空间大小,自行删除清理即可',
+                    searchKeywords: 'VIP 会员 权益 大文件 100M'
+                  },
+                  {
+                    title: '会员有什么权益',
+                    content: '允许上传大文件(通常最大限制在300M左右,具体以实际情况为准,可能随时调整)，下载文件加速(下载注入后的应用可以高速下载)，卡密数量限制提升到3000条(单应用未使用的卡密限制为3000条,非会员为1000条,已经使用的卡密不计入在内)，允许使用ws协议实时管理用户(查看实时在线用户数量,用户踢下线功能)，在会员期间内不自动清理安装包(你上传的应用安装包在会员期间内将被一直保存)，总储存空间提升(通常为2GB左右,具体以实际情况为准)',
+                    searchKeywords: 'VIP 会员 权益 大文件 100M'
+                  },
+                  {
+                    title: '会员的价格',
+                    content: '本平台为免费的非盈利性平台,并不赞同你开会员,如果你执意要开,则请联系管理员开通,你的会员费用将会用于支付服务器运营商的储存费用以及高速下载流量费用',
+                    searchKeywords: 'VIP 会员 权益 大文件 100M'
+                  },
+                  {
+                    title: 'AndroidManifest.xml伪加密有什么用',
+                    content: '可以防止被一些脚本工具进行二次处理,例如去除弹窗,但是该操作会导致应用无法在安卓15及以上的系统中安装(会报错无效的安装包),在安卓14及以下的系统中可以正常安装,非必要别勾选',
+                    searchKeywords: '加固 加密 伪加密'
+                  },
+                  {
+                    title: 'QQ群的加群key怎么获取',
+                    content: '在QQ群官网：https://qun.qq.com/ 中获得，登录后，点击【加群组件】，选择你的QQ群，生成形式选择Android代码会给你一个Key，这就是QQ群的加群Key',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '注入的弹窗是否容易被破解',
+                    content: '未加固的应用，不管是否是注入，都好破解，你可以使用本平台自带的加固，也可以注入后自己使用第三方更强的加固平台，例如360加固，爱加密，梆梆加固等成熟的加固平台',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '注入后的软件无法获取定位权限',
+                    content: '这通常是APP内置的是一些地图SDK，有签名SHA1校验，签名不一致会导致地图SDK不初始化，例如百度地图，高德地图，腾讯地图等平台的SDK，你需要对应用进行重新签名，使用在地图平台提交的签名文件进行签名',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '卡密到期后的应用会自动停止吗',
+                    content: '会的，当用户在使用APP的过程中，若卡密到期，APP会自动结束运行，在卡密时间剩余15分钟和5分钟的时候会有弹窗提示告知用户卡密即将到期',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '是否支持将用户踢下线',
+                    content: '支持的，需要你的应用注入的模板是132及以上版本，且你在全局开关中开启实时用户管理后，在【统计】中，可以看到在线用户情况，点击用户即可对用户进行踢下线(结束APP)，此操作为实时操作，用户会即刻被踢。此功能仅限于APP客户端,网页端不支持',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '上传的安装包很大,注入后体积变小了',
+                    content: '可能应用内存在一些重复的数据，本平台注入会自动优化复用这些重复的数据，以减小文件体积。',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '被删除的应用是否可以恢复',
+                    content: '无法恢复，数据都是立刻永久性丢失。',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '如何使用自定义证书',
+                    content: '方法1：登录网页端,在网页端的证书管理中上传你的证书。方法2：下载注入后的安装包,你自己本地进行重签名。',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '上传提示已加固:菜鸟云注入',
+                    content: '这代表该APP安装包已经被本平台注入过了,不支持上传,你需要上传未注入的原始底包才行。',
+                    searchKeywords: ''
+                  }
+                ]
+            },
+            {
+                name: '技术接口文档',
+                items: [
+                  {
+                    title: '使用卡密验证',
+                    content: '创建一个【输入框弹窗】,给这个弹窗创建一个按钮,按钮事件为“提交输入内容”，事件内容为“https://yunzhuru.cn/kami/”，如果你想实现B应用使用A应用的卡密,则可以自定义appid，例如事件内容为“https://yunzhuru.cn/kami/?appid=233”,那么这个应用将会使用appid=233这个应用的卡密进行验证',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '使用卡密解绑',
+                    content: '创建一个【输入框弹窗】,给这个弹窗创建一个按钮,按钮事件为“提交输入内容”，事件内容为“https://yunzhuru.cn/jiebang/”，如果你想实现B应用使用A应用的卡密,则可以自定义appid，例如事件内容为“https://yunzhuru.cn/jiebang/?appid=233”,那么这个应用将会使用appid=233这个应用的卡密进行解绑，解绑通常和验证配套使用',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '使用应用试用',
+                    content: '创建一个【输入框弹窗】,给这个弹窗创建一个按钮,按钮事件为“提交输入内容”，事件内容为“https://yunzhuru.cn/shiyong/?time=10”，这里的time=10，代表试用10分钟,10分钟后APP会自动结束,想要试用多少分钟就填数字,单位是分钟',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '通过API接口实现卡密查询和解绑',
+                    content: '卡密查询接口：https://yunzhuru.cn/jiebang/api.php?action=query，卡密解绑接口：https://yunzhuru.cn/jiebang/api.php?action=unbind，POST提交数据格式示例：{"appid":"APPID","kami":"卡密","auth_code":"授权码"}，APPID和授权码，可以在应用管理-编辑应用中获得，官网同步提供在线解绑查询功能，支持在链接中拼接APPID和授权码，例如https://yunzhuru.cn/jiebang/jiebang.html?appid=APPID&&authCode=授权码，这样就不用每次都输入APPID和授权码了',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: 'HTML弹窗中调用这些接口',
+                    content: '可以参考现有的html弹窗模板中卡密验证方法：window.Android.verifyCardKey2，只需要更换这个方法中的API接口地址即可，一个回调方法即可通用本平台的3个接口(验证卡密,解绑卡密,试用)',
+                    searchKeywords: ''
+                  },
+                  {
+                    title: '在哪里看APPID',
+                    content: '网页端：我的应用(ID就是appid)，APP客户端：点击【管理/注入】-点击【编辑应用】，APPID就是一个应用唯一id身份标识',
+                    searchKeywords: ''
+                  },
+                ]
+              },
+           {
+            name: '打包编译/运行闪退/第三方加固问题',
+            items: [
+              {
+                title: '安装在电视盒子上闪退',
+                content: '本平台注入的代码最低兼容安卓5，低于安卓5会闪退，且弹窗可能不支持遥控器操作，未在TV端做测试',
+                searchKeywords: '电视盒子 TV端 安卓4'
+              },
+              {
+                title: '签名失败',
+                content: '请确保签名文件的真实后缀是 .keystore 或 .jks，且输入的别名、密码、证书密码均正确。创建证书的时候，证书别名中不能出现中文或其他特殊符号',
+                searchKeywords: '签名失败 keystore jks 密码错误'
+              },
+              {
+                title: '编译失败',
+                content: '应用存在加固,混淆等,会导致编译失败,如果应用入口类名中,存在以数字开头的类名,也会导致编译失败,若没有失败原因,请加QQ群反馈：793107266,对于失败的应用,会有人工处理失败原因的',
+                searchKeywords: '编译失败 注入失败 继承链 模板'
+              },
+              {
+                title: '编译成功,但是没有弹窗',
+                content: '注入编译成功了,在全局开关中开启调试模式,若没有出现调试弹窗(壳未启动),可能应用本身有application链路检查,或者应用已经被别的同类功能注入,或者有混淆代码等(同时还需要确定你没设置静默应用类),可在应用统计中查看,打开一次应用之后,看统计次数有没有增加,如果增加了就证明壳是启动了的,如果没增加,则可能是壳未启动,也有可能是目标应用的SDK版本不兼容',
+                searchKeywords: '编译失败 注入失败 继承链 模板 失败'
+              },
+              {
+                title: '注入后运行闪退',
+                content: '请确保应用没用强加固，可先用MT管理器重签名一下测试是否闪退，如果闪退则可能代表该应用有签名校验，需要先去除签名校验后再上传进行注入，若依旧闪退，可尝试更换注入模式，若全部尝试后依旧闪退，请加群反馈：793107266',
+                searchKeywords: '编译失败 注入失败 继承链 模板 失败'
+              },
+              {
+                title: '注入后360加固报错11106',
+                content: '原因是应用默认使用了禁止压缩so库,注入在解除这一限制的时候,对AndroidManifest.xml做了一些修改导致的不兼容加固,解决办法:使用MT管理器打开AndroidManifest.xml,在空白处随便输入一个空格并保存即可。使用其他第三方加固平台报错也同样适用此方法修复',
+                searchKeywords: '360 加固 360加固 11106 失败'
+              },
+              {
+                title: '应用分身/应用多开/沙盒/虚拟定位类APP重复弹窗',
+                content: '这类应用统称为沙盒类应用,主要问题是主应用弹窗，启动的分身应用也弹窗，解决办法是注入的时候勾选【进程隔离】，注入模板在133及以上版本，方可解决这个问题',
+                searchKeywords: '多开 分身 沙盒 重复弹窗'
+              },
+              {
+                title: '应用分身/应用多开/沙盒类APP无法启动分身应用',
+                content: '暂时没遇到这个问题，对于沙盒类应用注入，请不要勾选加固，否则可能出现无法启动分身的问题',
+                searchKeywords: '多开 分身 沙盒 重复弹窗'
+              }
+            ]
+          },
+          {
+            name: '注入后的APP无法安装',
+            items: [
+              {
+                title: '错误代码 -2 ',
+                content: `错误代码：INSTALL_FAILED_INVALID_APK
+        原因：APK 无法解压 native 库，res=-2，通常是签名不完整导致。
+        解决方案：使用 MT 管理器或 apktool 工具，对 APK 重新签名，确保签名包含 V1 + V2 + V3。`,
+                searchKeywords: 'INSTALL_FAILED_INVALID_APK failed to extract native libraries res=-2 签名不完整'
+              },
+              {
+                title: '错误代码 -3 ',
+                content: `错误代码：INSTALL_FAILED_ABORTED
+        原因：用户取消了安装，或拒绝权限，导致系统中止安装流程。
+        解决方案：确保用户主动点击安装确认，或在开发者选项中关闭 MIUI 优化。`,
+                searchKeywords: 'INSTALL_FAILED_ABORTED User rejected permissions 用户取消 MIUI 优化'
+              },
+              {
+                title: '错误代码 -4 ',
+                content: `错误代码：INSTALL_PARSE_FAILED_NO_CERTIFICATES
+        原因：APK 文件未签名或签名格式异常。
+        解决方案：使用 Zipalign + apksigner 工具重新签名，或用 MT 重新签名。`,
+                searchKeywords: 'INSTALL_PARSE_FAILED_NO_CERTIFICATES 签名为空 无证书'
+              },
+              {
+                title: '错误代码 -5 ',
+                content: `错误代码：INSTALL_FAILED_DUPLICATE_PACKAGE
+        原因：系统中已存在相同包名的应用。
+        解决方案：卸载旧版本再安装，或更换包名。`,
+                searchKeywords: 'INSTALL_FAILED_DUPLICATE_PACKAGE 包名冲突 已安装'
+              },
+              {
+                title: '错误代码 -6 ',
+                content: `错误代码：INSTALL_FAILED_NO_SHARED_USER
+        原因：AndroidManifest 中声明 sharedUserId，但签名不一致。
+        解决方案：去掉 sharedUserId 或使用相同签名重新构建所有相关应用。`,
+                searchKeywords: 'INSTALL_FAILED_NO_SHARED_USER sharedUserId 签名不一致'
+              },
+              {
+                title: '错误代码 -11 ',
+                content: `错误代码：INSTALL_FAILED_UPDATE_INCOMPATIBLE
+        原因：尝试安装的 APK 与现有版本签名不一致。
+        解决方案：卸载旧版本再安装，确保使用相同签名。`,
+                searchKeywords: 'INSTALL_FAILED_UPDATE_INCOMPATIBLE 安装不兼容 签名不一致'
+              }
+            ]
+          }
+        ]);
+
+
+        const filteredCategories = computed(() => {
+          const kw = keyword.value.trim().toLowerCase();
+          if (!kw) return categories.value;
+
+          return categories.value.map(cat => {
+            const matchedItems = cat.items.filter(item => {
+              return (
+                cat.name.toLowerCase().includes(kw) ||
+                item.title.toLowerCase().includes(kw) ||
+                item.content.toLowerCase().includes(kw) ||
+                (item.searchKeywords || '').toLowerCase().includes(kw)
+              );
+            });
+            if (matchedItems.length > 0 || cat.name.toLowerCase().includes(kw)) {
+              return { name: cat.name, items: matchedItems };
+            }
+            return null;
+          }).filter(Boolean);
+        });
+
+        return {
+          keyword,
+          filteredCategories
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

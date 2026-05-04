@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>用户管理</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/config.js"></script>
+  <style>
+    body { padding: 20px; }
+    .toolbar { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+    .stats { margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="toolbar">
+      <div><strong>用户列表</strong></div>
+      <div>
+        <el-button type="success" @click="showCreateDialog = true">新增用户</el-button>
+      </div>
+    </div>
+
+    <!-- 查询统计 -->
+    <div class="stats">
+      <el-space wrap>
+        <el-tag>注册用户：{{ stats.register_user }}</el-tag>
+        <el-tag type="success">登录用户：{{ stats.login_user }}</el-tag>
+        <el-tag type="warning">活跃用户：{{ stats.active_user }}</el-tag>
+        <el-tag type="info">注册IP数：{{ stats.register_ip }}</el-tag>
+        <el-tag type="danger">登录IP数：{{ stats.login_ip }}</el-tag>
+      </el-space>
+    </div>
+
+    <!-- 查询表单 -->
+    <el-form :inline="true" :model="filters" class="demo-form-inline" style="margin-bottom: 20px;">
+      <el-form-item label="时间范围">
+        <el-date-picker
+          v-model="filters.dateRange"
+          type="daterange"
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          format="YYYY-MM-DD"
+          value-format="YYYY-MM-DD"
+        ></el-date-picker>
+      </el-form-item>
+      <el-form-item label="ID">
+        <el-input v-model="filters.id" placeholder="用户ID" clearable style="width: 90px"></el-input>
+      </el-form-item>
+      <el-form-item label="上级UID">
+        <el-input v-model="filters.superior" placeholder="上级UID" clearable style="width: 90px"></el-input>
+      </el-form-item>
+      <el-form-item label="账号">
+        <el-input v-model="filters.account" placeholder="账号" clearable></el-input>
+      </el-form-item>
+      <el-form-item label="昵称">
+        <el-input v-model="filters.nickname" placeholder="昵称" clearable></el-input>
+      </el-form-item>
+      <el-form-item label="会员">
+        <el-select v-model="filters.vip_status" placeholder="会员" clearable style="width: 120px">
+          <el-option label="全部" value="0"></el-option>
+          <el-option label="会员" value="1"></el-option>
+          <el-option label="非会员" value="2"></el-option>
+        </el-select>
+      </el-form-item>
+        <el-form-item label="封号">
+          <el-select v-model="filters.block_status" style="width: 120px">
+            <el-option label="全部" value="all"></el-option>
+            <el-option label="已封号" value="blocked"></el-option>
+            <el-option label="未封号" value="normal"></el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Q绑">
+          <el-select v-model="filters.openid_qq" style="width: 120px">
+            <el-option label="全部" value="all"></el-option>
+            <el-option label="未绑定" value="0"></el-option>
+            <el-option label="已绑定" value="1"></el-option>
+          </el-select>
+        </el-form-item>
+      <el-form-item label="权限">
+        <el-select v-model="filters.role" placeholder="权限" clearable style="width: 120px">
+          <el-option label="管理员" value="admin"></el-option>
+          <el-option label="普通用户" value="user"></el-option>
+        </el-select>
+      </el-form-item>
+      <el-form-item label="设备">
+        <el-select v-model="filters.ua" placeholder="设备" clearable style="width: 120px">
+          <el-option label="全部" value=""></el-option>
+          <el-option label="PC端" value="PC"></el-option>
+          <el-option label="Android端" value="安卓"></el-option>
+          <el-option label="IOS端" value="苹果"></el-option>
+          <el-option label="APP端" value="APP端"></el-option>
+        </el-select>
+      </el-form-item>
+      <el-form-item label="客户端">
+        <el-input v-model="filters.appinfo" placeholder="客户端信息" clearable></el-input>
+      </el-form-item>
+      
+      <el-form-item label="登录IP">
+          <el-input
+            v-model="filters.login_ip"
+            placeholder="登录IP"
+            clearable
+            style="width: 160px">
+          </el-input>
+        </el-form-item>
+      <el-form-item>
+        <el-button type="primary" @click="loadData">搜索</el-button>
+        <el-button @click="resetFilters">重置</el-button>
+      </el-form-item>
+    </el-form>
+
+    <!-- 表格数据 -->
+    <el-table :data="userList" border style="width: 100%">
+        <el-table-column label="ID" width="120">
+          <template #default="scope">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <!-- 圆形头像 -->
+              <el-avatar
+                :src="scope.row.avatar"
+                :size="32"
+                fit="cover"
+              ></el-avatar>
+        
+              <!-- ID -->
+              <span>{{ scope.row.id }}</span>
+            </div>
+          </template>
+        </el-table-column>
+
+      <el-table-column label="昵称" prop="nickname"></el-table-column>
+      <el-table-column label="账号" prop="account"></el-table-column>
+      <!--<el-table-column label="权限" prop="role" width="80"></el-table-column>-->
+      <el-table-column label="会员" prop="vip_expire_time" width="160">
+          <template #default="scope">
+            <el-tag
+              :type="new Date(scope.row.vip_expire_time) > new Date() ? 'danger' : 'info'"
+            >
+              {{ scope.row.vip_expire_time }}
+            </el-tag>
+          </template>
+        </el-table-column>
+      <el-table-column label="注册时间" prop="register_time" width="160"></el-table-column>
+      <el-table-column label="登录IP" prop="login_ip" width="160"></el-table-column>
+      <el-table-column label="最后活动" prop="last_active" width="160"></el-table-column>
+        <el-table-column label="账号状态" width="200">
+          <template #default="scope">
+            <div v-if="scope.row.unblock_time && new Date(scope.row.unblock_time) > new Date()">
+              <el-tag type="danger" size="small">已封禁至{{ scope.row.unblock_time }}</el-tag>
+            </div>
+            <el-tag v-else type="success">账号正常</el-tag>
+          </template>
+        </el-table-column>
+      <el-table-column label="余额" prop="balance" width="80"></el-table-column>
+      <el-table-column label="APP限制数" prop="app_count" width="80"></el-table-column>
+      <el-table-column label="设备" prop="ua" width="80"></el-table-column>
+      <el-table-column label="上级UID" prop="superior" width="60"></el-table-column>
+      <el-table-column label="客户端" prop="appinfo"></el-table-column>
+      <el-table-column label="操作" width="160">
+        <template #default="scope">
+          <el-button size="small" @click="editUser(scope.row)">编辑</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <!-- 分页 -->
+    <el-pagination
+      v-if="total > 0"
+      style="margin-top: 20px; text-align: right"
+      background
+      layout="total, prev, pager, next, jumper"
+      :current-page="query.page"
+      :page-size="query.limit"
+      :total="total"
+      @current-change="handlePageChange">
+    </el-pagination>
+
+    <!-- 编辑对话框 -->
+    <el-dialog v-model="showEditDialog" title="编辑用户" width="400px">
+      <el-form :model="editForm">
+        <el-form-item label="昵称">
+          <el-input v-model="editForm.nickname"></el-input>
+        </el-form-item>
+        <el-form-item label="账号">
+          <el-input v-model="editForm.account"></el-input>
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input v-model="editForm.password" placeholder="不修改请留空" type="password"></el-input>
+        </el-form-item>
+        <el-form-item label="APP限制数">
+          <el-input-number v-model="editForm.app_count"></el-input-number>
+        </el-form-item>
+        <el-form-item label="余额">
+          <el-input-number v-model="editForm.balance"></el-input-number>
+        </el-form-item>
+        
+        <!-- 新增靓号开关 -->
+        <el-form-item label="显示靓号">
+          <el-switch
+            v-model="editForm.pretty"
+            :active-value="1"
+            :inactive-value="0">
+          </el-switch>
+        </el-form-item>
+
+        <!-- 多设备登录开关 -->
+        <el-form-item label="APP多设备">
+          <el-switch
+            v-model="editForm.multiple_app"
+            :active-value="1"
+            :inactive-value="0"
+            active-text="允许"
+            inactive-text="单设备">
+          </el-switch>
+        </el-form-item>
+        <el-form-item label="Web多设备">
+          <el-switch
+            v-model="editForm.multiple_web"
+            :active-value="1"
+            :inactive-value="0"
+            active-text="允许"
+            inactive-text="单设备">
+          </el-switch>
+        </el-form-item>
+        
+        <el-form-item label="封号到期">
+          <el-date-picker
+            v-model="editForm.unblock_time"
+            type="datetime"
+            placeholder="不封号请留空"
+            format="YYYY-MM-DD HH:mm:ss"
+            value-format="YYYY-MM-DD HH:mm:ss"
+            clearable
+            style="width: 100%"
+          ></el-date-picker>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showEditDialog = false">取消</el-button>
+        <el-button type="primary" @click="submitEdit">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 新增对话框 -->
+    <el-dialog v-model="showCreateDialog" title="新增用户" width="400px">
+      <el-form :model="createForm">
+        <el-form-item label="账号">
+          <el-input v-model="createForm.account"></el-input>
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="createForm.password" type="password"></el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showCreateDialog = false">取消</el-button>
+        <el-button type="primary" @click="submitCreate">新增</el-button>
+      </template>
+    </el-dialog>
+  </div>
+
+  <script>
+    const { createApp, ref, reactive, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const query = reactive({ page: 1, limit: 20 });
+        const filters = reactive({
+          id: '',
+          account: '',
+          nickname: '',
+          vip_status: '0',
+          role: '',
+          superior: '',
+          appinfo: '',
+          login_ip: '',
+          dateRange: [],
+          block_status: 'all',
+          openid_qq: 'all',
+        });
+
+        const userList = ref([]);
+        const total = ref(0);
+        const stats = reactive({
+          register_user: 0,
+          login_user: 0,
+          active_user: 0,
+          register_ip: 0,
+          login_ip: 0
+        });
+
+        const showEditDialog = ref(false);
+        const showCreateDialog = ref(false);
+        const editForm = reactive({
+          id: '',
+          nickname: '',
+          account: '',
+          password: '',
+          app_count: 0,
+          balance: 0,
+          pretty: 0,
+          multiple_app: 0,
+          multiple_web: 0,
+          unblock_time: ''
+        });
+        const createForm = reactive({ account: '', password: '' });
+
+        async function loadData() {
+          const params = Object.assign({}, query, filters);
+
+          if (filters.dateRange.length === 2) {
+            params.start_time = filters.dateRange[0] + ' 00:00:00';
+            params.end_time = filters.dateRange[1] + ' 23:59:59';
+          }
+
+          const res = await fetch('/api/index.php?module=user_module&method=getUserList', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(params)
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            userList.value = json.data.list;
+            total.value = json.data.total;
+            query.page = json.data.page;
+
+            // 更新统计数据（新增返回字段）
+            const s = json.data.stats || {};
+            stats.register_user = s.register_count || 0;
+            stats.login_user = s.login_count || 0;
+            stats.active_user = s.active_count || 0;
+            stats.register_ip = s.register_ip_count || 0;
+            stats.login_ip = s.login_ip_count || 0;
+
+
+          } else {
+            ElementPlus.ElMessage.error(json.message || '加载失败');
+          }
+        }
+
+        function handlePageChange(p) {
+          query.page = p;
+          loadData();
+        }
+
+        function resetFilters() {
+          filters.id = '';
+          filters.account = '';
+          filters.nickname = '';
+          filters.vip_status = '0';
+          filters.role = '';
+          filters.superior = '';
+          filters.login_ip = '';
+          filters.appinfo = '';
+          filters.ua = '';
+          filters.dateRange = [];
+          filters.block_status = 'all';
+          filters.openid_qq = 'all';
+          loadData();
+        }
+
+        /*function editUser(row) {
+          Object.assign(editForm, {
+            id: row.id,
+            nickname: row.nickname,
+            account: row.account,
+            password: '',
+            balance: row.balance
+          });
+          showEditDialog.value = true;
+        }*/
+        function editUser(row) {
+          let unblockTime = '';
+        
+          if (row.unblock_time) {
+            const t = new Date(row.unblock_time).getTime();
+            if (!isNaN(t) && t > Date.now()) {
+              unblockTime = row.unblock_time;
+            }
+          }
+        
+          Object.assign(editForm, {
+            id: row.id,
+            nickname: row.nickname,
+            account: row.account,
+            password: '',
+            app_count: row.app_count,
+            balance: row.balance,
+            pretty: Number(row.pretty) || 0,
+            multiple_app: Number(row.multiple_app) || 0,
+            multiple_web: Number(row.multiple_web) || 0,
+            unblock_time: unblockTime
+          });
+        
+          showEditDialog.value = true;
+        }
+
+
+        async function submitEdit() {
+          const payload = Object.assign({}, editForm, {
+            pretty: Number(editForm.pretty) // 保证是0/1整数
+          });
+          const res = await fetch('/api/index.php?module=user_module&method=updateUser', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(editForm)
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('更新成功');
+            showEditDialog.value = false;
+            loadData();
+          } else {
+            ElementPlus.ElMessage.error(json.message || '更新失败');
+          }
+        }
+
+        async function submitCreate() {
+          const res = await fetch('/api/index.php?module=user_module&method=createUser', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(createForm)
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('新增成功');
+            showCreateDialog.value = false;
+            createForm.account = '';
+            createForm.password = '';
+            loadData();
+          } else {
+            ElementPlus.ElMessage.error(json.message || '新增失败');
+          }
+        }
+
+        onMounted(loadData);
+
+        return {
+          query, filters, userList, total,
+          showEditDialog, showCreateDialog,
+          editForm, createForm,
+          loadData, handlePageChange,
+          editUser, submitEdit, submitCreate,
+          resetFilters, stats
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

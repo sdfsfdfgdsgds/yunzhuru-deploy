@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>卡密查询</title>
+    <!-- 引入 WeUI CSS -->
+    <link rel="stylesheet" href="https://res.wx.qq.com/open/libs/weui/2.5.4/weui.min.css">
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+        }
+    
+        body {
+            display: flex;
+            flex-direction: column;
+            font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
+            background: linear-gradient(to bottom, #e0f7fa, #b2ebf2, #80deea); /* 调整整体背景渐变 */
+            color: #004d40; /* 主文字颜色改为深绿色 */
+        }
+        .container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 16px;
+            width: 100%;
+            box-sizing: border-box;
+            overflow-y: auto;
+        }
+        .avatar {
+            width: 20vw;
+            max-width: 80px;
+            height: 20vw;
+            max-height: 80px;
+            border-radius: 50%;
+            border: 3px solid white;
+            margin-bottom: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+        h2 {
+            text-align: center;
+            margin: 8px 0;
+            font-size: 4vw;
+            color: #00695c; /* 标题颜色 */
+        }
+        p {
+            font-size: 3.5vw;
+            text-align: center;
+            margin-bottom: 16px;
+            color: #004d40; /* 段落文字颜色 */
+        }
+        .form-group {
+            width: 100%;
+            max-width: 400px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        input {
+            padding: 12px;
+            font-size: 4vw;
+            border-radius: 9999px;
+            border: 1px solid #80cbc4; /* 输入框边框颜色 */
+            outline: none;
+            box-sizing: border-box;
+        }
+        button {
+            padding: 12px 0;
+            border-radius: 9999px;
+            border: none;
+            font-weight: 600;
+            font-size: 4vw;
+            cursor: pointer;
+        }
+        .primary-btn {
+            background-color: #009688; /* 主按钮颜色 */
+            color: white;
+        }
+        .secondary-btn {
+            background-color: #26a69a; /* 次按钮颜色 */
+            color: white;
+        }
+        #resultForm {
+            width: 100%;
+            max-width: 400px;
+            margin: 16px auto 0 auto;
+            padding: 12px;
+            background: #e0f2f1; /* 调整结果区域背景 */
+            box-sizing: border-box;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            display: none;
+        }
+        #resultForm div {
+            margin-bottom: 6px;
+            font-size: 3.5vw;
+            word-break: break-all;
+            color: #004d40;
+        }
+        footer {
+            height: 40px;
+            line-height: 40px;
+            text-align: center;
+            font-size: 10px;
+            color: #00796b; /* 底部文字颜色 */
+        }
+        .ios-alert-backdrop {
+            position: fixed;
+            inset: 0;
+            background-color: rgba(0,0,0,0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            opacity: 0;
+            transition: opacity 0.25s ease;
+        }
+        .ios-alert-backdrop.show { opacity: 1; }
+        .ios-alert {
+            width: 80vw;
+            max-width: 270px;
+            background: rgba(224, 242, 241, 0.95); /* 弹窗背景色 */
+            border-radius: 14px;
+            overflow: hidden;
+            text-align: center;
+            transform: scale(1.1);
+            transition: transform 0.25s ease;
+        }
+        .ios-alert.show { transform: scale(1); }
+        .ios-alert-title { font-weight: 600; font-size: 4vw; margin-top: 15px; color: #004d40; }
+        .ios-alert-message { margin: 8px 5vw 20px; font-size: 3.5vw; color: #004d40; line-height: 1.4; }
+        .ios-alert-buttons { display: flex; border-top: 1px solid rgba(0,0,0,0.2); }
+        .ios-alert-buttons.two-buttons .ios-alert-button:first-child::after {
+            content: '';
+            position: absolute;
+            top: 0; right: 0;
+            width: 1px; height: 100%;
+            background-color: rgba(0,0,0,0.2);
+        }
+        .ios-alert-button {
+            flex: 1;
+            padding: 12px 0;
+            font-size: 4vw;
+            color: #00796b;
+            background: none;
+            border: none;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .ios-alert-button:active { background-color: rgba(0,0,0,0.05); }
+    </style>
+
+</head>
+<body>
+    <div class="container">
+        <img src="/images/indexlogo.png" alt="头像" class="avatar">
+        <h2>卡密查询/解绑系统</h2>
+        <p>请输入您的 APPID、授权码和卡密进行查询或解绑。查询结果将在下方显示。<br>您可以向APP管理员索要授权码和APPID</p>
+
+        <div class="form-group">
+            <input id="appid" type="number" placeholder="请输入APPID">
+            <input id="authCode" type="text" placeholder="请输入授权码">
+            <input id="cardCode" type="text" placeholder="请输入卡密">
+            <button id="queryBtn" class="primary-btn">查询卡密</button>
+            <button id="unbindBtn" class="secondary-btn">解绑设备</button>
+        </div>
+
+        <div id="resultForm">
+            <h2>查询结果</h2>
+            <div><strong>卡密：</strong><span id="resCard"></span></div>
+            <div><strong>卡密使用时间：</strong><span id="resUsedTime"></span></div>
+            <div><strong>卡密到期时间：</strong><span id="resExpireTime"></span></div>
+            <div><strong>设备ID：</strong><span id="resDevice"></span></div>
+        </div>
+    </div>
+
+    <footer>© 2025 菜鸟云注入</footer>
+
+    <script>
+        const queryBtn = document.getElementById('queryBtn');
+        const unbindBtn = document.getElementById('unbindBtn');
+        const resultForm = document.getElementById('resultForm');
+        const resCard = document.getElementById('resCard');
+        const resUsedTime = document.getElementById('resUsedTime');
+        const resExpireTime = document.getElementById('resExpireTime');
+        const resDevice = document.getElementById('resDevice');
+
+        const appidInput = document.getElementById('appid');
+        const authCodeInput = document.getElementById('authCode');
+        const cardCodeInput = document.getElementById('cardCode');
+
+        function iosAlert(title, message) {
+            return new Promise(resolve => {
+                const backdrop = document.createElement('div');
+                backdrop.className = 'ios-alert-backdrop';
+                const alertBox = document.createElement('div');
+                alertBox.className = 'ios-alert';
+                alertBox.innerHTML = `
+                    <div class="ios-alert-title">${title}</div>
+                    <div class="ios-alert-message">${message}</div>
+                    <div class="ios-alert-buttons">
+                        <button class="ios-alert-button">好</button>
+                    </div>
+                `;
+                backdrop.appendChild(alertBox);
+                document.body.appendChild(backdrop);
+
+                setTimeout(() => {
+                    backdrop.classList.add('show');
+                    alertBox.classList.add('show');
+                }, 10);
+
+                alertBox.querySelector('.ios-alert-button').addEventListener('click', () => {
+                    backdrop.classList.remove('show');
+                    alertBox.classList.remove('show');
+                    setTimeout(() => {
+                        document.body.removeChild(backdrop);
+                        resolve();
+                    }, 250);
+                });
+            });
+        }
+
+        function iosConfirm(title, message) {
+            return new Promise(resolve => {
+                const backdrop = document.createElement('div');
+                backdrop.className = 'ios-alert-backdrop';
+                const alertBox = document.createElement('div');
+                alertBox.className = 'ios-alert';
+                alertBox.innerHTML = `
+                    <div class="ios-alert-title">${title}</div>
+                    <div class="ios-alert-message">${message}</div>
+                    <div class="ios-alert-buttons">
+                        <button class="ios-alert-button">取消</button>
+                        <button class="ios-alert-button">确定</button>
+                    </div>
+                `;
+                backdrop.appendChild(alertBox);
+                document.body.appendChild(backdrop);
+
+                setTimeout(() => {
+                    backdrop.classList.add('show');
+                    alertBox.classList.add('show');
+                }, 10);
+
+                const buttons = alertBox.querySelectorAll('.ios-alert-button');
+                buttons[0].addEventListener('click', () => close(false));
+                buttons[1].addEventListener('click', () => close(true));
+
+                function close(result) {
+                    backdrop.classList.remove('show');
+                    alertBox.classList.remove('show');
+                    setTimeout(() => {
+                        document.body.removeChild(backdrop);
+                        resolve(result);
+                    }, 250);
+                }
+            });
+        }
+
+        async function sendApiRequest(action, payload) {
+            try {
+                const response = await fetch(`api.php?action=${action}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                return await response.json();
+            } catch (err) {
+                console.error(err);
+                return { code: 500, msg: '请求失败' };
+            }
+        }
+
+        queryBtn.addEventListener('click', async () => {
+            const appid = appidInput.value.trim();
+            const authCode = authCodeInput.value.trim();
+            const cardCode = cardCodeInput.value.trim();
+            if (!appid || !authCode || !cardCode) {
+                iosAlert('提示', '请填写完整信息');
+                return;
+            }
+            const payload = { appid, kami: cardCode, auth_code: authCode };
+            const result = await sendApiRequest('query', payload);
+            if (result.code === 200) {
+                const data = result.data;
+                resCard.textContent = data.kami;
+                resUsedTime.textContent = data.use_at || '-';
+                resExpireTime.textContent = data.expire_at || '-';
+                resDevice.textContent = data.deviceId || '-';
+                resultForm.style.display = 'block';
+            } else {
+                iosAlert('提示', result.msg);
+                resultForm.style.display = 'none';
+            }
+        });
+
+        unbindBtn.addEventListener('click', async () => {
+            const appid = appidInput.value.trim();
+            const authCode = authCodeInput.value.trim();
+            const cardCode = cardCodeInput.value.trim();
+
+            if (!appid || !authCode || !cardCode) {
+                iosAlert('提示', '请填写完整信息');
+                return;
+            }
+
+            const confirmed = await iosConfirm('确认解绑', '是否确定要解绑该设备？');
+            if (!confirmed) return;
+
+            const payload = { appid, kami: cardCode, auth_code: authCode };
+            const result = await sendApiRequest('unbind', payload);
+            if (result.code === 200) {
+                iosAlert('成功', result.msg);
+                resDevice.textContent = '';
+            } else {
+                iosAlert('错误', result.msg);
+            }
+        });
+    </script>
+</body>
+</html>

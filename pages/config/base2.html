@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>应用基础配置</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="/element/css/index.css" />
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+</head>
+<body>
+  <div id="app" style="padding: 20px; max-width: 800px; margin: auto;">
+    <div style="margin-bottom: 20px; display: flex; align-items: center;">
+      <el-select v-model="selectedAppId" placeholder="请选择应用" @change="loadConfig" style="flex: 1;">
+        <el-option
+          v-for="app in appList"
+          :key="app.id"
+          :label="`${app.name} | ${app.version} | ${app.package}`"
+          :value="app.id"
+        />
+      </el-select>
+      <el-button style="margin-left: 10px;" @click="loadApps">刷新应用列表</el-button>
+    </div>
+
+    <el-form v-if="config && selectedAppId" label-width="250px">
+      <el-form-item label="调试模式">
+        <el-switch v-model="config.debug" @change="update('debug')" />
+      </el-form-item>
+      <el-form-item label="禁止 Root">
+        <el-switch v-model="config.ban_Root" @change="update('ban_Root')" />
+      </el-form-item>
+      <el-form-item label="禁止 Xposed">
+        <el-switch v-model="config.ban_Xposed" @change="update('ban_Xposed')" />
+      </el-form-item>
+      <el-form-item label="禁止模拟器">
+        <el-switch v-model="config.ban_Emulator" @change="update('ban_Emulator')" />
+      </el-form-item>
+      <el-form-item label="禁止沙盒环境">
+        <el-switch v-model="config.ban_VirtualApp" @change="update('ban_VirtualApp')" />
+      </el-form-item>
+      <el-form-item label="禁止双开环境">
+        <el-switch v-model="config.ban_DualApp" @change="update('ban_DualApp')" />
+      </el-form-item>
+      <el-form-item label="静默配置">
+        <el-switch v-model="config.black_package" @change="update('black_package')" />
+      </el-form-item>
+      <el-form-item label="全局通杀弹窗">
+        <el-switch v-model="config.enable_popup_kill_all" @change="update('enable_popup_kill_all')" />
+      </el-form-item>
+      <el-form-item label="关键词弹窗拦截">
+        <el-switch v-model="config.enable_popup_keywords" @change="update('enable_popup_keywords')" />
+      </el-form-item>
+      <el-form-item label="SP写入劫持">
+        <el-switch v-model="config.enable_sp_put" @change="update('enable_sp_put')" />
+      </el-form-item>
+      <el-form-item label="SP读取劫持">
+        <el-switch v-model="config.enable_sp_get" @change="update('enable_sp_get')" />
+      </el-form-item>
+      <el-form-item label="SP整体替换">
+        <el-switch v-model="config.enable_sp" @change="update('enable_sp')" />
+      </el-form-item>
+      <el-form-item label="全屏弹窗支持">
+        <el-switch v-model="config.enablePopups" @change="update('enablePopups')" />
+      </el-form-item>
+      <el-form-item label="图片弹窗支持">
+        <el-switch v-model="config.enableImagePopups" @change="update('enableImagePopups')" />
+      </el-form-item>
+      <el-form-item label="文字弹窗支持">
+        <el-switch v-model="config.enableMessagePopups" @change="update('enableMessagePopups')" />
+      </el-form-item>
+      <el-form-item label="输入框弹窗支持">
+        <el-switch v-model="config.enableinputPopups" @change="update('enableinputPopups')" />
+      </el-form-item>
+    </el-form>
+  </div>
+
+  <script>
+    const { createApp, ref, reactive, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const appList = ref([]);
+        const selectedAppId = ref(null);
+        const config = reactive({});
+
+        async function loadApps() {
+          try {
+            const res = await fetch('/api/index.php?module=config&method=getMyApps');
+            const json = await res.json();
+            if (json.code === 200 && Array.isArray(json.data)) {
+              appList.value = json.data;
+            } else {
+              ElementPlus.ElMessage.error(json.message || '获取应用列表失败');
+            }
+          } catch {
+            ElementPlus.ElMessage.error('请求失败');
+          }
+        }
+
+        async function loadConfig() {
+          if (!selectedAppId.value) return;
+          try {
+            const res = await fetch('/api/index.php?module=config&method=getAppConfig', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ apk_id: selectedAppId.value })
+            });
+            const json = await res.json();
+            if (json.code === 200) {
+              const raw = json.data;
+              // 转换布尔字段
+              for (const key in raw) {
+                if (['id', 'apk_id'].includes(key)) {
+                  config[key] = raw[key]; // 保留原值
+                } else {
+                  config[key] = raw[key] === '1' || raw[key] === 1;
+                }
+              }
+            } else {
+              ElementPlus.ElMessage.error(json.message || '配置加载失败');
+            }
+          } catch {
+            ElementPlus.ElMessage.error('请求失败');
+          }
+        }
+
+
+        async function update(field) {
+          if (!config.id) return;
+          try {
+            const res = await fetch('/api/index.php?module=config&method=updateAppConfig', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                id: config.id,
+                field: field,
+                value: config[field]
+              })
+            });
+            const json = await res.json();
+            if (json.code !== 200) {
+              ElementPlus.ElMessage.error(json.message || '更新失败');
+            }
+          } catch {
+            ElementPlus.ElMessage.error('请求失败');
+          }
+        }
+
+        onMounted(() => {
+          loadApps();
+        });
+
+        return {
+          appList,
+          selectedAppId,
+          config,
+          loadApps,
+          loadConfig,
+          update
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

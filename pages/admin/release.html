@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>已编译文件管理</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/config.js"></script>
+  <style>
+    body { padding: 20px; }
+    .toolbar { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <el-alert
+      title="仅展示状态为编译成功的任务文件，可下载或清除用户编译的文件。仅会删除已编译的文件不会删除编译记录。"
+      type="info"
+      show-icon
+      style="margin-bottom: 20px;">
+    </el-alert>
+
+    <div class="toolbar">
+      <div><strong>文件列表</strong></div>
+      <el-button type="primary" @click="loadData">刷新</el-button>
+    </div>
+
+    <el-table :data="taskList" border style="width: 100%">
+        
+      <el-table-column label="ID" prop="id" width="60"></el-table-column>
+      <el-table-column label="图标" width="60">
+          <template #default="scope">
+            <img
+              :src="`/icon.php?id=${scope.row.apk_id}`"
+              style="width: 32px; height: 32px; object-fit: contain; border-radius: 6px;"
+              alt="icon"
+            />
+          </template>
+      </el-table-column>
+      <el-table-column label="应用名称" prop="apk_name"></el-table-column>
+      <el-table-column label="应用包名" prop="apk_package"></el-table-column>
+      <el-table-column label="大小" prop="size" :formatter="formatSize" width="90"></el-table-column>
+      <el-table-column label="备注" prop="remark"></el-table-column>
+      <el-table-column label="用户id" prop="user_id" width="80"></el-table-column>
+      <el-table-column label="用户昵称" prop="user_name"></el-table-column>
+      <el-table-column label="用户账号" prop="user_account"></el-table-column>
+      <el-table-column label="模板" width="90">
+        <template #default="scope">
+          <div>{{ scope.row.template_name }}<br>{{ scope.row.template_version }}</div>
+        </template>
+      </el-table-column>
+      <el-table-column label="签名" prop="sign_name"></el-table-column>
+      <el-table-column label="时间" width="230">
+        <template #default="scope">
+          <div>创建：{{ scope.row.created_at }}</div>
+          <div v-if="scope.row.completed_at">完成：{{ scope.row.completed_at }}</div>
+        </template>
+      </el-table-column>
+      <el-table-column label="距今" width="60">
+        <template #default="scope">
+          <div>{{ scope.row.days_since_created }}天</div>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="160">
+        <template #default="scope">
+          <el-button
+            size="small"
+            type="success"
+            @click="downloadInjected(scope.row)">
+            下载
+          </el-button>
+          <el-button
+            size="small"
+            type="danger"
+            @click="deleteFile(scope.row)">
+            删除
+          </el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <el-pagination
+      v-if="total > 0"
+      style="margin-top: 20px; text-align: right"
+      background
+      layout="total, prev, pager, next, jumper"
+      :current-page="query.page"
+      :page-size="query.limit"
+      :total="total"
+      @current-change="handlePageChange">
+    </el-pagination>
+  </div>
+
+  <script>
+    const { createApp, ref, reactive, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const query = reactive({
+          page: 1,
+          limit: 20
+        });
+
+        const taskList = ref([]);
+        const total = ref(0);
+
+        async function loadData() {
+          const res = await fetch('/api/index.php?module=admin_file&method=getCompiledList', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(query)
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            taskList.value = json.data.list;
+            total.value = json.data.total;
+            query.page = json.data.page;
+          } else {
+            ElementPlus.ElMessage.error(json.message || '加载失败');
+          }
+        }
+
+        function handlePageChange(p) {
+          query.page = p;
+          loadData();
+        }
+        function formatSize(row) {
+          const sizeInMB = row.size / 1024 / 1024;
+          return sizeInMB.toFixed(2) + ' MB';
+        }
+        function downloadInjected(row) {
+          if (!row.injected_apk) {
+            ElementPlus.ElMessage.warning('文件路径不存在');
+            return;
+          }
+          const url = '/down.php?file=' + encodeURIComponent(row.injected_apk) + '&name=' + encodeURIComponent(row.apk_name);
+          window.open(url, '_blank');
+        }
+
+        async function deleteFile(row) {
+          const confirm = await ElementPlus.ElMessageBox.confirm('确认删除该文件？', '警告', { type: 'warning' }).catch(() => null);
+          if (!confirm) return;
+
+          const res = await fetch('/api/index.php?module=admin_file&method=deleteCompiledFile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: row.id })
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('文件已删除');
+            loadData();
+          } else {
+            ElementPlus.ElMessage.error(json.message || '删除失败');
+          }
+        }
+
+        onMounted(loadData);
+
+        return {
+          query,
+          taskList,
+          total,
+          loadData,
+          handlePageChange,
+          downloadInjected,
+          deleteFile,
+          formatSize
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>系统设置</title>
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+</head>
+<body>
+<div id="app" style="padding: 20px">
+
+  <div style="margin-bottom: 20px; display: flex; gap: 10px; align-items: center;">
+    <el-button @click="loadSettings">刷新设置</el-button>
+    <el-button type="primary" @click="saveSettings">保存设置</el-button>
+    <el-button type="danger" @click="clearTempFiles">清空临时缓存</el-button>
+  </div>
+
+  <el-form :model="settingsForm" label-width="250px">
+    <el-form-item
+      v-for="item in settingsList"
+      :key="item.key_name"
+      :label="`${item.title}（${item.key_name}）`"
+    >
+      <template v-if="item.type === 'edit'">
+        <el-input v-model="settingsForm[item.key_name]" style="width: 400px; margin-right: 10px"></el-input>
+      </template>
+      <template v-else-if="item.type === 'switch'">
+        <el-switch
+          v-model="settingsForm[item.key_name]"
+          :active-value="true"
+          :inactive-value="false"
+          style="margin-right: 10px"
+        ></el-switch>
+      </template>
+      <span style="color: #999">{{ item.note }}</span>
+    </el-form-item>
+  </el-form>
+
+</div>
+
+<script>
+const { createApp, ref, reactive, onMounted, watch } = Vue;
+
+createApp({
+  setup() {
+    const settingsList = ref([]);
+    const settingsForm = reactive({});
+
+    async function loadSettings() {
+      const res = await fetch('/api/index.php?module=system_setting&method=getSettings');
+      const json = await res.json();
+      if (json.code === 200) {
+        settingsList.value = json.data;
+        json.data.forEach(item => {
+          if (item.type === 'switch') {
+            settingsForm[item.key_name] = item.key_value === '1';
+          } else {
+            settingsForm[item.key_name] = item.key_value;
+          }
+        });
+      } else {
+        ElementPlus.ElMessage.error(json.message || '加载失败');
+      }
+    }
+
+    async function saveSettings() {
+      const postData = {};
+      for (const key in settingsForm) {
+        const item = settingsList.value.find(i => i.key_name === key);
+        if (item && item.type === 'switch') {
+          postData[key] = settingsForm[key] ? '1' : '0';
+        } else {
+          postData[key] = settingsForm[key];
+        }
+      }
+
+      const res = await fetch('/api/index.php?module=system_setting&method=updateSetting', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(postData)
+      });
+      const json = await res.json();
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success(json.message || '保存成功');
+      } else {
+        ElementPlus.ElMessage.error(json.message || '保存失败');
+      }
+    }
+
+    async function clearTempFiles() {
+      const confirm = await ElementPlus.ElMessageBox.confirm(
+        '确认清除 /temp/ 目录中的所有缓存文件吗？清理前最好先停止注入服务,防止有正在处理的任务导致一些报错',
+        '警告',
+        { type: 'warning' }
+      ).catch(() => null);
+      if (!confirm) return;
+
+      const res = await fetch('/api/index.php?module=system_setting&method=clearTempFiles', {
+        method: 'POST'
+      });
+      const json = await res.json();
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success(json.message || '清理成功');
+      } else {
+        ElementPlus.ElMessage.error(json.message || '清理失败');
+      }
+    }
+
+    onMounted(loadSettings);
+
+    return {
+      settingsList,
+      settingsForm,
+      loadSettings,
+      saveSettings,
+      clearTempFiles
+    };
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

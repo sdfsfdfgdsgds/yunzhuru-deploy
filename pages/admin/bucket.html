@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>存储桶管理</title>
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+</head>
+<body>
+<div id="app" style="padding: 20px">
+
+  <div style="margin-bottom: 20px; display: flex; gap: 10px; align-items: center;">
+    <el-button type="primary" @click="showAddDialog">添加存储桶</el-button>
+    <el-button @click="loadBuckets">刷新</el-button>
+    <el-button type="warning" @click="pushAll" :loading="pushing">同步全部配置到桶</el-button>
+  </div>
+
+  <el-alert
+    title="存储桶用于分发壳端配置，支持 S3、Cloudflare R2、Backblaze B2。壳端优先从桶获取配置，全部失败后回退到 API。"
+    type="info" show-icon :closable="false" style="margin-bottom: 20px">
+  </el-alert>
+
+  <el-table :data="buckets" border style="width: 100%">
+    <el-table-column label="ID" prop="id" width="60"></el-table-column>
+    <el-table-column label="名称" prop="name" width="150"></el-table-column>
+    <el-table-column label="类型" prop="provider" width="80">
+      <template #default="scope">
+        <el-tag :type="providerTag(scope.row.provider)">{{ scope.row.provider.toUpperCase() }}</el-tag>
+      </template>
+    </el-table-column>
+    <el-table-column label="Endpoint" prop="endpoint" show-overflow-tooltip></el-table-column>
+    <el-table-column label="Bucket" prop="bucket" width="120"></el-table-column>
+    <el-table-column label="Region" prop="region" width="100"></el-table-column>
+    <el-table-column label="公开域名" prop="domain" show-overflow-tooltip></el-table-column>
+    <el-table-column label="状态" width="80" align="center">
+      <template #default="scope">
+        <el-switch
+          v-model="scope.row.enabled"
+          :active-value="1" :inactive-value="0"
+          @change="toggleEnabled(scope.row)">
+        </el-switch>
+      </template>
+    </el-table-column>
+    <el-table-column label="注入" width="80" align="center">
+      <template #default="scope">
+        <el-switch
+          v-model="scope.row.inject"
+          :active-value="1" :inactive-value="0"
+          @change="toggleInject(scope.row)">
+        </el-switch>
+      </template>
+    </el-table-column>
+    <el-table-column label="操作" width="220" align="center">
+      <template #default="scope">
+        <el-button size="small" @click="showEditDialog(scope.row)">编辑</el-button>
+        <el-button size="small" type="success" @click="testBucket(scope.row.id)" :loading="scope.row._testing">测试</el-button>
+        <el-button size="small" type="danger" @click="removeBucket(scope.row)">删除</el-button>
+      </template>
+    </el-table-column>
+  </el-table>
+
+  <!-- 添加/编辑对话框 -->
+  <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑存储桶' : '添加存储桶'" width="560px">
+    <el-form :model="form" label-width="110px">
+      <el-form-item label="名称" required>
+        <el-input v-model="form.name" placeholder="如 Cloudflare R2"></el-input>
+      </el-form-item>
+      <el-form-item label="类型">
+        <el-select v-model="form.provider" style="width: 100%">
+          <el-option label="S3" value="s3"></el-option>
+          <el-option label="Cloudflare R2" value="r2"></el-option>
+          <el-option label="Backblaze B2" value="b2"></el-option>
+        </el-select>
+      </el-form-item>
+      <el-form-item label="Access Key" required>
+        <el-input v-model="form.access_key"></el-input>
+      </el-form-item>
+      <el-form-item label="Secret Key" required>
+        <el-input v-model="form.secret_key" type="password" show-password
+          :placeholder="isEdit ? '不修改请留空' : ''"></el-input>
+      </el-form-item>
+      <el-form-item label="Endpoint" required>
+        <el-input v-model="form.endpoint" placeholder="https://xxx.r2.cloudflarestorage.com"></el-input>
+      </el-form-item>
+      <el-form-item label="Bucket" required>
+        <el-input v-model="form.bucket"></el-input>
+      </el-form-item>
+      <el-form-item label="Region">
+        <el-input v-model="form.region" placeholder="auto（R2填auto，S3填实际区域）"></el-input>
+      </el-form-item>
+      <el-form-item label="公开域名" required>
+        <el-input v-model="form.domain" placeholder="https://cdn.example.com（壳端访问用）"></el-input>
+      </el-form-item>
+      <el-form-item label="启用推送">
+        <el-switch v-model="form.enabled" :active-value="1" :inactive-value="0"></el-switch>
+        <span style="margin-left: 8px; color: #909399; font-size: 12px">保存配置时推送到此桶</span>
+      </el-form-item>
+      <el-form-item label="注入到APK">
+        <el-switch v-model="form.inject" :active-value="1" :inactive-value="0"></el-switch>
+        <span style="margin-left: 8px; color: #909399; font-size: 12px">新注入的APK包含此桶域名</span>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="testForm" :loading="formTesting" type="success">测试连接</el-button>
+      <el-button @click="dialogVisible = false">取消</el-button>
+      <el-button type="primary" @click="submitForm" :loading="submitting">{{ isEdit ? '保存' : '添加' }}</el-button>
+    </template>
+  </el-dialog>
+
+</div>
+
+<script>
+const { createApp, ref, reactive, onMounted } = Vue;
+
+createApp({
+  setup() {
+    const buckets = ref([]);
+    const dialogVisible = ref(false);
+    const isEdit = ref(false);
+    const submitting = ref(false);
+    const pushing = ref(false);
+    const formTesting = ref(false);
+
+    const emptyForm = { name: '', provider: 's3', access_key: '', secret_key: '', endpoint: '', bucket: '', region: 'auto', domain: '', enabled: 1, inject: 1 };
+    const form = reactive({ ...emptyForm });
+
+    function providerTag(p) {
+      return { r2: 'warning', b2: 'success', s3: '' }[p] || '';
+    }
+
+    async function api(method, data) {
+      const res = await fetch(`/api/index.php?module=bucket&method=${method}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data || {})
+      });
+      return await res.json();
+    }
+
+    async function loadBuckets() {
+      const json = await api('getBuckets');
+      if (json.code === 200) {
+        buckets.value = (json.data || []).map(b => ({ ...b, enabled: parseInt(b.enabled), inject: parseInt(b.inject), _testing: false }));
+      } else {
+        ElementPlus.ElMessage.error(json.message || '加载失败');
+      }
+    }
+
+    function showAddDialog() {
+      isEdit.value = false;
+      Object.assign(form, { ...emptyForm });
+      dialogVisible.value = true;
+    }
+
+    function showEditDialog(row) {
+      isEdit.value = true;
+      Object.assign(form, {
+        id: row.id,
+        name: row.name,
+        provider: row.provider,
+        access_key: row.access_key,
+        secret_key: '', // 不回显密钥
+        endpoint: row.endpoint,
+        bucket: row.bucket,
+        region: row.region,
+        domain: row.domain,
+        enabled: parseInt(row.enabled),
+        inject: parseInt(row.inject),
+      });
+      dialogVisible.value = true;
+    }
+
+    async function submitForm() {
+      submitting.value = true;
+      try {
+        const method = isEdit.value ? 'updateBucket' : 'addBucket';
+        const data = { ...form };
+        // 编辑时如果密钥为空则不传
+        if (isEdit.value && !data.secret_key) delete data.secret_key;
+        const json = await api(method, data);
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success(json.message || '操作成功');
+          dialogVisible.value = false;
+          loadBuckets();
+        } else {
+          ElementPlus.ElMessage.error(json.message || '操作失败');
+        }
+      } finally {
+        submitting.value = false;
+      }
+    }
+
+    async function testBucket(id) {
+      const row = buckets.value.find(b => b.id === id);
+      if (row) row._testing = true;
+      try {
+        const json = await api('testBucket', { id });
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success('连接成功');
+        } else {
+          ElementPlus.ElMessage.error(json.message || '连接失败');
+        }
+      } finally {
+        if (row) row._testing = false;
+      }
+    }
+
+    async function testForm() {
+      if (!form.access_key || !form.endpoint || !form.bucket) {
+        ElementPlus.ElMessage.warning('请先填写 Access Key、Endpoint、Bucket');
+        return;
+      }
+      // 编辑模式下如果没填新密钥，需要提示
+      if (isEdit.value && !form.secret_key) {
+        ElementPlus.ElMessage.warning('测试连接需要填写 Secret Key');
+        return;
+      }
+      formTesting.value = true;
+      try {
+        const json = await api('testBucket', {
+          access_key: form.access_key,
+          secret_key: form.secret_key,
+          endpoint: form.endpoint,
+          bucket: form.bucket,
+          region: form.region || 'auto',
+        });
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success('连接成功');
+        } else {
+          ElementPlus.ElMessage.error(json.message || '连接失败');
+        }
+      } finally {
+        formTesting.value = false;
+      }
+    }
+
+    async function toggleEnabled(row) {
+      const json = await api('updateBucket', { id: row.id, enabled: row.enabled });
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success(row.enabled ? '已启用推送' : '已禁用推送');
+      } else {
+        ElementPlus.ElMessage.error(json.message || '操作失败');
+        row.enabled = row.enabled ? 0 : 1;
+      }
+    }
+
+    async function toggleInject(row) {
+      const json = await api('updateBucket', { id: row.id, inject: row.inject });
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success(row.inject ? '已启用注入' : '已禁用注入');
+      } else {
+        ElementPlus.ElMessage.error(json.message || '操作失败');
+        row.inject = row.inject ? 0 : 1;
+      }
+    }
+
+    async function removeBucket(row) {
+      const confirm = await ElementPlus.ElMessageBox.confirm(
+        `确认删除存储桶「${row.name}」？删除后已注入的 APK 仍会尝试访问该桶（会失败后跳过）。`,
+        '警告', { type: 'warning' }
+      ).catch(() => null);
+      if (!confirm) return;
+
+      const json = await api('deleteBucket', { id: row.id });
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success('删除成功');
+        loadBuckets();
+      } else {
+        ElementPlus.ElMessage.error(json.message || '删除失败');
+      }
+    }
+
+    async function pushAll() {
+      const confirm = await ElementPlus.ElMessageBox.confirm(
+        '将所有应用的当前配置推送到全部启用的存储桶，可能需要一些时间。',
+        '同步全部配置', { type: 'info' }
+      ).catch(() => null);
+      if (!confirm) return;
+
+      pushing.value = true;
+      try {
+        const json = await api('pushAllConfigs');
+        if (json.code === 200) {
+          const data = json.data || {};
+          const total = Object.keys(data).length;
+          ElementPlus.ElMessage.success(`同步完成，共处理 ${total} 个应用`);
+        } else {
+          ElementPlus.ElMessage.error(json.message || '同步失败');
+        }
+      } finally {
+        pushing.value = false;
+      }
+    }
+
+    onMounted(loadBuckets);
+
+    return {
+      buckets, dialogVisible, isEdit, form, submitting, pushing, formTesting,
+      providerTag, loadBuckets, showAddDialog, showEditDialog, submitForm,
+      testBucket, testForm, toggleEnabled, toggleInject, removeBucket, pushAll
+    };
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

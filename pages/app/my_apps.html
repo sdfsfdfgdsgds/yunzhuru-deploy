@@ -1,0 +1,1412 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>我的应用</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="/element/css/index.css" />
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/config.js"></script>
+  <style>
+    .toolbar {
+      margin: 20px 0 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="app" style="padding: 20px;">
+    <el-alert
+      title="被系统识别为加固/混淆/签名校验等不受支持的应用会被删除，检测方式为：系统自动注入 + 自动真机验证 + 自动日志分析，最后人工复检，不存在误检"
+      type="error"
+      style="margin-bottom: 20px;">
+    </el-alert>
+    <el-alert
+      title="上传的应用，时间过久会清理安装包文件，不影响你的远程控制。若要重新注入，点击【重传】即可，此举是为了减少服务器储存空间占用"
+      type="warning"
+      style="margin-bottom: 20px;">
+    </el-alert>
+    <!-- 查询表单 -->
+    <el-form :inline="true" :model="query" @submit.prevent="loadData">
+      <el-form-item label="APPID">
+        <el-input v-model="query.appid" placeholder="APPID"></el-input>
+      </el-form-item>
+      <el-form-item label="UID">
+        <el-input v-model="query.uid" placeholder="UID"></el-input>
+      </el-form-item>
+      <el-form-item label="名称">
+        <el-input v-model="query.name" placeholder="应用名称"></el-input>
+      </el-form-item>
+      <el-form-item label="版本">
+        <el-input v-model="query.version" placeholder="版本号"></el-input>
+      </el-form-item>
+      <el-form-item label="包名">
+        <el-input v-model="query.package" placeholder="包名"></el-input>
+      </el-form-item>
+      <el-form-item label="配置方式">
+        <el-select v-model="query.config_mode" placeholder="全部" clearable style="width: 130px;">
+          <el-option label="独享" value="0"></el-option>
+          <el-option label="复用中" value="1"></el-option>
+        </el-select>
+      </el-form-item>
+      <el-form-item label="复用谁">
+        <el-select v-model="query.reuse_apk_id" placeholder="输名称或包名搜索" clearable filterable remote :remote-method="searchReuseTarget" :loading="reuseSearchLoading" style="width: 220px;">
+          <el-option v-for="app in reuseSearchResults" :key="app.id" :label="`[${app.id}] ${app.name}`" :value="app.id"></el-option>
+        </el-select>
+      </el-form-item>
+      <el-form-item>
+        <el-button type="primary" @click="loadData">查询</el-button>
+        <el-button @click="resetForm">重置</el-button>
+      </el-form-item>
+    </el-form>
+
+    <!-- 工具栏 -->
+    <div class="toolbar">
+      <el-button type="primary" @click="selectFile">上传要注入的APP</el-button>
+      <el-button v-if="isAdmin" type="success" @click="urlInjectDialogVisible = true">URL注入</el-button>
+      <input type="file" ref="fileInput" accept=".apk" style="display: none;" @change="handleFileChange"/>
+    </div>
+    
+    <div class="stats">
+        <el-space wrap>
+            <el-button type="warning" size="small" @click="expandStorageDialogVisible = true">
+              立即扩大储存空间
+            </el-button>
+            <el-tag>已用容量：{{ stats.used_storage }}GB</el-tag>
+            <el-tag type="success">总容量：{{ stats.total_storage }}GB</el-tag>
+            <el-tag type="warning">储存使用率：{{ stats.used_percent }}%</el-tag>
+            <el-tag type="danger">若储存空间不够了，可先删除一些应用的安装包，需要注入的时候再重传一下</el-tag>
+        </el-space>
+    </div>
+    
+    <!-- 表格 -->
+    <el-table :data="tableData" border style="margin-top: 10px;">
+      <el-table-column label="ID" prop="id" width="60"></el-table-column>
+      <el-table-column label="UID" prop="user_id" width="60"></el-table-column>
+      <el-table-column label="图标" width="60">
+          <template #default="scope">
+            <img
+              :src="`/icon.php?id=${scope.row.id}`"
+              style="width: 32px; height: 32px; object-fit: contain; border-radius: 6px;"
+              alt="icon"
+            />
+          </template>
+      </el-table-column>
+      <el-table-column label="名称" prop="name"></el-table-column>
+      <el-table-column label="版本" prop="version"></el-table-column>
+      <el-table-column label="包名" prop="package"></el-table-column>
+      <el-table-column label="大小" prop="size" :formatter="formatSize"></el-table-column>
+      <el-table-column label="上传时间" prop="upload_time"></el-table-column>
+      <!-- 新增：配置方式 -->
+      <el-table-column label="配置方式">
+        <template #default="scope">
+          <span>{{ scope.row.config_mode == 1 ? '复用' : '独享' }}</span>
+        </template>
+      </el-table-column>
+    
+      <!-- 新增：复用的应用ID -->
+        <el-table-column label="复用">
+          <template #default="scope">
+            <span v-if="scope.row.reuse_apk_id">
+              {{ scope.row.reuse_apk_id }} - {{ scope.row.reuse_apk_name }}
+            </span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+
+      <el-table-column label="操作" width="320">
+        <template #default="scope">
+          <el-tooltip v-if="!scope.row.path" content="安装包不存在,请重传" placement="top" effect="dark">
+              <el-button type="primary" size="small" disabled>注入</el-button>
+          </el-tooltip>
+          <el-button v-else type="primary" size="small" @click="injectApp(scope.row)">注入</el-button>
+          <el-button size="small" @click="editInfo(scope.row)">编辑</el-button>
+          <el-button size="small" type="warning" @click="replaceApk(scope.row)">重传</el-button>
+          <el-button type="danger" size="small" @click="handleDelete(scope.row)">删除</el-button>
+          <el-tooltip v-if="!scope.row.path" content="安装包不存在" placement="top" effect="dark">
+              <el-button type="primary" size="small" disabled>下载</el-button>
+          </el-tooltip>
+          <el-button v-else size="small" type="success"  @click="downloadInjected(scope.row)">下载</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <!-- 分页 -->
+    <el-pagination
+      v-if="total > 0"
+      style="margin-top: 20px; text-align: right;"
+      background
+      layout="total, prev, pager, next, jumper"
+      :current-page="query.page"
+      :page-size="query.limit"
+      :total="total"
+      @current-change="handlePageChange"
+    ></el-pagination>
+    
+    <el-dialog v-model="expandStorageDialogVisible" title="扩容服务" width="400px">
+      <div style="line-height: 1.8; font-size: 14px;">
+        <p>当前已用：{{ stats.used_storage }} GB</p>
+        <p>当前总容量：{{ stats.total_storage }} GB</p>
+        <p>若您需要更多储存空间，可通过以下方式申请扩容：</p>
+        <ul style="margin-left: 20px;">
+            <!--
+          <li>购买 VIP 会员，立享大储存</li>
+          <li>可上传最大300M的应用</li>
+          <li>联系管理员申请更多空间</li>-->
+          <li>QQ：2380494437</li>
+        </ul>
+        <p style="margin-top: 10px; color: #999;">* 后续将支持在线扩容功能，敬请期待。</p>
+      </div>
+    
+      <template #footer>
+        <el-button @click="expandStorageDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+    
+    
+    <el-dialog title="修改应用信息(修改后只是自己记录,不会影响编译结果)" v-model="editDialogVisible" width="500px">
+      <el-form :model="editForm" label-width="80px">
+        <el-form-item label="名称">
+          <el-input v-model="editForm.name"></el-input>
+        </el-form-item>
+        <el-form-item label="版本号">
+          <el-input v-model="editForm.version" disabled></el-input>
+        </el-form-item>
+        <el-form-item label="包名">
+          <el-input v-model="editForm.package" disabled></el-input>
+        </el-form-item>
+        <el-form-item label="APPID">
+          <el-input v-model="editForm.id" disabled></el-input>
+          <div style="margin-top: 5px; color: #FF0000; font-size: 12px;">
+            在官网首页解绑卡密时会用到
+        </div>
+        </el-form-item>
+        <el-form-item label="解绑码">
+          <el-input v-model="editForm.app_key"></el-input>
+          <div style="margin-top: 5px; color: #FF0000; font-size: 12px;">
+            拥有此卡密解绑授权码，则可在官网解绑卡密而无需设备码,如果设置为空则代表禁用此功能
+        </div>
+        </el-form-item>
+        
+        <el-form-item label="接口域名">
+          <el-select v-model="editForm.domain_mode" placeholder="请选择接口域名">
+            <el-option label="壳内置域名(推荐)" :value="0"></el-option>
+            <el-option label="自定义域名(联系管理员配置)" :value="1"></el-option>
+          </el-select>
+          <div style="margin-top: 5px; color: #FF0000; font-size: 12px;">
+            域名必须在注入前配置好，注入后不可动态修改，如需修改需重新注入
+          </div>
+        </el-form-item>
+    
+        <el-form-item v-if="editForm.domain_mode == 1" label="自定义">
+          <el-input
+            type="textarea"
+            v-model="editForm.custom_domains"
+            placeholder="请输入完整域名，一行一个，必须带 http:// 或 https://"
+            :rows="5"
+          ></el-input>
+        </el-form-item>
+        <el-form-item label="配置方式">
+          <el-select v-model="editForm.config_mode" placeholder="请选择配置方式">
+            <el-option label="独用一套配置" :value="0"></el-option>
+            <el-option label="复用其他应用配置" :value="1"></el-option>
+          </el-select>
+        </el-form-item>
+        
+        <el-form-item v-if="editForm.config_mode === 1" label="复用谁">
+          <el-select v-model="editForm.reuse_apk_id" placeholder="请选择复用的应用">
+            <el-option
+              v-for="app in allApps"
+              :key="app.id"
+              :label="`[${app.id}] ${app.name} | ${app.package}`"
+              :disabled="app.id === editForm.id"
+              :value="app.id">
+            </el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="editForm.config_mode === 1" label="复用选项">
+          <el-checkbox-group v-model="editForm.reuse_options">
+            <el-checkbox label="卡密数据"></el-checkbox>
+            <el-checkbox label="全屏弹窗"></el-checkbox>
+            <el-checkbox label="图片弹窗"></el-checkbox>
+            <el-checkbox label="文字弹窗"></el-checkbox>
+            <el-checkbox label="输入框弹窗"></el-checkbox>
+            <el-checkbox label="HTML弹窗"></el-checkbox>
+            <el-checkbox label="SP写入劫持"></el-checkbox>
+            <el-checkbox label="SP读取劫持"></el-checkbox>
+            <el-checkbox label="SP重写"></el-checkbox>
+            <el-checkbox label="通杀拦截"></el-checkbox>
+            <el-checkbox label="activity拦截"></el-checkbox>
+            <el-checkbox label="关键词拦截"></el-checkbox>
+            <el-checkbox label="URI劫持"></el-checkbox>
+            <el-checkbox label="包名检测"></el-checkbox>
+            
+          </el-checkbox-group>
+        </el-form-item>
+      </el-form>
+      <el-button
+          type="primary"
+          size="small"
+          @click="reuseHelpVisible = true"
+          style="position: absolute; bottom: 15px; left: 20px;"
+        >
+          复用说明(必看)
+        </el-button>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="editDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="saveEdit">保存</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+
+    <el-dialog title="选择壳模板进行注入" v-model="injectDialogVisible" width="700px">
+      <el-table :data="shellList" border height="400">
+        <el-table-column prop="id" label="ID" width="60"></el-table-column>
+        <el-table-column prop="name" label="模板名称" width="100"></el-table-column>
+        <el-table-column prop="version" label="版本" width="100"></el-table-column>
+        <el-table-column prop="description" label="说明"></el-table-column>
+        <el-table-column label="操作" width="120">
+          <template #default="scope">
+            <el-button type="success" size="small" @click="useShell(scope.row)">使用该壳</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+
+    <el-dialog title="选择签名证书(若无证书,请先创建证书)" v-model="signDialogVisible" width="600px">
+      <el-table v-if="signList.length > 0" :data="signList" border height="400">
+        <el-table-column prop="id" label="ID" width="60"></el-table-column>
+        <el-table-column prop="name" label="签名名称"></el-table-column>
+        <el-table-column prop="alias" label="别名"></el-table-column>
+        <el-table-column prop="upload_time" label="上传时间"></el-table-column>
+        <el-table-column label="操作" width="120">
+          <template #default="scope">
+            <el-button size="small" type="success" @click="useSign(scope.row)">使用该证书</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    
+      <div v-else style="text-align: center; padding: 30px;">
+        <el-button type="primary" @click="createDialogVisible = true">无证书，一键创建</el-button>
+      </div>
+      <template #footer>
+        <el-button type="warning" @click="useRandomSign()">随机签名</el-button>
+      </template>
+    </el-dialog>
+    
+<el-dialog title="功能选项" v-model="chainDialogVisible" width="600px">
+    
+    <div style="margin-top: 20px;">
+    <el-form label-width="100px">
+      <el-form-item label="注入模式">
+        <el-select v-model="mode" placeholder="请选择注入模式">
+          <el-option label="链路注入(默认)" :value="1"></el-option>
+          <el-option label="启动入口注入【继承】(次推荐)" :value="0"></el-option>
+          <el-option label="启动入口注入【反射】" :value="3"></el-option>
+          <el-option label="组件工厂注入(优先级高)" :value="2"></el-option>
+        </el-select>
+      </el-form-item>
+    </el-form>
+    <el-alert
+      type="warning"
+      description="若注入后无法运行，可尝试更换注入模式">
+    </el-alert>
+  </div>
+  
+  <div style="margin-top: 20px;">
+    <el-form label-width="100px">
+      <el-form-item label="设备码算法">
+        <el-select v-model="devices" placeholder="请选择设备码计算方式">
+          <el-option label="[默认]硬件信息(更新系统版本会变)" :value="0"></el-option>
+          <el-option label="AndroidID(换签名证书会变)" :value="1"></el-option>
+        </el-select>
+      </el-form-item>
+    </el-form>
+    <el-alert
+      type="warning"
+      description="使用硬件信息：完全相同的设备则设备码完全一致。使用AndroidID：每个设备都不一样,但是重新签名安装包后设备码会变">
+    </el-alert>
+  </div>
+  
+  <div style="margin-top: 20px;">
+    <el-checkbox v-if="false" v-model="allowHttp">解除 HTTP 限制 (若远程dex或者应用中存在http访问,则需改勾选此项)</el-checkbox>
+    <el-checkbox v-model="process">进程隔离(沙盒类应用需要勾选此项)</el-checkbox>
+    <el-checkbox v-model="network">禁止无网络运行(若APP无网络，则会自动退出)</el-checkbox>
+    <el-checkbox v-model="vpncheck">禁止VPN环境(检测到VPN自动结束运行,防止抓包)</el-checkbox>
+    <el-checkbox v-model="launcher">开屏窗口替换 (模板141版本及以上推荐勾选)</el-checkbox>
+    <el-checkbox v-model="debug">debuggable (开启后可用于调试，部分 API 可用性增强)</el-checkbox>
+    <el-checkbox v-model="killsign">去除签名校验<span style="color:red;">(推荐用MT管理器手动去除再上传)</span></el-checkbox>
+    <el-checkbox v-if="true" v-model="killpath" :disabled="!killsign">去除签名校验加强版(会塞入源安装包,怕破解别勾)</el-checkbox>
+    <el-checkbox v-model="kill_Inject">
+        铲除别人的云注入(可以将这个云注入👉<img src="/images/inject.png" style="width: 28px; height: 28px; vertical-align: middle; margin-right: 5px">直接铲掉)
+    </el-checkbox>
+    <el-checkbox v-model="dexmerge">DEX合并 (减少dex数量,小概率闪退)</el-checkbox>
+    <el-checkbox v-model="jiagu">APK加固(可能会闪退,有需要才勾选勾选)</el-checkbox>
+    <el-checkbox v-model="confuse">合并apk包(用于对抗乱码混淆,一般不建议启用)</el-checkbox>
+    <el-checkbox v-model="fake">AndroidManifest.xml伪加密(安卓15+会无法安装)</el-checkbox>
+    
+  </div>
+  
+  
+    
+  
+  
+  
+
+  <div style="margin-top: 20px;">
+    <el-form label-width="100px">
+      <el-form-item label="附加权限">
+        <el-select
+          v-model="selectedPermissions"
+          multiple
+          collapse-tags
+          placeholder="(可空)"
+        >
+          <el-option
+            v-for="item in permissionOptions"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          ></el-option>
+        </el-select>
+      </el-form-item>
+      <el-alert
+          type="warning"
+          description="可注入额外的权限到AndroidManifest.xml中,用于远程dex的权限注册">
+        </el-alert>
+    </el-form>
+  </div>
+
+  <div v-if="bucketList.length > 0" style="margin-top: 20px;">
+    <el-form label-width="100px">
+      <el-form-item label="配置分发桶">
+        <el-checkbox-group v-model="selectedBuckets">
+          <el-checkbox v-for="b in bucketList" :key="b.id" :label="b.id">
+            {{ b.name }} ({{ b.domain }})
+          </el-checkbox>
+        </el-checkbox-group>
+      </el-form-item>
+      <el-alert
+          type="info"
+          description="选择注入后壳端从哪些桶获取配置，默认全选">
+      </el-alert>
+    </el-form>
+  </div>
+
+  <div v-if="false" style="margin-top: 20px;">
+    <el-form label-width="100px">
+      <el-form-item label="请求模式">
+        <el-select v-model="Request" placeholder="请选择请求模式">
+          <el-option label="轮询串行请求(默认,单域名适用)" :value="0"></el-option>
+          <el-option label="全量并发请求(多域名列表适用)" :value="1"></el-option>
+        </el-select>
+      </el-form-item>
+    </el-form>
+    <el-alert
+      type="warning"
+      description="全量并发模式是哪个接口先响应就用哪个接口的数据">
+    </el-alert>
+  </div>
+
+
+  <template #footer>
+    <span class="dialog-footer">
+      <el-button @click="chainDialogVisible = false">取消</el-button>
+      <el-button type="primary" @click="confirmInject">创建注入任务</el-button>
+    </span>
+  </template>
+</el-dialog>
+
+<!-- URL 注入弹窗（仅管理员） -->
+<el-dialog title="URL 注入" v-model="urlInjectDialogVisible" width="650px">
+  <el-alert
+    title="输入 APK 下载链接，系统自动下载并创建注入任务，注入完成后自动上传到你配置的 S3 桶"
+    type="info"
+    style="margin-bottom: 15px;"
+    :closable="false"
+  ></el-alert>
+  <el-form :model="urlInjectForm" label-width="100px">
+    <el-form-item label="APK 链接">
+      <el-input v-model="urlInjectForm.url" placeholder="https://example.com/app.apk" clearable></el-input>
+    </el-form-item>
+    <el-form-item label="壳模板">
+      <el-select v-model="urlInjectForm.templateId" placeholder="请选择壳模板" style="width: 100%;">
+        <el-option v-for="s in urlShellList" :key="s.id" :label="s.name + ' (v' + s.version + ')'" :value="s.id"></el-option>
+      </el-select>
+    </el-form-item>
+    <el-form-item label="签名证书">
+      <el-select v-model="urlInjectForm.signId" placeholder="请选择签名证书" style="width: 100%;">
+        <el-option label="随机签名" value="random"></el-option>
+        <el-option v-for="s in urlSignList" :key="s.id" :label="s.name" :value="s.id"></el-option>
+      </el-select>
+    </el-form-item>
+    <el-form-item label="注入模式">
+      <el-select v-model="urlInjectForm.mode" style="width: 100%;">
+        <el-option label="链路注入(默认)" :value="1"></el-option>
+        <el-option label="启动入口注入【继承】" :value="0"></el-option>
+        <el-option label="启动入口注入【反射】" :value="3"></el-option>
+        <el-option label="组件工厂注入" :value="2"></el-option>
+      </el-select>
+    </el-form-item>
+    <el-form-item label="备注">
+      <el-input v-model="urlInjectForm.remark" placeholder="可选"></el-input>
+    </el-form-item>
+    <el-form-item label="选项">
+      <div>
+        <el-checkbox v-model="urlInjectForm.launcher">开屏窗口替换</el-checkbox>
+        <el-checkbox v-model="urlInjectForm.killsign">去除签名校验</el-checkbox>
+        <el-checkbox v-model="urlInjectForm.kill_Inject">铲除别人的云注入</el-checkbox>
+        <el-checkbox v-model="urlInjectForm.network">禁止无网络运行</el-checkbox>
+      </div>
+    </el-form-item>
+  </el-form>
+  <template #footer>
+    <el-button @click="urlInjectDialogVisible = false">取消</el-button>
+    <el-button type="primary" @click="submitUrlInject" :loading="urlInjectLoading">下载并注入</el-button>
+  </template>
+</el-dialog>
+
+
+
+    <el-dialog
+      title="配置复用说明"
+      v-model="reuseHelpVisible"
+      width="600px">
+      <p style="line-height: 1.8;">
+        配置复用允许多个应用共用一套配置，常用于同一渠道包或多壳场景。
+        <br>选择“复用其他应用配置”后，需要选择目标应用并勾选希望复用的项目。
+        <br><strong style="color: red;">注意：</strong> 所选配置项将会以目标应用为准，当前应用本地对应项将被覆盖。
+        <br>复用不会影响目标应用本身的配置，仅仅是引用其配置数据。
+      </p>
+      
+      <p style="line-height: 1.8;">
+        <strong style="color: red;">以下全局开关不会被复用：</strong> 
+        <br>调试模式、禁用Root、禁用Xposed
+        <br>禁用模拟器、禁用VirtualApp、禁用双开
+        <br>全屏窗优先
+      </p>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button type="primary" @click="reuseHelpVisible = false">我知道了</el-button>
+        </span>
+      </template>
+    </el-dialog>
+    
+    
+    
+    
+    <el-dialog v-model="createDialogVisible" title="创建证书" width="600px">
+      <el-form :model="createForm" label-width="120px">
+        <el-form-item label="备注">
+          <el-input v-model="createForm.name" placeholder="例如：生产环境证书、测试签名"></el-input>
+        </el-form-item>
+        <el-form-item label="别名">
+          <el-input v-model="createForm.alias" placeholder="例如：mykey、releaseKey"></el-input>
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="createForm.password" type="password" placeholder="整个证书库的访问密码"></el-input>
+        </el-form-item>
+        <el-form-item label="证书密码">
+          <el-input v-model="createForm.cert_password" type="password" placeholder="私钥访问密码（建议与密码一致）"></el-input>
+        </el-form-item>
+        <el-form-item label="有效期（天）">
+          <el-input v-model="createForm.validity" placeholder="例如：3650（10年）"></el-input>
+        </el-form-item>
+        <el-form-item label="CN">
+          <el-input v-model="createForm.dname_cn" placeholder="通用名，例如：张三 或 yourdomain.com"></el-input>
+        </el-form-item>
+        <el-form-item label="OU">
+          <el-input v-model="createForm.dname_ou" placeholder="组织单位，例如：技术部、研发部"></el-input>
+        </el-form-item>
+        <el-form-item label="O">
+          <el-input v-model="createForm.dname_o" placeholder="组织名，例如：某某科技有限公司"></el-input>
+        </el-form-item>
+        <el-form-item label="L">
+          <el-input v-model="createForm.dname_l" placeholder="城市/地区，例如：上海、广州"></el-input>
+        </el-form-item>
+        <el-form-item label="ST">
+          <el-input v-model="createForm.dname_st" placeholder="省/州，例如：上海市、加利福尼亚州"></el-input>
+        </el-form-item>
+        <el-form-item label="C">
+          <el-input v-model="createForm.dname_c" placeholder="国家代码，例如：CN（中国）、US（美国）"></el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="fillDefault">一键填写随机信息</el-button>
+        <el-button @click="createDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitCreate">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="showDownloadConfirm" title="看看字，求你了" width="500px">
+      <div>
+        <p>这是你自己上传的原始安装包,是<span style="color: red">不含任何功能的</span></p>
+        <p><span style="color: orange">若要下载注入后的应用，请前往注入管理下载</span></p>
+        <el-checkbox v-model="ackChecked" style="margin-top: 10px"><span style="color: red">我已知晓此包没有任何功能</span></el-checkbox>
+      </div>
+      <template #footer>
+        <el-button @click="showDownloadConfirm = false">取消</el-button>
+        <el-button @click="goToInjected" type="success">前往注入管理</el-button>
+        <el-button type="primary" :disabled="!ackChecked" @click="confirmDownload">确定下载原始包</el-button>
+      </template>
+    </el-dialog>
+
+  </div>
+
+  <script>
+    const { createApp, ref, reactive, watch, onMounted, nextTick } = Vue;
+
+    createApp({
+      setup() {
+        const query = reactive({
+          name: '',
+          appid: '',
+          uid: '',
+          version: '',
+          package: '',
+          page: 1,
+          limit: 20
+        });
+        const reuseHelpVisible = ref(false);
+        const tableData = ref([]);
+        const total = ref(0);
+        const fileInput = ref(null);
+
+        // ===== URL 注入（管理员专用） =====
+        const isAdmin = ref(false);
+        const urlInjectDialogVisible = ref(false);
+        const urlInjectLoading = ref(false);
+        const urlShellList = ref([]);
+        const urlSignList = ref([]);
+        const urlInjectForm = reactive({
+          url: '',
+          templateId: '',
+          signId: 'random',
+          mode: 1,
+          remark: 'URL注入',
+          launcher: true,
+          killsign: false,
+          kill_Inject: false,
+          network: true,
+        });
+
+        async function checkAdmin() {
+          try {
+            const res = await fetch('/api/?module=user&method=getinfo');
+            const json = await res.json();
+            if (json.code === 200 && json.data && json.data.role === 'admin') {
+              isAdmin.value = true;
+            }
+          } catch (e) {}
+        }
+
+        async function loadUrlInjectData() {
+          // 加载壳模板列表
+          try {
+            const res = await fetch('/api/?module=app&method=getMyTemplates');
+            const json = await res.json();
+            if (json.code === 200) urlShellList.value = json.data || [];
+          } catch (e) {}
+          // 加载签名列表
+          try {
+            const res = await fetch('/api/?module=app&method=getMySigns');
+            const json = await res.json();
+            if (json.code === 200) urlSignList.value = json.data || [];
+          } catch (e) {}
+        }
+
+        async function submitUrlInject() {
+          if (!urlInjectForm.url) {
+            ElementPlus.ElMessage.warning('请输入 APK 下载链接');
+            return;
+          }
+          if (!urlInjectForm.templateId) {
+            ElementPlus.ElMessage.warning('请选择壳模板');
+            return;
+          }
+          urlInjectLoading.value = true;
+          try {
+            const res = await fetch('/api/?module=app&method=createTaskFromUrl', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                url: urlInjectForm.url,
+                template_id: urlInjectForm.templateId,
+                sign_id: urlInjectForm.signId,
+                mode: urlInjectForm.mode,
+                remark: urlInjectForm.remark || 'URL注入',
+                launcher: urlInjectForm.launcher ? 1 : 0,
+                killsign: urlInjectForm.killsign ? 1 : 0,
+                kill_Inject: urlInjectForm.kill_Inject ? 1 : 0,
+                network: urlInjectForm.network ? 1 : 0,
+              })
+            });
+            const json = await res.json();
+            if (json.code === 200) {
+              ElementPlus.ElMessage.success(json.data.message || '任务创建成功');
+              urlInjectDialogVisible.value = false;
+              urlInjectForm.url = '';
+              loadData();
+            } else {
+              ElementPlus.ElMessage.error(json.message || '创建失败');
+            }
+          } catch (e) {
+            ElementPlus.ElMessage.error('请求失败：' + e.message);
+          } finally {
+            urlInjectLoading.value = false;
+          }
+        }
+        const injectDialogVisible = ref(false);
+        const currentApp = ref(null);
+        const shellList = ref([]);
+        const currentShell = ref(null);
+        const signDialogVisible = ref(false);
+        const signList = ref([]);
+        const allowHttp = ref(false);  // 是否启用 HTTP 请求，默认 false
+        const network = ref(true);  // 是否启用 无网络检查，默认 true
+        const jiagu = ref(false);  // 是否启用 加固，默认 true
+        const fake = ref(false);  // 是否启用 伪加密，默认 true
+        const vpncheck = ref(false); //是否开启VPN检测
+        const dexmerge = ref(false); //DEX合并
+        const launcher = ref(false); //开屏窗口替换
+        const confuse = ref(false);  // 是否启用 合并APK包，默认 true
+        const process = ref(false); //进程隔离
+        const kill_Inject = ref(false);  // 是否去除云注入，默认 false
+        const killsign = ref(false);  // 是否去除签名校验，默认 false
+        const killpath = ref(false);  // 是否去除签名校验，默认 false
+        const debug = ref(false);  // 是否启用 HTTP 请求，默认 false
+        const chainDialogVisible = ref(false);     // 注入链弹窗控制
+        const injectToTop = ref(false);            // 注入目标类型，false=基础子类，true=顶级父类
+        const mode = ref(1); // 默认链路注入
+        const Request = ref(0); // 默认请求方式
+        const devices = ref(0); //设备码算法 默认硬件信息
+        let selectedSign = null;                   // 临时保存用户选中的签名
+        const expandStorageDialogVisible = ref(false);
+        const stats = reactive({
+          used_storage: 0,
+          total_storage: 0,
+          used_percent: 0
+        });
+        
+const selectedPermissions = ref([]);
+// 存储桶选择
+const bucketList = ref([]);
+const selectedBuckets = ref([]);
+async function loadBuckets() {
+  try {
+    const res = await fetch('/api/index.php?module=bucket&method=getBucketDomains', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    });
+    const json = await res.json();
+    if (json.code === 200 && json.data && json.data.domains) {
+      bucketList.value = json.data.domains;
+      // 默认全选
+      selectedBuckets.value = json.data.domains.map(b => b.id);
+    }
+  } catch (e) {}
+}
+loadBuckets();
+watch(killsign, (val) => {
+  if (!val) {
+    killpath.value = false;
+  }
+});
+const permissionOptions = [
+  /* —— 最常用 —— */
+  { label: '网络访问  android.permission.INTERNET',                value: 'android.permission.INTERNET' },
+  { label: '网络状态  android.permission.ACCESS_NETWORK_STATE',    value: 'android.permission.ACCESS_NETWORK_STATE' },
+  { label: 'Wi‑Fi 状态 android.permission.ACCESS_WIFI_STATE',      value: 'android.permission.ACCESS_WIFI_STATE' },
+  { label: '读取手机状态  android.permission.READ_PHONE_STATE',     value: 'android.permission.READ_PHONE_STATE' },
+  { label: '写外部存储  android.permission.WRITE_EXTERNAL_STORAGE', value: 'android.permission.WRITE_EXTERNAL_STORAGE' },
+  { label: '读外部存储  android.permission.READ_EXTERNAL_STORAGE',  value: 'android.permission.READ_EXTERNAL_STORAGE' },
+  { label: '定位(精确)  android.permission.ACCESS_FINE_LOCATION',  value: 'android.permission.ACCESS_FINE_LOCATION' },
+  { label: '定位(粗略)  android.permission.ACCESS_COARSE_LOCATION',value: 'android.permission.ACCESS_COARSE_LOCATION' },
+  { label: '摄像头     android.permission.CAMERA',                 value: 'android.permission.CAMERA' },
+  { label: '录音麦克风  android.permission.RECORD_AUDIO',           value: 'android.permission.RECORD_AUDIO' },
+
+  /* —— 常见 —— */
+  { label: '振动      android.permission.VIBRATE',                 value: 'android.permission.VIBRATE' },
+  { label: '保持唤醒  android.permission.WAKE_LOCK',               value: 'android.permission.WAKE_LOCK' },
+  { label: '前台服务  android.permission.FOREGROUND_SERVICE',      value: 'android.permission.FOREGROUND_SERVICE' },
+  { label: '安装 APK  android.permission.REQUEST_INSTALL_PACKAGES',value: 'android.permission.REQUEST_INSTALL_PACKAGES' },
+  { label: '系统弹窗  android.permission.SYSTEM_ALERT_WINDOW',     value: 'android.permission.SYSTEM_ALERT_WINDOW' },
+  { label: '蓝牙      android.permission.BLUETOOTH',               value: 'android.permission.BLUETOOTH' },
+  { label: '蓝牙管理  android.permission.BLUETOOTH_ADMIN',         value: 'android.permission.BLUETOOTH_ADMIN' },
+
+  /* —— 通讯录 / 日历 / 短信 —— */
+  { label: '读联系人  android.permission.READ_CONTACTS',           value: 'android.permission.READ_CONTACTS' },
+  { label: '写联系人  android.permission.WRITE_CONTACTS',          value: 'android.permission.WRITE_CONTACTS' },
+  { label: '读日历    android.permission.READ_CALENDAR',           value: 'android.permission.READ_CALENDAR' },
+  { label: '写日历    android.permission.WRITE_CALENDAR',          value: 'android.permission.WRITE_CALENDAR' },
+  { label: '读短信    android.permission.READ_SMS',                value: 'android.permission.READ_SMS' },
+  { label: '收短信    android.permission.RECEIVE_SMS',             value: 'android.permission.RECEIVE_SMS' },
+  { label: '发短信    android.permission.SEND_SMS',                value: 'android.permission.SEND_SMS' },
+
+  /* —— Android 10+ 后台定位 —— */
+  { label: '后台定位  android.permission.ACCESS_BACKGROUND_LOCATION',
+    value: 'android.permission.ACCESS_BACKGROUND_LOCATION' }
+];
+        function formatSize(row) {
+          if (!row.size || row.size == 0) {
+            return '🚫安装包不存在';
+          }
+          const sizeInMB = row.size / 1024 / 1024;
+          return sizeInMB.toFixed(2) + ' MB';
+        }
+        
+        
+        
+        const showDownloadConfirm = ref(false);
+        const ackChecked = ref(false);
+        let pendingDownloadRow = null;
+        function downloadInjected(row) {
+          pendingDownloadRow = row;
+          ackChecked.value = false;
+          showDownloadConfirm.value = true;
+        }
+        
+        function confirmDownload() {
+          showDownloadConfirm.value = false;
+          if (pendingDownloadRow) {
+            const row = pendingDownloadRow;
+            const url = '/down.php?file=' + encodeURIComponent(row.path) + '&name=' + encodeURIComponent(row.name);
+            window.open(url, '_blank');
+            pendingDownloadRow = null;
+          }
+        }
+        function goToInjected() {
+          const currentPath = window.location.pathname;
+          const basePath = currentPath.substring(0, currentPath.lastIndexOf('/') + 1);
+          window.location.href = basePath + 'injected.html';
+        }
+
+        
+        async function loadData() {
+          try {
+            const res = await fetch(`/api/index.php?module=app&method=getMyAppList`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(query)
+            });
+            const json = await res.json();
+            if (json.code === 200) {
+              tableData.value = json.data.list;
+              total.value = json.data.total;
+              query.page = json.data.page;
+                const s = json.data || {};
+                stats.used_storage = s.used_storage || 0;
+                stats.total_storage = s.total_storage || 0;
+                stats.used_percent = s.used_percent || 0;
+            } else {
+              ElementPlus.ElMessage.error(json.message || '加载失败');
+            }
+          } catch (err) {
+            ElementPlus.ElMessage.error('请求失败');
+          }
+        }
+
+        function handlePageChange(newPage) {
+          query.page = newPage;
+          loadData();
+        }
+
+        function resetForm() {
+          query.name = '';
+          query.appid = '';
+          query.uid = '';
+          query.version = '';
+          query.package = '';
+          query.config_mode = '';
+          query.reuse_apk_id = '';
+          query.page = 1;
+          loadData();
+        }
+        
+        
+        async function injectApp(row) {
+          if (!row.path) {
+              ElementPlus.ElMessageBox.alert(
+                '该应用安装包不存在，请点击重传应用',
+                '提示',
+                { confirmButtonText: '确定', type: 'warning' }
+              );
+              return;
+            }
+        
+          currentApp.value = row;
+          injectDialogVisible.value = true;
+        
+          try {
+            const res = await fetch('/api/index.php?module=app&method=getMyTemplates');
+            const json = await res.json();
+            if (json.code === 200) {
+              shellList.value = json.data;
+            } else {
+              ElementPlus.ElMessage.error(json.message || '获取壳列表失败');
+            }
+          } catch (e) {
+            ElementPlus.ElMessage.error('请求异常');
+          }
+        }
+        function useShell(shell) {
+          currentShell.value = shell;
+          injectDialogVisible.value = false;
+          signDialogVisible.value = true;
+        
+          loadSignList();
+        }
+        async function loadSignList() {
+          const res = await fetch('/api/index.php?module=app&method=getMySigns');
+          const json = await res.json();
+          if (json.code === 200) {
+            signList.value = json.data;
+          } else {
+            ElementPlus.ElMessage.error(json.message || '获取签名证书失败');
+          }
+        }
+        function useSign(sign) {
+          selectedSign = sign;
+          signDialogVisible.value = false;
+          chainDialogVisible.value = true;
+        }
+        function useRandomSign() {
+          selectedSign = { id: 'random', name: '随机签名' };
+          signDialogVisible.value = false;
+          chainDialogVisible.value = true;
+        }
+async function confirmInject() {
+  chainDialogVisible.value = false;
+
+  const confirmed = await ElementPlus.ElMessageBox.confirm(
+    '确定要创建注入任务吗？如果注入后运行APP有问题,请更换注入模式',
+    '确认操作',
+    { type: 'warning' }
+  ).catch(() => false);
+
+  if (!confirmed) return;
+
+  const payload = {
+    apk_id: currentApp.value.id,
+    template_id: currentShell.value.id,
+    sign_id: selectedSign.id,
+    inject_to_top: injectToTop.value,
+    allow_http: allowHttp.value,
+    kill_Inject: kill_Inject.value,
+    network: network.value,
+    jiagu: jiagu.value,
+    fake: fake.value,
+    vpncheck: vpncheck.value,
+    launcher: launcher.value,
+    dexmerge: dexmerge.value,
+    confuse: confuse.value,
+    process: process.value,
+    debug: debug.value,
+    killsign: killsign.value,
+    killpath: killpath.value,
+    mode: mode.value,
+    permissions: selectedPermissions.value,
+    Request: Request.value,
+    devices: devices.value,
+    bucket_ids: selectedBuckets.value,
+    remark: `${currentApp.value.name}`
+  };
+
+  const loading = ElementPlus.ElLoading.service({
+    lock: true,
+    text: '提交注入任务中...',
+    background: 'rgba(0, 0, 0, 0.5)'
+  });
+
+  try {
+    const res = await fetch('/api/index.php?module=app&method=createInjectTask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const json = await res.json();
+        if (json.code === 200) {
+          ElementPlus.ElMessageBox.alert(
+            json.data.message || '注入任务创建成功',
+            '成功',
+            { type: 'success' }
+          );
+        } else {
+          ElementPlus.ElMessageBox.alert(
+            json.message || '创建失败',
+            '错误',
+            { type: 'error' }
+          );
+        }
+  } catch (e) {
+    ElementPlus.ElMessage.error('请求异常');
+  } finally {
+    loading.close();
+  }
+}
+
+
+function handleDelete(row) {
+  ElementPlus.ElMessageBox({
+    title: '提示',
+    message: `确定要删除应用「${row.name}」吗？<br>
+    仅删除文件：不影响远程配置，注入时需重传安装包<br>
+    全部删除：你将彻底失去这个应用的控制权`,
+    type: 'warning',
+    dangerouslyUseHTMLString: true,
+    showCancelButton: true,
+    showConfirmButton: true,
+    confirmButtonText: '全部删除(含远程配置)',
+    cancelButtonText: '取消',
+    distinguishCancelAndClose: true
+  }).then(action => {
+    if (action === 'confirm') {
+      // 再次确认“全部删除”
+      ElementPlus.ElMessageBox.confirm(
+        '删除后该应用将不再被你控制，是否确认？',
+        '请确认',
+        { type: 'warning' }
+      ).then(async () => {
+        const res = await fetch(`/api/index.php?module=app&method=deleteApp`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: row.id })
+        });
+        const json = await res.json();
+        if (json.code === 200) {
+          ElementPlus.ElMessage.success('删除成功');
+          loadData();
+        } else {
+          ElementPlus.ElMessage.error(json.message || '删除失败');
+        }
+      }).catch(() => {});
+    }
+  }).catch(() => {});
+
+  // 添加“仅删除文件”按钮（红色）
+  setTimeout(() => {
+    const box = document.querySelector('.el-message-box__btns');
+    if (box && !box.querySelector('.only-delete-btn')) {
+      const btn = document.createElement('button');
+      btn.className = 'el-button el-button--danger only-delete-btn'; // 红色按钮
+      btn.innerHTML = '<span>仅删除文件(推荐)</span>';
+      btn.onclick = () => {
+        ElementPlus.ElMessageBox.confirm(
+          '删除后不影响远程配置，注入时需要重传安装包，是否继续？',
+          '请确认',
+          { type: 'warning' }
+        ).then(async () => {
+          const res = await fetch(`/api/index.php?module=app&method=clearAppFile`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: row.id })
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('已删除安装包');
+            loadData();
+          } else {
+            ElementPlus.ElMessage.error(json.message || '删除失败');
+          }
+          document.querySelector('.el-message-box__headerbtn')?.click(); // 关闭弹窗
+        }).catch(() => {});
+      };
+      box.insertBefore(btn, box.children[1]); // 插入到“取消”前
+    }
+  }, 50);
+}
+
+
+        
+        
+        const editDialogVisible = ref(false);
+        const editForm = reactive({
+          id: null,
+          name: '',
+          version: '',
+          package: '',
+          config_mode: 0,
+          reuse_apk_id: null,     // 被复用的 app id
+          domain_mode: 0,         // 接口域名模式：0=壳内置，1=自定义
+          custom_domains: '',      // 自定义域名，一行一个
+          reuse_options: []
+        });
+
+function editInfo(row) {
+  editForm.id = row.id;
+  editForm.name = row.name;
+  editForm.app_key = row.app_key;
+  editForm.version = row.version;
+  editForm.package = row.package;
+
+  editForm.config_mode = row.config_mode !== undefined ? Number(row.config_mode) : 0;
+  editForm.reuse_apk_id = (editForm.config_mode === 1 && row.reuse_apk_id) ? row.reuse_apk_id : null;
+
+  editForm.domain_mode = row.domain_mode !== undefined ? Number(row.domain_mode) : 0;
+  editForm.custom_domains = row.custom_domains || '';
+
+  // 解析 reuse_options（字符串转数组），失败则设为空数组
+  try {
+    editForm.reuse_options = JSON.parse(row.reuse_options || '[]');
+  } catch (e) {
+    editForm.reuse_options = [];
+  }
+// 只有打开编辑时才加载复用应用列表
+  loadAllApps(row.id);
+  nextTick(() => {
+    editDialogVisible.value = true;
+  });
+}
+
+
+const createDialogVisible = ref(false);
+const createForm = reactive({
+  name: '',
+  alias: '',
+  password: '',
+  cert_password: '',
+  validity: 10000,
+  dname_cn: '',
+  dname_ou: '',
+  dname_o: '',
+  dname_l: '',
+  dname_st: '',
+  dname_c: ''
+});
+function fillDefault() {
+  const rand = Math.floor(Math.random() * 10000);
+  createForm.name = '默认证书' + rand;
+  createForm.alias = 'alias' + rand;
+  createForm.password = 'pass1234';
+  createForm.cert_password = 'pass1234';
+  createForm.dname_cn = 'User' + rand;
+  createForm.dname_ou = 'Dev';
+  createForm.dname_o = 'Company';
+  createForm.dname_l = 'City';
+  createForm.dname_st = 'State';
+  createForm.dname_c = 'CN';
+}
+
+async function submitCreate() {
+  const required = ['name', 'alias', 'password', 'cert_password', 'dname_cn', 'dname_ou', 'dname_o', 'dname_l', 'dname_st', 'dname_c'];
+  for (let key of required) {
+    if (!createForm[key]) {
+      ElementPlus.ElMessage.warning('请填写所有必填字段');
+      return;
+    }
+  }
+
+  const loading = ElementPlus.ElLoading.service({ lock: true, text: '创建中...' });
+  try {
+    const res = await fetch(`/api/index.php?module=app&method=generateSign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(createForm)
+    });
+    const json = await res.json();
+    if (json.code === 200) {
+      ElementPlus.ElMessage.success(json.message || '创建成功');
+      createDialogVisible.value = false;
+      loadSignList(); // 刷新证书列表
+    } else {
+      ElementPlus.ElMessage.error(json.message || '创建失败');
+    }
+  } catch {
+    ElementPlus.ElMessage.error('请求失败');
+  } finally {
+    loading.close();
+  }
+}
+
+
+
+const allApps = ref([]);
+const reuseSearchResults = ref([]);
+const reuseSearchLoading = ref(false);
+
+async function searchReuseTarget(keyword) {
+  if (!keyword) { reuseSearchResults.value = []; return; }
+  reuseSearchLoading.value = true;
+  try {
+    const res = await fetch('/api/index.php?module=app&method=getMyReuseAppList', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page: 1, limit: 50, name: keyword })
+    });
+    const json = await res.json();
+    if (json.code === 200) {
+      reuseSearchResults.value = json.data.list;
+    }
+  } catch (e) {}
+  reuseSearchLoading.value = false;
+}
+
+async function loadAllApps(appid) {
+  const res = await fetch('/api/index.php?module=app&method=getMyReuseAppList', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ page: 1, limit: 1000, appid: appid }) // 拉全量
+  });
+  const json = await res.json();
+  if (json.code === 200) {
+    allApps.value = json.data.list;
+  }
+}
+
+function selectFile() {
+  ElementPlus.ElMessageBox.confirm(
+    `请确保上传的 APK 文件：<br>
+    <span style="color:red">① 无签名校验或已去除签名校验；</span><br>
+    ② 文件最大不能超过100M；
+    <br>
+    <span style="color:red">③ 确保应用没有强加固等；</span><br>
+    如果注入后运行APP有问题,请更换注入模式`,
+    '上传须知',
+    {
+      confirmButtonText: '我已知晓，继续上传',
+      cancelButtonText: '取消',
+      type: 'warning',
+      dangerouslyUseHTMLString: true
+    }
+  ).then(() => {
+    fileInput.value.click(); // 用户确认后再触发文件选择
+  }).catch(() => {
+    // 用户取消，不做任何处理
+  });
+}
+
+
+        
+async function saveEdit() {
+  // 校验：如果选择了复用配置方式但未选择复用的应用ID
+  if (editForm.config_mode === 1 && !editForm.reuse_apk_id) {
+      ElementPlus.ElMessage.warning('请选择要复用的应用');
+      return;
+    }
+
+  try {
+    const res = await fetch('/api/index.php?module=app&method=updateAppInfo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(editForm)
+    });
+    const json = await res.json();
+    if (json.code === 200) {
+      ElementPlus.ElMessage.success('修改成功');
+      editDialogVisible.value = false;
+      loadData();
+    } else {
+      ElementPlus.ElMessage.error(json.message || '修改失败');
+    }
+  } catch (err) {
+    ElementPlus.ElMessage.error('请求失败');
+  }
+}
+
+
+const replaceTargetApp = ref(null); // 当前要替换的应用记录
+
+async function replaceApk(row) {
+  const confirmed = await ElementPlus.ElMessageBox.confirm(
+    `确定要重新上传「${row.name}」的安装包吗？此操作将删除旧安装包并更新为新文件。`,
+    '确认替换',
+    {
+      type: 'warning',
+      confirmButtonText: '确定',
+      cancelButtonText: '取消'
+    }
+  ).catch(() => false);
+
+  if (!confirmed) return;
+
+  // 用户确认后再打开文件选择器
+  replaceTargetApp.value = row;
+  fileInput.value.click();
+}
+
+// 修改 handleFileChange 方法，支持替换逻辑
+async function handleFileChange(event) {
+  const file = event.target.files[0];
+  if (!file || !file.name.endsWith('.apk')) {
+    ElementPlus.ElMessage.warning('请选择 APK 文件');
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  // 判断是否是替换逻辑
+  if (replaceTargetApp.value) {
+    formData.append('apk_id', replaceTargetApp.value.id); // 传入被替换的 id
+  }
+
+  const loading = ElementPlus.ElLoading.service({
+    lock: true,
+    text: '上传中 0%',
+    background: 'rgba(0, 0, 0, 0.5)'
+  });
+
+  try {
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+
+      const method = replaceTargetApp.value ? 'replaceApk' : 'uploadApk';
+
+      xhr.open('POST', `/api/index.php?module=app&method=${method}`, true);
+
+      xhr.upload.onprogress = function (e) {
+        if (e.lengthComputable) {
+          const percent = Math.round((e.loaded / e.total) * 100);
+          if (percent >= 100) {
+            loading.setText('等待服务器处理');
+          } else {
+            loading.setText(`上传中 ${percent}%`);
+          }
+        }
+      };
+
+      xhr.onload = function () {
+        if (xhr.status === 200) {
+          try {
+            const json = JSON.parse(xhr.responseText);
+            if (json.code === 200) {
+              ElementPlus.ElMessageBox.alert('上传成功,点击注入,即可注入该应用', '提示', {
+                type: 'success',
+                confirmButtonText: '确定'
+              }).then(() => {
+                loadData();
+                resolve();
+              });
+            } else {
+              ElementPlus.ElMessageBox.alert(json.message || '上传失败', '提示', {
+                type: 'error',
+                confirmButtonText: '确定'
+              }).then(() => {
+                reject();
+              });
+            }
+
+          } catch {
+            ElementPlus.ElMessage.error('返回解析失败');
+            reject();
+          }
+        } else {
+          ElementPlus.ElMessage.error('上传失败');
+          reject();
+        }
+      };
+
+      xhr.onerror = function () {
+        ElementPlus.ElMessage.error('上传失败');
+        reject();
+      };
+
+      xhr.send(formData);
+    });
+  } catch (err) {
+    // 已提示
+  } finally {
+    loading.close();
+    event.target.value = '';
+    replaceTargetApp.value = null; // 上传完重置替换状态
+  }
+}
+
+onMounted(() => {
+  loadData();
+  checkAdmin().then(() => {
+    if (isAdmin.value) loadUrlInjectData();
+  });
+});
+
+        return {
+          query,
+          tableData,
+          total,
+          fileInput,
+          loadData,
+          resetForm,
+          handlePageChange,
+          handleDelete,
+          editInfo,
+          selectFile,
+          handleFileChange,
+          editDialogVisible,
+          editForm,
+          saveEdit,
+          injectApp,
+          injectDialogVisible,
+          shellList,
+          useShell,
+          currentShell,
+          signDialogVisible,
+          signList,
+          useSign,
+          useRandomSign,
+          currentApp,
+          formatSize,
+          chainDialogVisible,
+          injectToTop,
+          confirmInject,
+          allApps,
+          loadAllApps,
+          reuseSearchResults,
+          reuseSearchLoading,
+          searchReuseTarget,
+          allowHttp,
+          kill_Inject,
+          network,
+          jiagu,
+          fake,
+          vpncheck,
+          launcher,
+          dexmerge,
+          confuse,
+          process,
+          killsign,
+          killpath,
+          debug,
+          downloadInjected,
+          reuseHelpVisible,
+          mode,
+          selectedPermissions,
+          Request,
+          devices,
+          permissionOptions,
+          bucketList,
+          selectedBuckets,
+          replaceApk,              // 替换按钮点击事件
+          replaceTargetApp,
+          stats,
+          createDialogVisible,
+          createForm,
+          fillDefault,
+          submitCreate,
+          loadSignList,
+          showDownloadConfirm, // 控制弹窗显示
+          ackChecked,          // 勾选框状态
+          downloadInjected,    // 打开弹窗方法
+          confirmDownload,      // 确认下载方法
+          goToInjected,
+          expandStorageDialogVisible,
+          // URL 注入
+          isAdmin,
+          urlInjectDialogVisible,
+          urlInjectLoading,
+          urlShellList,
+          urlSignList,
+          urlInjectForm,
+          submitUrlInject,
+
+
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>
