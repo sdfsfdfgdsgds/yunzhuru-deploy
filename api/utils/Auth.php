@@ -277,11 +277,10 @@ class Auth
      */
     public static function afterConfigChange(PDO $pdo, int $apkId) {
         self::reset_redis($apkId);
-        try {
-            require_once __DIR__ . '/BucketPush.php';
-            pushConfigWithDependents($pdo, $apkId);
-        } catch (\Throwable $e) {
-            error_log("[BucketPush] 配置变更推送失败 appId={$apkId}: " . $e->getMessage());
+        // 异步推送配置到存储桶，不阻塞前端响应
+        $script = realpath(__DIR__ . '/../../service/push_config.php');
+        if ($script) {
+            exec("php " . escapeshellarg($script) . " " . (int)$apkId . " > /dev/null 2>&1 &");
         }
     }
 
