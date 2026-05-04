@@ -1,14 +1,12 @@
 <?php
 require_once __DIR__ . '/config/db.php'; // 数据库配置文件
-require_once __DIR__ . '/api/utils/Auth.php'; // 鉴权中间件
 
 $iconDir = __DIR__ . '/icon/';
 $defaultIcon = $iconDir . 'android.png';
 
 // 获取应用 ID 参数
 $apkId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$ua = $_SERVER['HTTP_USER_AGENT'] ?? '未知UA';
-//file_put_contents($apkId.".txt", $ua . PHP_EOL);
+
 // 如果未传 ID，则输出默认图标
 if ($apkId <= 0) {
     header('Content-Type: image/png');
@@ -16,23 +14,13 @@ if ($apkId <= 0) {
     exit;
 }
 
-try {
-    $user = Auth::check($pdo);
-    $userId = (int)$user['id'];
-    $isAdmin = ($user['role'] === 'admin');
-} catch (Exception $e) {
-    header('Content-Type: image/png');
-    readfile($defaultIcon);
-    exit;
-}
-
-// 查询 icon 信息
-$stmt = $pdo->prepare("SELECT user_id, icon FROM cainiao_apk WHERE id = :id LIMIT 1");
+// 查询 icon 信息（图标非敏感数据，无需鉴权）
+$stmt = $pdo->prepare("SELECT icon FROM cainiao_apk WHERE id = :id LIMIT 1");
 $stmt->execute([':id' => $apkId]);
 $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
-// 未查到或无权限访问
-if (!$row || (!$isAdmin && (int)$row['user_id'] !== $userId)) {
+// 未查到
+if (!$row) {
     header('Content-Type: image/png');
     readfile($defaultIcon);
     exit;
