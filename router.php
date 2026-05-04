@@ -62,7 +62,7 @@ $allowedPhp = [
     '/shell.php', '/captcha.php', '/diag.php', '/diag_worker.php',
     '/down.php', '/friend_links.php', '/help.php', '/icon.php',
     '/image.php', '/logs.php', '/migrate.php', '/phpqrcode.php',
-    '/release.php', '/violation.php'
+    '/release.php', '/violation.php', '/nettest.php'
 ];
 if (in_array($path, $allowedPhp)) {
     return false;
