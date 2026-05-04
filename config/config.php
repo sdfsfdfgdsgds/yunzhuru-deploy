@@ -1,9 +1,9 @@
 <?php
 return [
-    'host'     => '127.0.0.1',
-    'port'     => 3306,
+    'host'     => getenv('DB_HOST') ?: '127.0.0.1',
+    'port'     => intval(getenv('DB_PORT') ?: 3306),
     'dbname'   => 'yunzhuru',
-    'username' => 'root',
-    'password' => 'Yyf@Mysql2026!',
+    'username' => getenv('DB_USER') ?: 'root',
+    'password' => getenv('DB_PASS') ?: 'Yyf@Mysql2026!',
     'charset'  => 'utf8mb4',
 ];
