@@ -18,6 +18,7 @@ $logFiles = [
     'php'          => '/var/log/supervisor/php.log',
     'php-error'    => '/var/log/supervisor/php-error.log',
     'supervisor'   => '/var/log/supervisor/supervisord.log',
+    's3upload'     => '/var/log/supervisor/s3upload.log',
 ];
 
 if (!isset($logFiles[$type])) {
