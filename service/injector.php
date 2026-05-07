@@ -5881,13 +5881,19 @@ function handleUrlDownloadTasks(PDO $pdo)
     $fileSize = filesize($tmpFile);
     echo "[" . date('Y-m-d H:i:s') . "] 任务 #{$taskId} 下载完成，大小 " . round($fileSize / 1048576, 1) . "MB\n";
 
-    // 解析 APK 信息
-    // 需要引入 app.php 中的 parseApkInfoWithAapt（worker 环境可能没加载）
+    // 解析 APK 信息（aapt → aapt2 fallback）
     $aaptCmd = "aapt dump badging " . escapeshellarg($tmpFile) . " 2>&1";
     $aaptOutput = shell_exec($aaptCmd);
     $appName = '未知应用';
     $package = '未知包名';
     $version = '未知版本';
+
+    // aapt 失败时用 aapt2
+    if (!$aaptOutput || stripos($aaptOutput, 'error:') !== false || !preg_match("/package: name='(.*?)'/", $aaptOutput)) {
+        $aapt2Cmd = "aapt2 dump badging " . escapeshellarg($tmpFile) . " 2>&1";
+        $aaptOutput = shell_exec($aapt2Cmd);
+        echo "[" . date('Y-m-d H:i:s') . "] 任务 #{$taskId} aapt 解析失败，使用 aapt2\n";
+    }
 
     if ($aaptOutput && stripos($aaptOutput, 'error:') === false) {
         if (preg_match("/package: name='(.*?)'.*?versionName='(.*?)'/", $aaptOutput, $m)) {
