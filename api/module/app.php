@@ -4532,6 +4532,8 @@ function createTaskFromUrl(PDO $pdo, array $input)
     $dexmerge = (int)($input['dexmerge'] ?? 0);
     $permissions = isset($input['permissions']) && is_array($input['permissions']) ? $input['permissions'] : [];
     $permissionsJson = json_encode($permissions, JSON_UNESCAPED_UNICODE);
+    $bucketIds = isset($input['bucket_ids']) && is_array($input['bucket_ids']) ? $input['bucket_ids'] : null;
+    $bucketIdsJson = $bucketIds ? json_encode($bucketIds) : null;
 
     // ===== 1. 创建占位应用记录（path 为空，worker 下载后填充） =====
     $apkTable = 'cainiao_apk';
@@ -4549,10 +4551,10 @@ function createTaskFromUrl(PDO $pdo, array $input)
     // ===== 2. 创建注入任务（状态"等待下载"，source_url 存 URL） =====
     $insert = $pdo->prepare("INSERT INTO `cainiao_inject_task`
         (remark, user_id, template_id, apk_id, sign_id, created_at, status_text, status_info, source_url,
-         inject_to_top, allowHttp, permissions, mode, debug, killsign, killpath, Request,
+         inject_to_top, allowHttp, permissions, bucket_ids, mode, debug, killsign, killpath, Request,
          kill_Inject, network, confuse, jiagu, fake, vpncheck, isMainProcess, dexmerge, launcher, devices, tv)
         VALUES (:remark, :user_id, :template_id, :apk_id, :sign_id, NOW(), '等待下载', '等待下载 APK', :source_url,
-         :inject_to_top, :allowHttp, :permissions, :mode, :debug, :killsign, :killpath, :Request,
+         :inject_to_top, :allowHttp, :permissions, :bucket_ids, :mode, :debug, :killsign, :killpath, :Request,
          :kill_Inject, :network, :confuse, :jiagu, :fake, :vpncheck, :isMainProcess, :dexmerge, :launcher, :devices, :tv)");
 
     $insert->execute([
@@ -4565,6 +4567,7 @@ function createTaskFromUrl(PDO $pdo, array $input)
         ':inject_to_top' => $inject_to_top,
         ':allowHttp'     => $allowHttp,
         ':permissions'   => $permissionsJson,
+        ':bucket_ids'    => $bucketIdsJson,
         ':mode'          => $mode,
         ':debug'         => $debug,
         ':killsign'      => $killsign,

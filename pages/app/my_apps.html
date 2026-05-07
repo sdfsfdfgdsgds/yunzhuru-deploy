@@ -464,6 +464,13 @@
         <el-checkbox v-model="urlInjectForm.network">禁止无网络运行</el-checkbox>
       </div>
     </el-form-item>
+    <el-form-item v-if="bucketList.length > 0" label="配置分发桶">
+      <el-checkbox-group v-model="selectedBuckets">
+        <el-checkbox v-for="b in bucketList" :key="b.id" :label="b.id">
+          {{ b.domain }}
+        </el-checkbox>
+      </el-checkbox-group>
+    </el-form-item>
   </el-form>
   <template #footer>
     <el-button @click="urlInjectDialogVisible = false">取消</el-button>
@@ -644,6 +651,7 @@
                 killsign: urlInjectForm.killsign ? 1 : 0,
                 kill_Inject: urlInjectForm.kill_Inject ? 1 : 0,
                 network: urlInjectForm.network ? 1 : 0,
+                bucket_ids: selectedBuckets.value,
               })
             });
             const json = await res.json();
