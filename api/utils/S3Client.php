@@ -195,6 +195,8 @@ class S3Client {
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
+        $errno = curl_errno($ch);
+        $effectiveUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
         curl_close($ch);
         fclose($fp);
 
@@ -203,12 +205,13 @@ class S3Client {
         }
 
         $errorMsg = "HTTP {$httpCode}";
-        if ($error) $errorMsg .= " curl: {$error}";
+        if ($error) $errorMsg .= " curl_err({$errno}): {$error}";
         if ($response && preg_match('/<Message>(.*?)<\/Message>/s', $response, $m)) {
             $errorMsg .= " S3: {$m[1]}";
         } elseif ($response) {
             $errorMsg .= " body: " . substr($response, 0, 500);
         }
+        $errorMsg .= " url: {$effectiveUrl}";
         return ['code' => 500, 'message' => $errorMsg, 'http_code' => $httpCode];
     }
 
