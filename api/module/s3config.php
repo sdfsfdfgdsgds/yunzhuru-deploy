@@ -144,13 +144,15 @@ function uploadTaskToS3(PDO $pdo, array $input)
 
     // 在后台执行上传（nohup + php 脚本）
     $scriptDir = dirname(__DIR__, 2) . '/service';
+    $configDir = dirname(__DIR__, 2) . '/config';
     $cmd = sprintf(
         'nohup php -d memory_limit=64M -r %s > /dev/null 2>&1 &',
         escapeshellarg(
+            "\$cfg = require '{$configDir}/config.php';" .
             "require_once '{$scriptDir}/tool.php';" .
             "require_once '{$scriptDir}/injector.php';" .
             "require_once '" . dirname(__DIR__) . "/utils/S3Client.php';" .
-            "\$pdo = new PDO('mysql:host=127.0.0.1;dbname=yunzhuru;charset=utf8mb4', 'root', 'Yyf@Mysql2026!');" .
+            "\$pdo = new PDO('mysql:host='.\$cfg['host'].';port='.\$cfg['port'].';dbname='.\$cfg['dbname'].';charset=utf8mb4', \$cfg['username'], \$cfg['password']);" .
             "\$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);" .
             "autoUploadToS3(\$pdo, {$taskId}, " . var_export($task['name'] ?? '未知应用', true) . ");"
         )
