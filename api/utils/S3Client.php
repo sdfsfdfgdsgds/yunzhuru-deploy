@@ -206,6 +206,8 @@ class S3Client {
         if ($error) $errorMsg .= " curl: {$error}";
         if ($response && preg_match('/<Message>(.*?)<\/Message>/s', $response, $m)) {
             $errorMsg .= " S3: {$m[1]}";
+        } elseif ($response) {
+            $errorMsg .= " body: " . substr($response, 0, 500);
         }
         return ['code' => 500, 'message' => $errorMsg, 'http_code' => $httpCode];
     }

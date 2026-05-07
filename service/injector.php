@@ -6052,6 +6052,9 @@ function autoUploadToS3(PDO $pdo, int $taskId, string $appName)
             ]);
         } else {
             echo "[" . date('Y-m-d H:i:s') . "] ❌ S3 上传失败：{$result['message']}\n";
+            echo "[" . date('Y-m-d H:i:s') . "] S3 配置: endpoint={$row['s3_endpoint']}, bucket={$row['s3_bucket']}, region={$row['s3_region']}\n";
+            $pdo->prepare("UPDATE cainiao_inject_task SET status_info = :info WHERE id = :id")
+                ->execute([':info' => 'S3上传失败: ' . $result['message'], ':id' => $taskId]);
         }
     } catch (Exception $e) {
         echo "[" . date('Y-m-d H:i:s') . "] ❌ S3 上传异常：{$e->getMessage()}\n";
