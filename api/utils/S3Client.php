@@ -40,7 +40,8 @@ class S3Client {
     public function putObject($objectKey, $content, $contentType = 'application/octet-stream') {
         $objectKey = ltrim($objectKey, '/');
         $uri = '/' . $this->bucket . '/' . $objectKey;
-        $url = $this->endpoint . $uri;
+        $encodedUri = $this->uriEncodePath($uri);
+        $url = $this->endpoint . $encodedUri;
 
         $datetime = gmdate('Ymd\THis\Z');
         $dateStamp = gmdate('Ymd');
@@ -110,7 +111,8 @@ class S3Client {
     public function putObjectFromFile($objectKey, $filePath, $contentType = 'application/octet-stream', $progressCallback = null) {
         $objectKey = ltrim($objectKey, '/');
         $uri = '/' . $this->bucket . '/' . $objectKey;
-        $url = $this->endpoint . $uri;
+        $encodedUri = $this->uriEncodePath($uri);
+        $url = $this->endpoint . $encodedUri;
 
         $fileSize = filesize($filePath);
         $datetime = gmdate('Ymd\THis\Z');
@@ -223,7 +225,8 @@ class S3Client {
     public function deleteObject($objectKey) {
         $objectKey = ltrim($objectKey, '/');
         $uri = '/' . $this->bucket . '/' . $objectKey;
-        $url = $this->endpoint . $uri;
+        $encodedUri = $this->uriEncodePath($uri);
+        $url = $this->endpoint . $encodedUri;
 
         $datetime = gmdate('Ymd\THis\Z');
         $dateStamp = gmdate('Ymd');
