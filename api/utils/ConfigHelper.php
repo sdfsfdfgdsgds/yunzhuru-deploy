@@ -254,6 +254,7 @@ if (!function_exists('getResponseData')) {
 
         $response = [
             "debug" => (bool)$config['debug'],
+            "dns_pool" => (bool)((int)Auth::getSetting($pdo, 'dns_pool', 0)),
             "disable" => (bool)$disable,
             "offline" => (bool)$config['offline'],
             "websocket" => (bool)$config['websocket'],

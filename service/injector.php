@@ -516,6 +516,13 @@ function handleInjectionTasks(PDO $pdo, $oss)
     echo "写入壳配置->用户ID->{$apk_user_id}\n";
     echo "写入壳配置->应用KEY->{$appkey}\n";
     replace_config_placeholders($de_apk1, $task['apk_id'], $apk_user_id, $appkey);//修改appid和appkey，这是两个自定义参数，用于将壳和用户和应用进行绑定
+    echo "==================================DNS池过污染\n";
+    if ((int)Auth::getSetting($pdo, 'dns_pool', 0) === 1) {
+        replace_config_DNS_POOL($de_apk1);
+        echo "已开启DNS池过污染\n";
+    } else {
+        echo "未开启DNS池过污染\n";
+    }
     if($task['domain_mode']){
         if (!empty($task['domain_mode']) && !empty($task['custom_domains'])) {
             $domains = str_replace("\n", ",", $task['custom_domains']); // 替换为英文逗号
@@ -5695,6 +5702,39 @@ function replace_config_buckets($basePath, $buckets) {
     }
 }
 
+// 开启壳端DNS池过污染（替换 [#DNS#] 占位符）
+function replace_config_DNS_POOL($basePath) {
+    $basePath = rtrim($basePath, '/');
+    $dirs = scandir($basePath);
+
+    foreach ($dirs as $dir) {
+        if ($dir === '.' || $dir === '..') continue;
+
+        if (preg_match('/^smali/', $dir)) {
+            $fullDir = $basePath . '/' . $dir;
+
+            if (!is_dir($fullDir)) continue;
+
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($fullDir, RecursiveDirectoryIterator::SKIP_DOTS)
+            );
+
+            foreach ($iterator as $file) {
+                $configSmali = ($GLOBALS['Config'] ?? 'Config') . '.smali';
+                if ($file->getFilename() === $configSmali) {
+                    $filePath = $file->getPathname();
+                    $content = file_get_contents($filePath);
+
+                    $newContent = str_replace('#NO#[#DNS#]', '[#DNS#]', $content);
+
+                    file_put_contents($filePath, $newContent);
+                    echo "已替换 DNS_POOL: $filePath\n";
+                }
+            }
+        }
+    }
+}
+
 //修改壳配置文件sign
 function replace_config_SIGN($basePath, $domains) {
     $basePath = rtrim($basePath, '/');
@@ -6060,4 +6100,3 @@ function autoUploadToS3(PDO $pdo, int $taskId, string $appName)
         echo "[" . date('Y-m-d H:i:s') . "] ❌ S3 上传异常：{$e->getMessage()}\n";
     }
 }
-

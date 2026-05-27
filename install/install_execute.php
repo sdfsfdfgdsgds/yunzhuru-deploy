@@ -1670,6 +1670,12 @@ function installDatabase(PDO $pdo)
                 'note'      => '如果壳解析IP与此不匹配,则会视为被DNS劫持,会显示在DNS劫持功能数据中',
                 'type'      => 'edit'
             ],
+            'dns_pool' => [
+                'key_value' => '0',
+                'title'     => '抗污染解析（DoH+DNS池）',
+                'note'      => '开启后壳端域名请求优先使用DoH解析，失败后回退DNS池和系统DNS；保存后会清理远程配置文件并异步同步存储桶配置',
+                'type'      => 'switch'
+            ],
             'cache' => [
                 'key_value' => '60',
                 'title'     => '缓存',
