@@ -7,6 +7,7 @@ function getMenu(PDO $pdo, array $input)
     $role = $user['role'] ?? 'user';
 
     $menuTable = 'cainiao_menu';
+    ensureResourceLibraryMenus($pdo);
 
     // 获取菜单数据（admin 获取全部）
     if ($role === 'admin') {
@@ -24,6 +25,70 @@ function getMenu(PDO $pdo, array $input)
     $tree = buildMenuTree($menus);
 
     return $tree;
+}
+
+/**
+ * 补齐资源库菜单，避免老库升级后左侧菜单缺少全局资源入口。
+ */
+function ensureResourceLibraryMenus(PDO $pdo): void
+{
+    static $done = false;
+    if ($done) {
+        return;
+    }
+    $done = true;
+
+    $stmt = $pdo->prepare("SELECT id FROM cainiao_role WHERE name = 'user' LIMIT 1");
+    $stmt->execute();
+    $roleId = (int)$stmt->fetchColumn();
+    if ($roleId <= 0) {
+        return;
+    }
+
+    $appConfigId = ensureMenuNode($pdo, $roleId, null, '应用配置', 'Setting', '');
+    $resourceId = ensureMenuNode($pdo, $roleId, $appConfigId, '资源库', 'FolderOpened', '');
+    ensureMenuNode($pdo, $roleId, $resourceId, '图片资源', 'Picture', 'config/resource/image');
+    ensureMenuNode($pdo, $roleId, $resourceId, '链接/事件参数', 'Link', 'config/resource/click_param');
+}
+
+/**
+ * 按角色和父级补齐一个菜单节点，已存在时不覆盖用户调整过的菜单信息。
+ */
+function ensureMenuNode(PDO $pdo, int $roleId, ?int $parentId, string $name, string $icon, string $path): int
+{
+    if ($parentId === null) {
+        $check = $pdo->prepare("SELECT id FROM cainiao_menu WHERE role_id = :role_id AND name = :name AND parent_id IS NULL LIMIT 1");
+        $check->execute([
+            ':role_id' => $roleId,
+            ':name' => $name,
+        ]);
+    } else {
+        $check = $pdo->prepare("SELECT id FROM cainiao_menu WHERE role_id = :role_id AND name = :name AND parent_id = :parent_id LIMIT 1");
+        $check->execute([
+            ':role_id' => $roleId,
+            ':name' => $name,
+            ':parent_id' => $parentId,
+        ]);
+    }
+
+    $id = (int)$check->fetchColumn();
+    if ($id > 0) {
+        return $id;
+    }
+
+    $insert = $pdo->prepare("
+        INSERT INTO cainiao_menu (parent_id, name, icon, path, hidden, role_id)
+        VALUES (:parent_id, :name, :icon, :path, 0, :role_id)
+    ");
+    $insert->execute([
+        ':parent_id' => $parentId,
+        ':name' => $name,
+        ':icon' => $icon,
+        ':path' => $path,
+        ':role_id' => $roleId,
+    ]);
+
+    return (int)$pdo->lastInsertId();
 }
 
 /**

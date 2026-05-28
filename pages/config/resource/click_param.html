@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>链接与事件参数资源库</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/pages/config/common/click_param_asset.js"></script>
+  <style>
+    body {
+      margin: 0;
+      background: #fff;
+      color: #303133;
+    }
+    #app {
+      padding: 20px;
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="toolbar">
+      <el-select
+        v-model="filterAction"
+        placeholder="事件分类"
+        clearable
+        style="width: 180px"
+        @change="value => clickParam.load(value, 1)">
+        <el-option v-for="item in clickActionOptions" :key="item.value" :label="item.label" :value="item.value"></el-option>
+      </el-select>
+      <el-input
+        v-model="clickParam.keyword"
+        placeholder="搜索名称、参数或备注"
+        clearable
+        style="width: 320px"
+        @keyup.enter="clickParam.load(filterAction, 1)"></el-input>
+      <el-button @click="clickParam.load(filterAction, 1)">查询</el-button>
+      <el-button type="primary" @click="clickParam.openEdit(null, filterAction || 1)">新增参数</el-button>
+    </div>
+
+    <el-table :data="clickParam.list" border v-loading="clickParam.loading">
+      <el-table-column label="名称" prop="name" width="180"></el-table-column>
+      <el-table-column label="事件分类" width="130">
+        <template #default="scope">{{ clickActionLabel(scope.row.action_type) }}</template>
+      </el-table-column>
+      <el-table-column label="事件参数" prop="param_text" show-overflow-tooltip></el-table-column>
+      <el-table-column label="备注" prop="remark" width="180" show-overflow-tooltip></el-table-column>
+      <el-table-column label="更新时间" prop="updated_at" width="170"></el-table-column>
+      <el-table-column label="操作" width="160" fixed="right">
+        <template #default="scope">
+          <el-button size="small" type="primary" @click="clickParam.openEdit(scope.row)">编辑</el-button>
+          <el-button size="small" type="danger" @click="clickParam.remove(scope.row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <div style="margin-top: 14px; text-align: right">
+      <el-pagination
+        background
+        layout="total, prev, pager, next"
+        :total="clickParam.total"
+        :page-size="clickParam.limit"
+        :current-page="clickParam.page"
+        @current-change="page => clickParam.load(filterAction, page)"></el-pagination>
+    </div>
+
+    <el-dialog v-model="clickParam.editVisible" :title="clickParam.editMode ? '编辑事件参数' : '新增事件参数'" width="560px">
+      <el-form :model="clickParam.form" label-width="90px">
+        <el-form-item label="参数名">
+          <el-input v-model="clickParam.form.name" placeholder="例如：官网链接、QQ群、卡密接口"></el-input>
+        </el-form-item>
+        <el-form-item label="事件分类">
+          <el-select v-model="clickParam.form.action_type" style="width: 100%">
+            <el-option v-for="item in clickActionOptions" :key="item.value" :label="item.label" :value="item.value"></el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="clickParamLabel(clickParam.form.action_type)">
+          <el-input
+            :type="clickTextInputType(clickParam.form.action_type)"
+            v-model="clickParam.form.param_text"
+            :rows="4"
+            :placeholder="clickParamPlaceholder(clickParam.form.action_type)"></el-input>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="clickParam.form.remark"></el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="clickParam.editVisible = false">取消</el-button>
+        <el-button type="primary" @click="clickParam.submit">保存</el-button>
+      </template>
+    </el-dialog>
+  </div>
+
+  <script>
+    const { createApp, ref, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const clickParam = ClickParamAsset.createStore(Vue, ElementPlus);
+        const filterAction = ref(null);
+        const clickActionOptions = ClickParamAsset.ACTION_OPTIONS;
+        const clickActionLabel = ClickParamAsset.actionLabel;
+        const clickParamLabel = ClickParamAsset.paramLabel;
+        const clickParamPlaceholder = ClickParamAsset.paramPlaceholder;
+        const clickTextInputType = ClickParamAsset.paramInputType;
+
+        onMounted(() => {
+          clickParam.load(null, 1);
+        });
+
+        return {
+          clickParam,
+          filterAction,
+          clickActionOptions,
+          clickActionLabel,
+          clickParamLabel,
+          clickParamPlaceholder,
+          clickTextInputType
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>

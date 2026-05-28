@@ -993,8 +993,10 @@ async function clearS3Config() {
             
         }
         function refreshIframe() {
-          // 强制刷新 iframe，可加随机参数防止缓存
-          iframeSrc.value = iframeSrc.value + '?_t=' + Date.now();
+          // 强制刷新 iframe，并保持 URL 结构干净，避免多次刷新把查询串拼乱。
+          const url = new URL(iframeSrc.value || (pagePrefix + config.defaultPage + pageSuffix), window.location.origin);
+          url.searchParams.set('_t', Date.now());
+          iframeSrc.value = url.pathname.replace(/^\//, '') + url.search + url.hash;
         }
         function goHome() {
             activeMenu.value = '';

@@ -1640,6 +1640,11 @@ function installDatabase(PDO $pdo)
             '应用配置' => [
                 '_icon' => 'Setting',
                 '全局开关' => 'config/base',
+                '资源库' => [
+                    '_icon' => 'FolderOpened',
+                    '图片资源' => 'config/resource/image',
+                    '链接/事件参数' => 'config/resource/click_param'
+                ],
                 '弹窗配置' => [
                     '图片弹窗' => 'config/popup/image',
                     '文字弹窗' => 'config/popup/message',
