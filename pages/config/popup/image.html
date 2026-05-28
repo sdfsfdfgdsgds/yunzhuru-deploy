@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/element/css/index.css">
   <script src="/element/js/vue.global.js"></script>
   <script src="/element/js/index.full.js"></script>
+  <script src="/pages/config/common/click_param_asset.js"></script>
   <style>
     .asset-option {
       display: flex;
@@ -56,6 +57,20 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .param-option {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+    }
+    .param-option-text {
+      color: #909399;
+      font-size: 12px;
+      max-width: 260px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
@@ -78,6 +93,7 @@
       <el-button @click="loadApps">刷新应用列表</el-button>
       <el-button type="primary" @click="openAddDialog">添加弹窗</el-button>
       <el-button type="success" @click="openAssetDialog">图片素材库</el-button>
+      <el-button type="success" plain @click="clickParam.openDialog">事件参数库</el-button>
       <el-button type="warning" @click="openBatchDialog">批量修改弹窗</el-button>
     </div>
 
@@ -184,7 +200,7 @@
           <el-input type="textarea" v-model="form.imageUrl" :rows="3" placeholder="可选：直接填图片链接，每行一条"></el-input>
         </el-form-item>
         <el-form-item label="点击事件">
-          <el-select v-model="form.clickAction" placeholder="选择点击动作" @change="updateClickTextPlaceholder">
+          <el-select v-model="form.clickAction" placeholder="选择点击动作" @change="onFormClickActionChange">
             <el-option label="无动作" :value="0"></el-option>
             <el-option label="调用浏览器打开URL(需要加http前缀)" :value="1"></el-option>
             <el-option label="添加QQ群" :value="2"></el-option>
@@ -195,16 +211,39 @@
           </el-select>
         </el-form-item>
         
-        <el-form-item v-if="form.clickAction !== 0 && form.clickAction !== 3" :label="clickTextLabel">
+        <el-form-item v-if="hasClickParam(form.clickAction)" label="参数资源">
+          <div style="width: 100%">
+            <el-select
+              v-model="form.clickParamAssetId"
+              filterable
+              clearable
+              placeholder="选择对应事件参数资源"
+              style="width: 100%"
+              @visible-change="visible => clickParam.onSelectVisible(visible, form.clickAction)"
+              @change="applyFormClickParamAsset">
+              <el-option
+                v-for="item in clickParam.options(form.clickAction)"
+                :key="item.id"
+                :label="item.name"
+                :value="item.id">
+                <div class="param-option">
+                  <span>{{ item.name }}</span>
+                  <span class="param-option-text">{{ item.param_text }}</span>
+                </div>
+              </el-option>
+            </el-select>
+            <div class="asset-toolbar">
+              <el-button size="small" @click="clickParam.load(form.clickAction, 1)">刷新资源</el-button>
+              <el-button size="small" type="primary" @click="clickParam.openEdit(null, form.clickAction)">新增资源</el-button>
+              <el-button size="small" @click="clickParam.openDialog">管理资源库</el-button>
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="hasClickParam(form.clickAction)" :label="clickTextLabel">
           <el-input
-            v-if="form.clickAction === 1"
-            type="textarea"
+            :type="clickTextInputType(form.clickAction)"
             v-model="form.clickText"
             :rows="3"
-            :placeholder="clickTextPlaceholder"></el-input>
-          <el-input
-            v-else
-            v-model="form.clickText"
             :placeholder="clickTextPlaceholder"></el-input>
         </el-form-item>
         <el-form-item label="回调地址">
@@ -312,7 +351,7 @@
           <el-input type="textarea" v-model="batchForm.imageUrl" :rows="3" placeholder="可选：直接填图片链接，每行一条"></el-input>
         </el-form-item>
         <el-form-item label="点击事件">
-          <el-select v-model="batchForm.clickAction" @change="updateBatchClickPlaceholder">
+          <el-select v-model="batchForm.clickAction" @change="onBatchClickActionChange">
             <el-option label="无动作" :value="0"></el-option>
             <el-option label="调用浏览器打开URL(需要加http前缀)" :value="1"></el-option>
             <el-option label="添加QQ群" :value="2"></el-option>
@@ -322,16 +361,39 @@
             <el-option label="打开窗口类" :value="7"></el-option>
           </el-select>
         </el-form-item>
-        <el-form-item v-if="batchForm.clickAction !== 0 && batchForm.clickAction !== 3" :label="batchClickTextLabel">
+        <el-form-item v-if="hasClickParam(batchForm.clickAction)" label="参数资源">
+          <div style="width: 100%">
+            <el-select
+              v-model="batchForm.clickParamAssetId"
+              filterable
+              clearable
+              placeholder="选择对应事件参数资源"
+              style="width: 100%"
+              @visible-change="visible => clickParam.onSelectVisible(visible, batchForm.clickAction)"
+              @change="applyBatchClickParamAsset">
+              <el-option
+                v-for="item in clickParam.options(batchForm.clickAction)"
+                :key="item.id"
+                :label="item.name"
+                :value="item.id">
+                <div class="param-option">
+                  <span>{{ item.name }}</span>
+                  <span class="param-option-text">{{ item.param_text }}</span>
+                </div>
+              </el-option>
+            </el-select>
+            <div class="asset-toolbar">
+              <el-button size="small" @click="clickParam.load(batchForm.clickAction, 1)">刷新资源</el-button>
+              <el-button size="small" type="primary" @click="clickParam.openEdit(null, batchForm.clickAction)">新增资源</el-button>
+              <el-button size="small" @click="clickParam.openDialog">管理资源库</el-button>
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="hasClickParam(batchForm.clickAction)" :label="batchClickTextLabel">
           <el-input
-            v-if="batchForm.clickAction === 1"
-            type="textarea"
+            :type="clickTextInputType(batchForm.clickAction)"
             v-model="batchForm.clickText"
             :rows="3"
-            :placeholder="batchClickTextPlaceholder"></el-input>
-          <el-input
-            v-else
-            v-model="batchForm.clickText"
             :placeholder="batchClickTextPlaceholder"></el-input>
         </el-form-item>
         <el-form-item label="回调地址">
@@ -421,6 +483,72 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="clickParam.dialogVisible" title="事件参数库" width="900px">
+      <div style="display:flex; gap:10px; margin-bottom:12px; align-items:center; flex-wrap:wrap">
+        <el-select v-model="clickParamFilterAction" placeholder="事件分类" clearable style="width: 180px" @change="value => clickParam.load(value, 1)">
+          <el-option v-for="item in clickActionOptions" :key="item.value" :label="item.label" :value="item.value"></el-option>
+        </el-select>
+        <el-input
+          v-model="clickParam.keyword"
+          placeholder="搜索名称、参数或备注"
+          clearable
+          style="width: 320px"
+          @keyup.enter="clickParam.load(clickParamFilterAction, 1)"></el-input>
+        <el-button @click="clickParam.load(clickParamFilterAction, 1)">查询</el-button>
+        <el-button type="primary" @click="clickParam.openEdit(null, clickParamFilterAction || 1)">新增参数</el-button>
+      </div>
+      <el-table :data="clickParam.list" border v-loading="clickParam.loading">
+        <el-table-column label="名称" prop="name" width="160"></el-table-column>
+        <el-table-column label="事件分类" width="120">
+          <template #default="scope">{{ clickActionLabel(scope.row.action_type) }}</template>
+        </el-table-column>
+        <el-table-column label="事件参数" prop="param_text" show-overflow-tooltip></el-table-column>
+        <el-table-column label="备注" prop="remark" width="160" show-overflow-tooltip></el-table-column>
+        <el-table-column label="操作" width="150">
+          <template #default="scope">
+            <el-button size="small" type="primary" @click="clickParam.openEdit(scope.row)">编辑</el-button>
+            <el-button size="small" type="danger" @click="clickParam.remove(scope.row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div style="margin-top: 12px; text-align: right">
+        <el-pagination
+          background
+          layout="total, prev, pager, next"
+          :total="clickParam.total"
+          :page-size="clickParam.limit"
+          :current-page="clickParam.page"
+          @current-change="page => clickParam.load(clickParamFilterAction, page)"></el-pagination>
+      </div>
+    </el-dialog>
+
+    <el-dialog v-model="clickParam.editVisible" :title="clickParam.editMode ? '编辑事件参数' : '新增事件参数'" width="560px" append-to-body>
+      <el-form :model="clickParam.form" label-width="90px">
+        <el-form-item label="参数名">
+          <el-input v-model="clickParam.form.name" placeholder="例如：官网链接、QQ群、卡密接口"></el-input>
+        </el-form-item>
+        <el-form-item label="事件分类">
+          <el-select v-model="clickParam.form.action_type" style="width: 100%">
+            <el-option v-for="item in clickActionOptions" :key="item.value" :label="item.label" :value="item.value"></el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="clickParamLabel(clickParam.form.action_type)">
+          <el-input
+            :type="clickTextInputType(clickParam.form.action_type)"
+            v-model="clickParam.form.param_text"
+            :rows="4"
+            :placeholder="clickParamPlaceholder(clickParam.form.action_type)"></el-input>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="clickParam.form.remark"></el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="clickParam.editVisible = false">取消</el-button>
+        <el-button type="primary" @click="clickParam.submit">保存</el-button>
+      </template>
+    </el-dialog>
+
 <el-dialog v-model="addListDialogVisible" :title="addListDialogTitle" width="500px">
   <el-form :model="addListForm" label-width="100px">
     <el-form-item label="类名">
@@ -462,11 +590,12 @@
           id: null,
           popup_type: '',
           remark: '',
-          imageUrl: '',
-          asset_ids: [],
-          clickAction: 0,
-          clickText: '',
-          callback: '',
+	          imageUrl: '',
+	          asset_ids: [],
+	          clickAction: 0,
+	          clickText: '',
+	          clickParamAssetId: null,
+	          callback: '',
           countdown: 3,
           canSkip: false,
           autoClose: false,
@@ -491,12 +620,20 @@
         const assetLimit = ref(20);
         const assetTotal = ref(0);
         const assetKeyword = ref('');
-        const assetForm = reactive({
-          id: null,
-          name: '',
-          url: '',
-          remark: ''
-        });
+	        const assetForm = reactive({
+	          id: null,
+	          name: '',
+	          url: '',
+	          remark: ''
+	        });
+	        const clickParam = ClickParamAsset.createStore(Vue, ElementPlus);
+	        const clickParamFilterAction = ref(null);
+	        const clickActionOptions = ClickParamAsset.ACTION_OPTIONS;
+	        const clickActionLabel = ClickParamAsset.actionLabel;
+	        const hasClickParam = ClickParamAsset.hasParam;
+	        const clickParamLabel = ClickParamAsset.paramLabel;
+	        const clickParamPlaceholder = ClickParamAsset.paramPlaceholder;
+	        const clickTextInputType = ClickParamAsset.paramInputType;
         const selectedFormAssets = computed(() => {
           const ids = Array.isArray(form.asset_ids) ? form.asset_ids : [];
           return assetList.value.filter(asset => ids.includes(asset.id));
@@ -631,52 +768,38 @@
             lock: preset.lock == 1,
             popup_type: preset.popup_type,
             remark: preset.remark,
-            imageUrl: preset.imageUrl,
-            asset_ids: Array.isArray(preset.asset_ids) ? [...preset.asset_ids] : [],
-            clickAction: preset.clickAction,
-            clickText: preset.clickText,
-            callback: preset.callback,
+	            imageUrl: preset.imageUrl,
+	            asset_ids: Array.isArray(preset.asset_ids) ? [...preset.asset_ids] : [],
+		            clickAction: Number(preset.clickAction || 0),
+	            clickText: preset.clickText,
+	            clickParamAssetId: preset.click_param_asset_id || 0,
+	            callback: preset.callback,
             countdown: preset.countdown,
             canSkip: preset.canSkip == 1,
             autoClose: preset.autoClose == 1,
             enable: preset.enable == 1
           });
         
-          updateBatchClickPlaceholder(preset.clickAction);
-        }
-        const clickTextPlaceholder = ref('无参数');
-        const clickTextLabel = ref('事件参数');
-        function updateClickTextPlaceholder(val) {
-          switch (val) {
-            case 1:
-              clickTextLabel.value = '打开链接';
-              clickTextPlaceholder.value = '请输入要打开的网址，如：https://xxx.com';
-              break;
-            case 2:
-              clickTextLabel.value = 'QQ群Key';
-              clickTextPlaceholder.value = '在QQ群官方地址获取安卓加群组件的key值即可';
-              break;
-            case 3:
-              clickTextLabel.value = '事件参数';
-              clickTextPlaceholder.value = '不需要参数';
-              break;
-            case 4:
-              clickTextLabel.value = '分享内容';
-              clickTextPlaceholder.value = '请输入要分享的文本内容';
-              break;
-            case 6:
-              clickTextLabel.value = '复制内容';
-              clickTextPlaceholder.value = '请输入要复制的文本内容';
-              break;
-            case 7:
-              clickTextLabel.value = '窗口类名';
-              clickTextPlaceholder.value = '请输入要打开的完整窗口类名，例如com.abc.shell.ManiActivity';
-              break;
-            default:
-              clickTextLabel.value = '事件参数';
-              clickTextPlaceholder.value = '无参数';
-          }
-        }
+	          updateBatchClickPlaceholder(batchForm.clickAction);
+	        }
+	        const clickTextPlaceholder = ref('无参数');
+	        const clickTextLabel = ref('事件参数');
+	        function updateClickTextPlaceholder(val) {
+	          clickTextLabel.value = clickParamLabel(val);
+	          clickTextPlaceholder.value = clickParamPlaceholder(val);
+	        }
+	        function onFormClickActionChange(val) {
+	          form.clickParamAssetId = null;
+	          form.clickText = '';
+	          updateClickTextPlaceholder(val);
+	          if (hasClickParam(val)) {
+	            clickParam.load(val, 1);
+	          }
+	        }
+	        function applyFormClickParamAsset(assetId) {
+	          clickParam.applyTo(form, 'clickAction', 'clickText', assetId, 'clickParamAssetId');
+	          updateClickTextPlaceholder(form.clickAction);
+	        }
         async function loadApps() {
           const res = await fetch('/api/index.php?module=config&method=getMyApps');
           const json = await res.json();
@@ -706,7 +829,10 @@ async function loadPopups(p = 1) {
   const json = await res.json();
   if (json.code === 200) {
     popupList.value = json.data.list;
-    popupList.value.forEach(row => mergeAssets(row.image_assets));
+	    popupList.value.forEach(row => {
+	      mergeAssets(row.image_assets);
+	      clickParam.merge(row.click_param_asset);
+	    });
     total.value = json.data.total;
 
     // 恢复勾选
@@ -741,11 +867,12 @@ function changeApp() {
             id: null,
             popup_type: '',
             remark: '',
-            imageUrl: '',
-            asset_ids: [],
-            clickAction: 0,
-            clickText: '',
-            callback: '',
+	            imageUrl: '',
+	            asset_ids: [],
+	            clickAction: 0,
+	            clickText: '',
+		            clickParamAssetId: null,
+	            callback: '',
             countdown: 3,
             canSkip: false,
             autoClose: false,
@@ -759,12 +886,15 @@ function changeApp() {
         }
 
         function editPopup(row) {
-            selectedAppId.value = row.apk_id;
-          mergeAssets(row.image_assets);
+	            selectedAppId.value = row.apk_id;
+	          mergeAssets(row.image_assets);
+	          clickParam.merge(row.click_param_asset);
           Object.assign(form, {
-            ...row,
-            asset_ids: Array.isArray(row.asset_ids) ? [...row.asset_ids] : [],
-            enable: row.enable == 1,
+	            ...row,
+	            asset_ids: Array.isArray(row.asset_ids) ? [...row.asset_ids] : [],
+		            clickParamAssetId: row.click_param_asset_id || 0,
+		            clickAction: Number(row.clickAction || 0),
+	            enable: row.enable == 1,
             canSkip: row.canSkip == 1,
             autoClose: row.autoClose == 1,
             lock: row.lock == 1
@@ -780,11 +910,18 @@ function changeApp() {
             ElementPlus.ElMessage.warning('请选择应用');
             return;
           }
-          if (!hasImageSource(form)) {
-            ElementPlus.ElMessage.warning('请选择图片素材或填写备用直链');
-            return;
-          }
-          const data = { ...form, apk_id: selectedAppId.value };
+	          if (!hasImageSource(form)) {
+	            ElementPlus.ElMessage.warning('请选择图片素材或填写备用直链');
+	            return;
+	          }
+	          if (!hasClickParam(form.clickAction)) {
+	            form.clickText = '';
+	            form.clickParamAssetId = null;
+	          } else if (!String(form.clickText || '').trim()) {
+	            ElementPlus.ElMessage.warning('请填写事件参数或选择参数资源');
+	            return;
+	          }
+	          const data = { ...form, apk_id: selectedAppId.value };
           const method = editMode.value ? 'editPopup' : 'addPopup';
           const res = await fetch(`/api/index.php?module=popup_image&method=${method}`, {
             method: 'POST',
@@ -946,10 +1083,11 @@ const batchForm = reactive({
   popup_type: '',
   remark: '',
   imageUrl: '',
-  asset_ids: [],
-  clickAction: 0,
-  clickText: '',
-  callback: '',
+	  asset_ids: [],
+	  clickAction: 0,
+	  clickText: '',
+	  clickParamAssetId: null,
+	  callback: '',
   countdown: 3,
   canSkip: false,
   autoClose: false,
@@ -969,10 +1107,11 @@ function openBatchDialog() {
     popup_type: '',
     remark: '',
     imageUrl: '',
-    asset_ids: [],
-    clickAction: 0,
-    clickText: '',
-    callback: '',
+	    asset_ids: [],
+	    clickAction: 0,
+	    clickText: '',
+	    clickParamAssetId: null,
+	    callback: '',
     countdown: 3,
     canSkip: false,
     autoClose: false,
@@ -995,35 +1134,22 @@ function handleSelectionChange(val) {
 
 // 更新点击事件提示
 function updateBatchClickPlaceholder(val) {
-  switch (val) {
-    case 1:
-      batchClickTextLabel.value = '打开链接';
-      batchClickTextPlaceholder.value = '请输入要打开的网址，如：https://xxx.com';
-      break;
-    case 2:
-      batchClickTextLabel.value = 'QQ群Key';
-      batchClickTextPlaceholder.value = '在QQ群官方地址获取安卓加群连接';
-      break;
-    case 3:
-      batchClickTextLabel.value = '事件参数';
-      batchClickTextPlaceholder.value = '不需要参数';
-      break;
-    case 4:
-      batchClickTextLabel.value = '分享内容';
-      batchClickTextPlaceholder.value = '请输入要分享的文本内容';
-      break;
-    case 6:
-      batchClickTextLabel.value = '复制内容';
-      batchClickTextPlaceholder.value = '请输入要复制的文本内容';
-      break;
-    case 7:
-      batchClickTextLabel.value = '窗口类名';
-      batchClickTextPlaceholder.value = '请输入要打开的完整窗口类名，例如com.abc.shell.ManiActivity';
-      break;
-    default:
-      batchClickTextLabel.value = '事件参数';
-      batchClickTextPlaceholder.value = '无参数';
+  batchClickTextLabel.value = clickParamLabel(val);
+  batchClickTextPlaceholder.value = clickParamPlaceholder(val);
+}
+
+function onBatchClickActionChange(val) {
+  batchForm.clickParamAssetId = null;
+  batchForm.clickText = '';
+  updateBatchClickPlaceholder(val);
+  if (hasClickParam(val)) {
+    clickParam.load(val, 1);
   }
+}
+
+function applyBatchClickParamAsset(assetId) {
+  clickParam.applyTo(batchForm, 'clickAction', 'clickText', assetId, 'clickParamAssetId');
+  updateBatchClickPlaceholder(batchForm.clickAction);
 }
 
 // 批量保存
@@ -1034,11 +1160,18 @@ async function confirmBatchUpdate() {
     { type: 'warning' }
   );
 
-  if (!hasImageSource(batchForm)) {
-    ElementPlus.ElMessage.warning('请选择图片素材或填写备用直链');
-    return;
-  }
-  const ids = selectedPopups.value.map(item => item.id);
+	  if (!hasImageSource(batchForm)) {
+	    ElementPlus.ElMessage.warning('请选择图片素材或填写备用直链');
+	    return;
+	  }
+	  if (!hasClickParam(batchForm.clickAction)) {
+	    batchForm.clickText = '';
+	    batchForm.clickParamAssetId = null;
+	  } else if (!String(batchForm.clickText || '').trim()) {
+	    ElementPlus.ElMessage.warning('请填写事件参数或选择参数资源');
+	    return;
+	  }
+	  const ids = selectedPopups.value.map(item => item.id);
   const payload = { ...batchForm, ids, apk_id: selectedAppId.value };
 
   const res = await fetch('/api/index.php?module=popup_image&method=batchUpdate', {
@@ -1075,10 +1208,12 @@ async function confirmBatchUpdate() {
           openAddDialog,
           editPopup,
           deletePopup,
-          submitForm,
-          updateClickTextPlaceholder,
-          clickTextPlaceholder,
-          clickTextLabel,
+	          submitForm,
+	          updateClickTextPlaceholder,
+	          onFormClickActionChange,
+	          applyFormClickParamAsset,
+	          clickTextPlaceholder,
+	          clickTextLabel,
           popupListDialogVisible,
           popupListData,
           currentListType,
@@ -1090,10 +1225,12 @@ async function confirmBatchUpdate() {
   batchForm,
   batchClickTextPlaceholder,
   batchClickTextLabel,
-  openBatchDialog,
-  handleSelectionChange,
-  updateBatchClickPlaceholder,
-  confirmBatchUpdate,selectedPopups,
+	  openBatchDialog,
+	  handleSelectionChange,
+	  updateBatchClickPlaceholder,
+	  onBatchClickActionChange,
+	  applyBatchClickParamAsset,
+	  confirmBatchUpdate,selectedPopups,
   popupTableRef,presetPopupId,
 applyPresetToForm,addListDialogVisible,
 addListDialogTitle,
@@ -1117,8 +1254,16 @@ onAssetSelectVisible,
 openAssetDialog,
 openAssetEditDialog,
 submitAsset,
-deleteAsset,
-        };
+	deleteAsset,
+	clickParam,
+	clickParamFilterAction,
+	clickActionOptions,
+	clickActionLabel,
+	hasClickParam,
+	clickParamLabel,
+	clickParamPlaceholder,
+	clickTextInputType,
+	        };
       }
     }).use(ElementPlus).mount('#app');
   </script>

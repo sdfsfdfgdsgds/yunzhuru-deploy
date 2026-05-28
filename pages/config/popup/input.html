@@ -8,6 +8,29 @@
   <link rel="stylesheet" href="/element/css/index.css">
   <script src="/element/js/vue.global.js"></script>
   <script src="/element/js/index.full.js"></script>
+  <script src="/pages/config/common/click_param_asset.js"></script>
+  <style>
+    .param-option {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+    }
+    .param-option-text {
+      color: #909399;
+      font-size: 12px;
+      max-width: 260px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .param-toolbar {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+  </style>
 </head>
 <body>
   <div id="app" style="padding: 20px">
@@ -18,6 +41,7 @@
       </el-select>
       <el-button @click="loadApps">刷新应用列表</el-button>
       <el-button type="primary" @click="openAddDialog">添加弹窗</el-button>
+      <el-button type="success" plain @click="clickParam.openDialog">事件参数库</el-button>
     </div>
 
     <el-table :data="popupList" border>
@@ -164,7 +188,7 @@
         </el-form-item>
     
         <el-form-item label="点击事件">
-          <el-select v-model="buttonForm.click" @change="updateClickTextTip">
+          <el-select v-model="buttonForm.click" placeholder="选择点击事件" style="width: 100%" @change="onButtonClickActionChange">
             <el-option label="无动作" :value="0"></el-option>
             <el-option label="打开网页" :value="1"></el-option>
             <el-option label="添加QQ群" :value="2"></el-option>
@@ -175,9 +199,42 @@
             <el-option label="打开窗口类" :value="7"></el-option>
           </el-select>
         </el-form-item>
-    
-        <el-form-item label="事件参数">
-          <el-input v-model="buttonForm.clickText" :placeholder="clickTextTip"></el-input>
+
+        <el-form-item v-if="hasClickParam(buttonForm.click)" label="参数资源">
+          <div style="width: 100%">
+            <el-select
+              v-model="buttonForm.clickParamAssetId"
+              filterable
+              clearable
+              placeholder="选择对应事件参数资源"
+              style="width: 100%"
+              @visible-change="visible => clickParam.onSelectVisible(visible, buttonForm.click)"
+              @change="applyButtonClickParamAsset">
+              <el-option
+                v-for="item in clickParam.options(buttonForm.click)"
+                :key="item.id"
+                :label="item.name"
+                :value="item.id">
+                <div class="param-option">
+                  <span>{{ item.name }}</span>
+                  <span class="param-option-text">{{ item.param_text }}</span>
+                </div>
+              </el-option>
+            </el-select>
+            <div class="param-toolbar">
+              <el-button size="small" @click="clickParam.load(buttonForm.click, 1)">刷新资源</el-button>
+              <el-button size="small" type="primary" @click="clickParam.openEdit(null, buttonForm.click)">新增资源</el-button>
+              <el-button size="small" @click="clickParam.openDialog">管理资源库</el-button>
+            </div>
+          </div>
+        </el-form-item>
+
+        <el-form-item v-if="hasClickParam(buttonForm.click)" :label="clickTextLabel">
+          <el-input
+            :type="clickTextInputType(buttonForm.click)"
+            v-model="buttonForm.clickText"
+            :rows="3"
+            :placeholder="clickTextTip"></el-input>
         </el-form-item>
     
         <el-form-item label="点击后关闭">
@@ -191,9 +248,75 @@
           {{ buttonEditMode ? '保存修改' : '确认添加' }}
         </el-button>
       </template>
+	    </el-dialog>
+
+    <el-dialog v-model="clickParam.dialogVisible" title="事件参数库" width="900px">
+      <div style="display:flex; gap:10px; margin-bottom:12px; align-items:center; flex-wrap:wrap">
+        <el-select v-model="clickParamFilterAction" placeholder="事件分类" clearable style="width: 180px" @change="value => clickParam.load(value, 1)">
+          <el-option v-for="item in clickActionOptions" :key="item.value" :label="item.label" :value="item.value"></el-option>
+        </el-select>
+        <el-input
+          v-model="clickParam.keyword"
+          placeholder="搜索名称、参数或备注"
+          clearable
+          style="width: 320px"
+          @keyup.enter="clickParam.load(clickParamFilterAction, 1)"></el-input>
+        <el-button @click="clickParam.load(clickParamFilterAction, 1)">查询</el-button>
+        <el-button type="primary" @click="clickParam.openEdit(null, clickParamFilterAction || 1)">新增参数</el-button>
+      </div>
+      <el-table :data="clickParam.list" border v-loading="clickParam.loading">
+        <el-table-column label="名称" prop="name" width="160"></el-table-column>
+        <el-table-column label="事件分类" width="120">
+          <template #default="scope">{{ clickActionLabel(scope.row.action_type) }}</template>
+        </el-table-column>
+        <el-table-column label="事件参数" prop="param_text" show-overflow-tooltip></el-table-column>
+        <el-table-column label="备注" prop="remark" width="160" show-overflow-tooltip></el-table-column>
+        <el-table-column label="操作" width="150">
+          <template #default="scope">
+            <el-button size="small" type="primary" @click="clickParam.openEdit(scope.row)">编辑</el-button>
+            <el-button size="small" type="danger" @click="clickParam.remove(scope.row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div style="margin-top: 12px; text-align: right">
+        <el-pagination
+          background
+          layout="total, prev, pager, next"
+          :total="clickParam.total"
+          :page-size="clickParam.limit"
+          :current-page="clickParam.page"
+          @current-change="page => clickParam.load(clickParamFilterAction, page)"></el-pagination>
+      </div>
     </el-dialog>
 
-    <!-- 白名单弹窗 -->
+    <el-dialog v-model="clickParam.editVisible" :title="clickParam.editMode ? '编辑事件参数' : '新增事件参数'" width="560px" append-to-body>
+      <el-form :model="clickParam.form" label-width="90px">
+        <el-form-item label="参数名">
+          <el-input v-model="clickParam.form.name" placeholder="例如：官网链接、QQ群、卡密接口"></el-input>
+        </el-form-item>
+        <el-form-item label="事件分类">
+          <el-select v-model="clickParam.form.action_type" style="width: 100%">
+            <el-option v-for="item in clickActionOptions" :key="item.value" :label="item.label" :value="item.value"></el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="clickParamLabel(clickParam.form.action_type)">
+          <el-input
+            :type="clickTextInputType(clickParam.form.action_type)"
+            v-model="clickParam.form.param_text"
+            :rows="4"
+            :placeholder="clickParamPlaceholder(clickParam.form.action_type)"></el-input>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="clickParam.form.remark"></el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="clickParam.editVisible = false">取消</el-button>
+        <el-button type="primary" @click="clickParam.submit">保存</el-button>
+      </template>
+    </el-dialog>
+
+	    <!-- 白名单弹窗 -->
     <el-dialog v-model="whitelistDialogVisible" title="白名单管理(当窗口为这些类名的时候才会弹出)" width="600px">
       <el-button type="primary" @click="addToWhitelist">添加白名单</el-button>
       <el-table :data="whitelist" style="margin-top: 10px" border>
@@ -393,36 +516,37 @@ const buttonForm = reactive({
   backgroundColor: '#008577',
   click: 0,
   clickText: '',
+  clickParamAssetId: null,
   dismiss: true
 })
 const clickTextTip = ref('无参数')
+const clickTextLabel = ref('事件参数')
+const clickParam = ClickParamAsset.createStore(Vue, ElementPlus)
+const clickParamFilterAction = ref(null)
+const clickActionOptions = ClickParamAsset.ACTION_OPTIONS
+const clickActionLabel = ClickParamAsset.actionLabel
+const hasClickParam = ClickParamAsset.hasParam
+const clickParamLabel = ClickParamAsset.paramLabel
+const clickParamPlaceholder = ClickParamAsset.paramPlaceholder
+const clickTextInputType = ClickParamAsset.paramInputType
 
 function updateClickTextTip(val) {
-  switch (val) {
-    case 1:
-      clickTextTip.value = '请输入要打开的网址';
-      break;
-    case 2:
-      clickTextTip.value = '在QQ群官方地址获取安卓加群连接的key值即可';
-      break;
-    case 3:
-      clickTextTip.value = '无需参数';
-      break;
-    case 4:
-      clickTextTip.value = '请输入分享内容';
-      break;
-    case 5:
-      clickTextTip.value = '请输入提交接口地址';
-      break;
-    case 6:
-      clickTextTip.value = '请输入要复制的内容';
-      break;
-    case 7:
-      clickTextTip.value = '请输入要打开的完整窗口类名，例如com.abc.shell.ManiActivity';
-      break;
-    default:
-      clickTextTip.value = '无参数';
+  clickTextLabel.value = clickParamLabel(val);
+  clickTextTip.value = clickParamPlaceholder(val);
+}
+
+function onButtonClickActionChange(val) {
+  buttonForm.clickParamAssetId = null;
+  buttonForm.clickText = '';
+  updateClickTextTip(val);
+  if (hasClickParam(val)) {
+    clickParam.load(val, 1);
   }
+}
+
+function applyButtonClickParamAsset(assetId) {
+  clickParam.applyTo(buttonForm, 'click', 'clickText', assetId, 'clickParamAssetId');
+  updateClickTextTip(buttonForm.click);
 }
 
 async function manageButtons(popupId) {
@@ -432,9 +556,10 @@ async function manageButtons(popupId) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ popup_id: popupId })
   });
-  const json = await res.json();
-  buttonList.value = json.data;
-  buttonDialogVisible.value = true;
+	  const json = await res.json();
+	  buttonList.value = json.data;
+	  buttonList.value.forEach(row => clickParam.merge(row.click_param_asset));
+	  buttonDialogVisible.value = true;
 }
 
 function openAddButtonDialog() {
@@ -443,11 +568,12 @@ function openAddButtonDialog() {
     id: null,
     title: '',
     textcolor: '#FFFFFF',
-    backgroundColor: '#008577',
-    click: 0,
-    clickText: '',
-    dismiss: true
-  });
+	    backgroundColor: '#008577',
+	    click: 0,
+	    clickText: '',
+	    clickParamAssetId: null,
+	    dismiss: true
+	  });
   clickTextTip.value = '无参数';
   addButtonDialogVisible.value = true;
 }
@@ -455,9 +581,11 @@ function openAddButtonDialog() {
 function editButton(row) {
   buttonEditMode.value = true;
   Object.assign(buttonForm, {
-    ...row,
-    dismiss: row.dismiss == 1
-  });
+	    ...row,
+	    click: Number(row.click || 0),
+	    dismiss: row.dismiss == 1,
+	    clickParamAssetId: row.click_param_asset_id || 0
+	  });
   updateClickTextTip(row.click);
   addButtonDialogVisible.value = true;
 }
@@ -471,11 +599,19 @@ async function submitAddButton() {
     popup_id: currentPopupId.value,
     title: buttonForm.title,
     textcolor: buttonForm.textcolor,
-    backgroundColor: buttonForm.backgroundColor,
-    click: buttonForm.click,
-    clickText: buttonForm.clickText,
-    dismiss: buttonForm.dismiss ? 1 : 0
-  };
+	    backgroundColor: buttonForm.backgroundColor,
+	    click: buttonForm.click,
+	    clickText: buttonForm.clickText,
+	    clickParamAssetId: buttonForm.clickParamAssetId || 0,
+	    dismiss: buttonForm.dismiss ? 1 : 0
+	  };
+	  if (!hasClickParam(buttonForm.click)) {
+	    payload.clickText = '';
+	    payload.clickParamAssetId = 0;
+	  } else if (!String(buttonForm.clickText || '').trim()) {
+	    ElementPlus.ElMessage.warning('请填写事件参数或选择参数资源');
+	    return;
+	  }
 
   if (buttonEditMode.value) payload.id = buttonForm.id;
 
@@ -643,9 +779,20 @@ onMounted(() => {
   buttonEditMode,
   buttonList,
   buttonForm,
-  clickTextTip,
-  updateClickTextTip,
-  manageButtons,
+	  clickTextTip,
+	  clickTextLabel,
+	  updateClickTextTip,
+	  onButtonClickActionChange,
+	  applyButtonClickParamAsset,
+	  clickParam,
+	  clickParamFilterAction,
+	  clickActionOptions,
+	  clickActionLabel,
+	  hasClickParam,
+	  clickParamLabel,
+	  clickParamPlaceholder,
+	  clickTextInputType,
+	  manageButtons,
   openAddButtonDialog,
   editButton,
   submitAddButton,

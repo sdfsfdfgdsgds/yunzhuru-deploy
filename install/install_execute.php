@@ -969,6 +969,45 @@ function installDatabase(PDO $pdo)
         if (!indexExists($pdo, $imageAssetRefTable, 'uniq_popup_asset')) {
             $pdo->exec("ALTER TABLE `$imageAssetRefTable` ADD UNIQUE KEY `uniq_popup_asset` (`popup_id`, `asset_id`)");
         }
+
+        // --------------------
+        // 20.3 事件参数资源库
+        // --------------------
+        $clickParamAssetTable = $tablePrefix . 'click_param_asset';
+
+        $pdo->exec("CREATE TABLE IF NOT EXISTS `$clickParamAssetTable` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键'
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+        addFieldsIfNotExist($pdo, $clickParamAssetTable, [
+            'user_id'     => "INT NOT NULL COMMENT '所属用户ID'",
+            'name'        => "VARCHAR(100) NOT NULL DEFAULT '' COMMENT '参数资源名称'",
+            'action_type' => "TINYINT NOT NULL DEFAULT 1 COMMENT '事件类型'",
+            'param_text'  => "TEXT NOT NULL COMMENT '事件参数内容'",
+            'remark'      => "VARCHAR(255) NOT NULL DEFAULT '' COMMENT '备注'",
+            'created_at'  => "DATETIME NOT NULL COMMENT '创建时间'",
+            'updated_at'  => "DATETIME NOT NULL COMMENT '更新时间'"
+        ]);
+        addForeignKeyIfNotExist($pdo, $clickParamAssetTable, 'user_id', $userTable, 'id');
+        addIndexIfNotExist($pdo, $clickParamAssetTable, 'idx_user_action_created', '`user_id`, `action_type`, `created_at`');
+
+        $clickParamAssetRefTable = $tablePrefix . 'click_param_asset_ref';
+        $pdo->exec("CREATE TABLE IF NOT EXISTS `$clickParamAssetRefTable` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键'
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+        addFieldsIfNotExist($pdo, $clickParamAssetRefTable, [
+            'target_type' => "VARCHAR(50) NOT NULL COMMENT '关联目标类型'",
+            'target_id'   => "INT NOT NULL COMMENT '关联目标ID'",
+            'asset_id'    => "INT NOT NULL COMMENT '事件参数资源ID'",
+            'created_at'  => "DATETIME NOT NULL COMMENT '创建时间'"
+        ]);
+        addForeignKeyIfNotExist($pdo, $clickParamAssetRefTable, 'asset_id', $clickParamAssetTable, 'id');
+        addIndexIfNotExist($pdo, $clickParamAssetRefTable, 'idx_target', '`target_type`, `target_id`');
+        addIndexIfNotExist($pdo, $clickParamAssetRefTable, 'idx_asset_id', '`asset_id`');
+        if (!indexExists($pdo, $clickParamAssetRefTable, 'uniq_target')) {
+            $pdo->exec("ALTER TABLE `$clickParamAssetRefTable` ADD UNIQUE KEY `uniq_target` (`target_type`, `target_id`)");
+        }
         
         // --------------------
         // 21. 图片弹窗白名单表

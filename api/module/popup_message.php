@@ -261,6 +261,9 @@ function deletePopup(PDO $pdo, array $input) {
         }
     }
 
+    $buttonStmt = $pdo->prepare("SELECT id FROM cainiao_popup_message_button WHERE popup_id = ?");
+    $buttonStmt->execute([$input['id']]);
+    clickParamAssetDeleteRefsByTargets($pdo, 'popup_message_button', $buttonStmt->fetchAll(PDO::FETCH_COLUMN));
     $pdo->prepare("DELETE FROM cainiao_popup_message_button WHERE popup_id = ?")->execute([$input['id']]);
     $pdo->prepare("DELETE FROM cainiao_popup_message_whitelist WHERE popup_id = ?")->execute([$input['id']]);
     $pdo->prepare("DELETE FROM cainiao_popup_message_blacklist WHERE popup_id = ?")->execute([$input['id']]);
@@ -286,9 +289,18 @@ function getButtons(PDO $pdo, array $input) {
         throw new Exception('无权限');
     }
 
+    clickParamAssetEnsureTables($pdo);
     $stmt = $pdo->prepare("SELECT * FROM cainiao_popup_message_button WHERE popup_id = ?");
     $stmt->execute([$input['popup_id']]);
-    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $assetMap = clickParamAssetFetchByTargets($pdo, 'popup_message_button', array_column($list, 'id'));
+    foreach ($list as &$row) {
+        $asset = $assetMap[(int)$row['id']] ?? null;
+        $row['click_param_asset'] = $asset;
+        $row['click_param_asset_id'] = $asset ? (int)$asset['id'] : 0;
+    }
+    unset($row);
+    return $list;
 }
 
 // 添加按钮
@@ -301,18 +313,35 @@ function addButton(PDO $pdo, array $input) {
         throw new Exception('无权限');
     }
 
-    $stmt = $pdo->prepare("INSERT INTO cainiao_popup_message_button 
-        (popup_id, title, textcolor, backgroundColor, click, clickText, dismiss)
-        VALUES (?, ?, ?, ?, ?, ?, ?)");
-    $stmt->execute([
-        $input['popup_id'],
-        $input['title'],
-        $input['textcolor'] ?? '#FFFFFF',
-        $input['backgroundColor'] ?? '#008577',
-        intval($input['click']),
-        $input['clickText'] ?? '',
-        !empty($input['dismiss']) ? 1 : 0
-    ]);
+    $clickParamAssetId = clickParamAssetReadIdFromInput($input);
+    $startedTransaction = !$pdo->inTransaction();
+    if ($startedTransaction) {
+        $pdo->beginTransaction();
+    }
+    try {
+        $stmt = $pdo->prepare("INSERT INTO cainiao_popup_message_button
+            (popup_id, title, textcolor, backgroundColor, click, clickText, dismiss)
+            VALUES (?, ?, ?, ?, ?, ?, ?)");
+        $stmt->execute([
+            $input['popup_id'],
+            $input['title'],
+            $input['textcolor'] ?? '#FFFFFF',
+            $input['backgroundColor'] ?? '#008577',
+            intval($input['click']),
+            $input['clickText'] ?? '',
+            !empty($input['dismiss']) ? 1 : 0
+        ]);
+        $buttonId = (int)$pdo->lastInsertId();
+        clickParamAssetSyncRef($pdo, 'popup_message_button', $buttonId, $clickParamAssetId, intval($input['click'] ?? 0), (int)$userId, $isAdmin);
+        if ($startedTransaction) {
+            $pdo->commit();
+        }
+    } catch (Throwable $e) {
+        if ($startedTransaction && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
 
     // 推送配置到桶
     $cfgStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_popup_message m JOIN cainiao_apk_config c ON m.config_id = c.id WHERE m.id = ? LIMIT 1");
@@ -344,6 +373,7 @@ function deleteButton(PDO $pdo, array $input) {
 
     $stmt = $pdo->prepare("DELETE FROM cainiao_popup_message_button WHERE id = ?");
     $stmt->execute([$input['id']]);
+    clickParamAssetDeleteRef($pdo, 'popup_message_button', (int)$input['id']);
 
     // 推送配置到桶
     $cfgStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_popup_message m JOIN cainiao_apk_config c ON m.config_id = c.id WHERE m.id = ? LIMIT 1");
@@ -485,6 +515,8 @@ function editButton(PDO $pdo, array $input) {
         'title', 'textcolor', 'backgroundColor', 'click',
         'clickText', 'dismiss'
     ];
+    $hasClickParamAssetId = clickParamAssetHasIdInInput($input);
+    $clickParamAssetId = clickParamAssetReadIdFromInput($input);
 
     $updates = [];
     $params = [':id' => $input['id']];
@@ -528,9 +560,26 @@ function editButton(PDO $pdo, array $input) {
     }
 
     // 执行更新
-    $sql = "UPDATE cainiao_popup_message_button SET " . implode(', ', $updates) . " WHERE id = :id";
-    $stmt = $pdo->prepare($sql);
-    $stmt->execute($params);
+    $startedTransaction = !$pdo->inTransaction();
+    if ($startedTransaction) {
+        $pdo->beginTransaction();
+    }
+    try {
+        $sql = "UPDATE cainiao_popup_message_button SET " . implode(', ', $updates) . " WHERE id = :id";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        if ($hasClickParamAssetId) {
+            clickParamAssetSyncRef($pdo, 'popup_message_button', (int)$input['id'], $clickParamAssetId, intval($input['click'] ?? 0), $userId, $isAdmin);
+        }
+        if ($startedTransaction) {
+            $pdo->commit();
+        }
+    } catch (Throwable $e) {
+        if ($startedTransaction && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
 
     // 推送配置到桶
     $cfgStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_popup_message_button b JOIN cainiao_popup_message m ON b.popup_id = m.id JOIN cainiao_apk_config c ON m.config_id = c.id WHERE b.id = ? LIMIT 1");
