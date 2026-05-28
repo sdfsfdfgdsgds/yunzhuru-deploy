@@ -41,7 +41,7 @@
       </el-select>
       <el-button @click="loadApps">刷新应用列表</el-button>
       <el-button type="primary" @click="openAddDialog">添加弹窗</el-button>
-      <el-button type="success" plain @click="clickParam.openDialog">事件参数库</el-button>
+      <el-button type="success" plain @click="clickParam.openDialog">全局事件参数库</el-button>
     </div>
 
     <!-- 弹窗列表表格 -->
@@ -194,13 +194,13 @@
       </el-select>
     </el-form-item>
 
-    <el-form-item v-if="hasClickParam(buttonForm.click)" label="参数资源">
+    <el-form-item v-if="hasClickParam(buttonForm.click)" label="全局参数资源">
       <div style="width: 100%">
         <el-select
           v-model="buttonForm.clickParamAssetId"
           filterable
           clearable
-          placeholder="选择对应事件参数资源"
+          placeholder="选择全局事件参数资源"
           style="width: 100%"
           @visible-change="visible => clickParam.onSelectVisible(visible, buttonForm.click)"
           @change="applyButtonClickParamAsset">
@@ -245,7 +245,7 @@
 </el-dialog>
 
 
-    <el-dialog v-model="clickParam.dialogVisible" title="事件参数库" width="900px">
+    <el-dialog v-model="clickParam.dialogVisible" title="全局事件参数库" width="900px">
       <div style="display:flex; gap:10px; margin-bottom:12px; align-items:center; flex-wrap:wrap">
         <el-select v-model="clickParamFilterAction" placeholder="事件分类" clearable style="width: 180px" @change="value => clickParam.load(value, 1)">
           <el-option v-for="item in clickActionOptions" :key="item.value" :label="item.label" :value="item.value"></el-option>
@@ -594,7 +594,7 @@ async function submitAddButton() {
 	    payload.clickText = '';
 	    payload.clickParamAssetId = 0;
 	  } else if (!String(buttonForm.clickText || '').trim()) {
-	    ElementPlus.ElMessage.warning('请填写事件参数或选择参数资源');
+	    ElementPlus.ElMessage.warning('请填写事件参数或选择全局参数资源');
 	    return;
 	  }
 
