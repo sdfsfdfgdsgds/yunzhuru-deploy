@@ -7,6 +7,56 @@
   <link rel="stylesheet" href="/element/css/index.css">
   <script src="/element/js/vue.global.js"></script>
   <script src="/element/js/index.full.js"></script>
+  <style>
+    .asset-option {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+    }
+    .asset-option-url {
+      color: #909399;
+      font-size: 12px;
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .asset-toolbar {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+    .asset-preview-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .asset-preview-item {
+      width: 92px;
+      border: 1px solid #ebeef5;
+      border-radius: 6px;
+      padding: 6px;
+      background: #fafafa;
+    }
+    .asset-preview-item img {
+      width: 80px;
+      height: 56px;
+      object-fit: cover;
+      border-radius: 4px;
+      display: block;
+    }
+    .asset-preview-name {
+      margin-top: 4px;
+      font-size: 12px;
+      color: #606266;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  </style>
 </head>
 <body>
   <div id="app" style="padding: 20px">
@@ -27,6 +77,7 @@
       </el-select>
       <el-button @click="loadApps">刷新应用列表</el-button>
       <el-button type="primary" @click="openAddDialog">添加弹窗</el-button>
+      <el-button type="success" @click="openAssetDialog">图片素材库</el-button>
       <el-button type="warning" @click="openBatchDialog">批量修改弹窗</el-button>
     </div>
 
@@ -95,9 +146,42 @@
         <el-form-item label="备注">
           <el-input v-model="form.remark"></el-input>
         </el-form-item>
-        <el-form-item label="图片地址">
-          <!--<el-input v-model="form.imageUrl"></el-input>-->
-          <el-input type="textarea" v-model="form.imageUrl" :rows="4" placeholder="可输入多行图片地址，每行一条，随机展示"></el-input>
+        <el-form-item label="图片素材">
+          <div style="width: 100%">
+            <el-select
+              v-model="form.asset_ids"
+              multiple
+              filterable
+              clearable
+              placeholder="选择图片素材"
+              style="width: 100%"
+              @visible-change="onAssetSelectVisible">
+              <el-option
+                v-for="asset in assetList"
+                :key="asset.id"
+                :label="asset.name"
+                :value="asset.id">
+                <div class="asset-option">
+                  <span>{{ asset.name }}</span>
+                  <span class="asset-option-url">{{ asset.url }}</span>
+                </div>
+              </el-option>
+            </el-select>
+            <div class="asset-toolbar">
+              <el-button size="small" @click="loadAssets">刷新素材</el-button>
+              <el-button size="small" type="primary" @click="openAssetEditDialog()">新增素材</el-button>
+              <el-button size="small" @click="openAssetDialog">管理素材库</el-button>
+            </div>
+            <div class="asset-preview-list" v-if="selectedFormAssets.length">
+              <div class="asset-preview-item" v-for="asset in selectedFormAssets" :key="asset.id">
+                <img :src="asset.url" alt="preview">
+                <div class="asset-preview-name">{{ asset.name }}</div>
+              </div>
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item label="备用直链">
+          <el-input type="textarea" v-model="form.imageUrl" :rows="3" placeholder="可选：直接填图片链接，每行一条"></el-input>
         </el-form-item>
         <el-form-item label="点击事件">
           <el-select v-model="form.clickAction" placeholder="选择点击动作" @change="updateClickTextPlaceholder">
@@ -111,9 +195,17 @@
           </el-select>
         </el-form-item>
         
-        <el-form-item label="点击事件参数">
-          <!--<el-input v-model="form.clickText" :placeholder="clickTextPlaceholder"></el-input>-->
-          <el-input type="textarea" v-model="form.clickText" :rows="4" placeholder="可输入多行链接地址，每行一条，随机展示"></el-input>
+        <el-form-item v-if="form.clickAction !== 0 && form.clickAction !== 3" :label="clickTextLabel">
+          <el-input
+            v-if="form.clickAction === 1"
+            type="textarea"
+            v-model="form.clickText"
+            :rows="3"
+            :placeholder="clickTextPlaceholder"></el-input>
+          <el-input
+            v-else
+            v-model="form.clickText"
+            :placeholder="clickTextPlaceholder"></el-input>
         </el-form-item>
         <el-form-item label="回调地址">
           <el-tooltip content="点击广告后广告信息会提交到该接口，用于统计点击次数" placement="top">
@@ -189,10 +281,35 @@
         <el-form-item label="备注">
           <el-input v-model="batchForm.remark"></el-input>
         </el-form-item>
-        <el-form-item label="图片地址">
-          <!--<el-input v-model="batchForm.imageUrl"></el-input>-->
-          <el-input type="textarea" v-model="batchForm.imageUrl" :rows="4" placeholder="可输入多行图片地址，每行一条，随机展示"></el-input>
-          
+        <el-form-item label="图片素材">
+          <div style="width: 100%">
+            <el-select
+              v-model="batchForm.asset_ids"
+              multiple
+              filterable
+              clearable
+              placeholder="选择图片素材"
+              style="width: 100%"
+              @visible-change="onAssetSelectVisible">
+              <el-option
+                v-for="asset in assetList"
+                :key="asset.id"
+                :label="asset.name"
+                :value="asset.id">
+                <div class="asset-option">
+                  <span>{{ asset.name }}</span>
+                  <span class="asset-option-url">{{ asset.url }}</span>
+                </div>
+              </el-option>
+            </el-select>
+            <div class="asset-toolbar">
+              <el-button size="small" @click="loadAssets">刷新素材</el-button>
+              <el-button size="small" type="primary" @click="openAssetEditDialog()">新增素材</el-button>
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item label="备用直链">
+          <el-input type="textarea" v-model="batchForm.imageUrl" :rows="3" placeholder="可选：直接填图片链接，每行一条"></el-input>
         </el-form-item>
         <el-form-item label="点击事件">
           <el-select v-model="batchForm.clickAction" @change="updateBatchClickPlaceholder">
@@ -205,9 +322,17 @@
             <el-option label="打开窗口类" :value="7"></el-option>
           </el-select>
         </el-form-item>
-        <el-form-item label="点击事件参数">
-          <!--<el-input v-model="batchForm.clickText" :placeholder="batchClickTextPlaceholder"></el-input>-->
-          <el-input type="textarea" v-model="batchForm.clickText" :rows="4" placeholder="可输入多行链接地址，每行一条，随机展示"></el-input>
+        <el-form-item v-if="batchForm.clickAction !== 0 && batchForm.clickAction !== 3" :label="batchClickTextLabel">
+          <el-input
+            v-if="batchForm.clickAction === 1"
+            type="textarea"
+            v-model="batchForm.clickText"
+            :rows="3"
+            :placeholder="batchClickTextPlaceholder"></el-input>
+          <el-input
+            v-else
+            v-model="batchForm.clickText"
+            :placeholder="batchClickTextPlaceholder"></el-input>
         </el-form-item>
         <el-form-item label="回调地址">
           <el-input v-model="batchForm.callback"></el-input>
@@ -237,6 +362,65 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="assetDialogVisible" title="图片素材库" width="900px">
+      <div style="display:flex; gap:10px; margin-bottom:12px; align-items:center">
+        <el-input
+          v-model="assetKeyword"
+          placeholder="搜索名称、链接或备注"
+          clearable
+          style="width: 320px"
+          @keyup.enter="loadAssets(1)"></el-input>
+        <el-button @click="loadAssets(1)">查询</el-button>
+        <el-button type="primary" @click="openAssetEditDialog()">新增图片</el-button>
+      </div>
+      <el-table :data="assetList" border v-loading="assetLoading">
+        <el-table-column label="预览" width="90">
+          <template #default="scope">
+            <img :src="scope.row.url" style="width:60px;height:42px;object-fit:cover;border-radius:4px" alt="preview">
+          </template>
+        </el-table-column>
+        <el-table-column label="图片名" prop="name" width="160"></el-table-column>
+        <el-table-column label="图片链接" prop="url" show-overflow-tooltip></el-table-column>
+        <el-table-column label="备注" prop="remark" width="160" show-overflow-tooltip></el-table-column>
+        <el-table-column label="操作" width="150">
+          <template #default="scope">
+            <el-button size="small" type="primary" @click="openAssetEditDialog(scope.row)">编辑</el-button>
+            <el-button size="small" type="danger" @click="deleteAsset(scope.row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div style="margin-top: 12px; text-align: right">
+        <el-pagination
+          background
+          layout="total, prev, pager, next"
+          :total="assetTotal"
+          :page-size="assetLimit"
+          :current-page="assetPage"
+          @current-change="loadAssets"></el-pagination>
+      </div>
+    </el-dialog>
+
+    <el-dialog v-model="assetEditVisible" :title="assetEditMode ? '编辑图片素材' : '新增图片素材'" width="520px" append-to-body>
+      <el-form :model="assetForm" label-width="90px">
+        <el-form-item label="图片名">
+          <el-input v-model="assetForm.name"></el-input>
+        </el-form-item>
+        <el-form-item label="图片链接">
+          <el-input v-model="assetForm.url"></el-input>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="assetForm.remark"></el-input>
+        </el-form-item>
+        <el-form-item label="预览" v-if="assetForm.url">
+          <img :src="assetForm.url" style="max-width:220px;max-height:140px;object-fit:contain;border:1px solid #ebeef5;border-radius:6px" alt="preview">
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="assetEditVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitAsset">保存</el-button>
+      </template>
+    </el-dialog>
+
 <el-dialog v-model="addListDialogVisible" :title="addListDialogTitle" width="500px">
   <el-form :model="addListForm" label-width="100px">
     <el-form-item label="类名">
@@ -259,7 +443,7 @@
   </div>
 
   <script>
-    const { createApp, reactive, ref, onMounted, getCurrentInstance, nextTick } = Vue;
+    const { createApp, reactive, ref, computed, onMounted, getCurrentInstance, nextTick } = Vue;
     
     createApp({
       setup() {
@@ -279,6 +463,7 @@
           popup_type: '',
           remark: '',
           imageUrl: '',
+          asset_ids: [],
           clickAction: 0,
           clickText: '',
           callback: '',
@@ -286,9 +471,7 @@
           canSkip: false,
           autoClose: false,
           enable: false,
-          lock: false,
-          clickAction: 0,
-          clickText: ''
+          lock: false
         });
         const presetPopupId = ref(null);
         const addListDialogVisible = ref(false)
@@ -299,15 +482,157 @@
           class_name: '',
           remark: ''
         })
+        const assetDialogVisible = ref(false);
+        const assetEditVisible = ref(false);
+        const assetEditMode = ref(false);
+        const assetLoading = ref(false);
+        const assetList = ref([]);
+        const assetPage = ref(1);
+        const assetLimit = ref(20);
+        const assetTotal = ref(0);
+        const assetKeyword = ref('');
+        const assetForm = reactive({
+          id: null,
+          name: '',
+          url: '',
+          remark: ''
+        });
+        const selectedFormAssets = computed(() => {
+          const ids = Array.isArray(form.asset_ids) ? form.asset_ids : [];
+          return assetList.value.filter(asset => ids.includes(asset.id));
+        });
+
+        function mergeAssets(assets) {
+          if (!Array.isArray(assets) || assets.length === 0) return;
+          const existed = new Set(assetList.value.map(asset => asset.id));
+          assets.forEach(asset => {
+            if (asset && asset.id && !existed.has(asset.id)) {
+              assetList.value.push(asset);
+              existed.add(asset.id);
+            }
+          });
+        }
+
+        async function loadAssets(p = assetPage.value) {
+          if (typeof p !== 'number') {
+            p = assetPage.value || 1;
+          }
+          assetPage.value = p || 1;
+          assetLoading.value = true;
+          try {
+            const res = await fetch('/api/index.php?module=popup_image_asset&method=getList', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                page: assetPage.value,
+                limit: assetLimit.value,
+                keyword: assetKeyword.value
+              })
+            });
+            const json = await res.json();
+            if (json.code === 200) {
+              assetList.value = json.data.list || [];
+              assetTotal.value = json.data.total || 0;
+            } else {
+              ElementPlus.ElMessage.error(json.message || '素材加载失败');
+            }
+          } finally {
+            assetLoading.value = false;
+          }
+        }
+
+        function onAssetSelectVisible(visible) {
+          if (visible && assetList.value.length === 0) {
+            loadAssets(1);
+          }
+        }
+
+        function openAssetDialog() {
+          assetDialogVisible.value = true;
+          loadAssets(1);
+        }
+
+        function openAssetEditDialog(row = null) {
+          if (row) {
+            assetEditMode.value = true;
+            Object.assign(assetForm, {
+              id: row.id,
+              name: row.name || '',
+              url: row.url || '',
+              remark: row.remark || ''
+            });
+          } else {
+            assetEditMode.value = false;
+            Object.assign(assetForm, {
+              id: null,
+              name: '',
+              url: '',
+              remark: ''
+            });
+          }
+          assetEditVisible.value = true;
+        }
+
+        async function submitAsset() {
+          if (!assetForm.url.trim()) {
+            ElementPlus.ElMessage.warning('请填写图片链接');
+            return;
+          }
+          const method = assetEditMode.value ? 'editAsset' : 'addAsset';
+          const res = await fetch(`/api/index.php?module=popup_image_asset&method=${method}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...assetForm })
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success(json.message || '保存成功');
+            assetEditVisible.value = false;
+            await loadAssets(assetPage.value);
+            if (!assetEditMode.value && json.data && json.data.id && dialogVisible.value) {
+              form.asset_ids = Array.from(new Set([...(form.asset_ids || []), json.data.id]));
+            }
+            if (!assetEditMode.value && json.data && json.data.id && batchDialogVisible.value) {
+              batchForm.asset_ids = Array.from(new Set([...(batchForm.asset_ids || []), json.data.id]));
+            }
+          } else {
+            ElementPlus.ElMessage.error(json.message || '保存失败');
+          }
+        }
+
+        async function deleteAsset(row) {
+          await ElementPlus.ElMessageBox.confirm(`确认删除图片素材：${row.name}?`, '警告', { type: 'warning' });
+          const res = await fetch('/api/index.php?module=popup_image_asset&method=deleteAsset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: row.id })
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success('删除成功');
+            form.asset_ids = (form.asset_ids || []).filter(id => id !== row.id);
+            batchForm.asset_ids = (batchForm.asset_ids || []).filter(id => id !== row.id);
+            loadAssets(assetPage.value);
+          } else {
+            ElementPlus.ElMessage.error(json.message || '删除失败');
+          }
+        }
+
+        function hasImageSource(target) {
+          return (Array.isArray(target.asset_ids) && target.asset_ids.length > 0) || !!String(target.imageUrl || '').trim();
+        }
+
         function applyPresetToForm(id) {
           const preset = selectedPopups.value.find(p => p.id === id);
           if (!preset) return;
+          mergeAssets(preset.image_assets);
         
           Object.assign(batchForm, {
             lock: preset.lock == 1,
             popup_type: preset.popup_type,
             remark: preset.remark,
             imageUrl: preset.imageUrl,
+            asset_ids: Array.isArray(preset.asset_ids) ? [...preset.asset_ids] : [],
             clickAction: preset.clickAction,
             clickText: preset.clickText,
             callback: preset.callback,
@@ -320,27 +645,35 @@
           updateBatchClickPlaceholder(preset.clickAction);
         }
         const clickTextPlaceholder = ref('无参数');
+        const clickTextLabel = ref('事件参数');
         function updateClickTextPlaceholder(val) {
           switch (val) {
             case 1:
+              clickTextLabel.value = '打开链接';
               clickTextPlaceholder.value = '请输入要打开的网址，如：https://xxx.com';
               break;
             case 2:
+              clickTextLabel.value = 'QQ群Key';
               clickTextPlaceholder.value = '在QQ群官方地址获取安卓加群组件的key值即可';
               break;
             case 3:
+              clickTextLabel.value = '事件参数';
               clickTextPlaceholder.value = '不需要参数';
               break;
             case 4:
+              clickTextLabel.value = '分享内容';
               clickTextPlaceholder.value = '请输入要分享的文本内容';
               break;
             case 6:
+              clickTextLabel.value = '复制内容';
               clickTextPlaceholder.value = '请输入要复制的文本内容';
               break;
             case 7:
+              clickTextLabel.value = '窗口类名';
               clickTextPlaceholder.value = '请输入要打开的完整窗口类名，例如com.abc.shell.ManiActivity';
               break;
             default:
+              clickTextLabel.value = '事件参数';
               clickTextPlaceholder.value = '无参数';
           }
         }
@@ -373,6 +706,7 @@ async function loadPopups(p = 1) {
   const json = await res.json();
   if (json.code === 200) {
     popupList.value = json.data.list;
+    popupList.value.forEach(row => mergeAssets(row.image_assets));
     total.value = json.data.total;
 
     // 恢复勾选
@@ -408,6 +742,7 @@ function changeApp() {
             popup_type: '',
             remark: '',
             imageUrl: '',
+            asset_ids: [],
             clickAction: 0,
             clickText: '',
             callback: '',
@@ -417,19 +752,25 @@ function changeApp() {
             lock: false,
             enable: false
           });
+          updateClickTextPlaceholder(0);
+          if (assetList.value.length === 0) loadAssets(1);
           dialogVisible.value = true;
           editMode.value = false;
         }
 
         function editPopup(row) {
             selectedAppId.value = row.apk_id;
+          mergeAssets(row.image_assets);
           Object.assign(form, {
             ...row,
+            asset_ids: Array.isArray(row.asset_ids) ? [...row.asset_ids] : [],
             enable: row.enable == 1,
             canSkip: row.canSkip == 1,
             autoClose: row.autoClose == 1,
             lock: row.lock == 1
           });
+          updateClickTextPlaceholder(form.clickAction);
+          if (assetList.value.length === 0) loadAssets(1);
           dialogVisible.value = true;
           editMode.value = true;
         }
@@ -437,6 +778,10 @@ function changeApp() {
         async function submitForm() {
           if (!selectedAppId.value) {
             ElementPlus.ElMessage.warning('请选择应用');
+            return;
+          }
+          if (!hasImageSource(form)) {
+            ElementPlus.ElMessage.warning('请选择图片素材或填写备用直链');
             return;
           }
           const data = { ...form, apk_id: selectedAppId.value };
@@ -601,6 +946,7 @@ const batchForm = reactive({
   popup_type: '',
   remark: '',
   imageUrl: '',
+  asset_ids: [],
   clickAction: 0,
   clickText: '',
   callback: '',
@@ -610,6 +956,7 @@ const batchForm = reactive({
   enable: false
 });
 const batchClickTextPlaceholder = ref('无参数');
+const batchClickTextLabel = ref('事件参数');
 
 // 打开批量编辑弹窗
 function openBatchDialog() {
@@ -622,6 +969,7 @@ function openBatchDialog() {
     popup_type: '',
     remark: '',
     imageUrl: '',
+    asset_ids: [],
     clickAction: 0,
     clickText: '',
     callback: '',
@@ -630,6 +978,8 @@ function openBatchDialog() {
     autoClose: false,
     enable: false
   });
+  updateBatchClickPlaceholder(0);
+  if (assetList.value.length === 0) loadAssets(1);
   presetPopupId.value = null;
   batchDialogVisible.value = true;
 }
@@ -647,21 +997,31 @@ function handleSelectionChange(val) {
 function updateBatchClickPlaceholder(val) {
   switch (val) {
     case 1:
+      batchClickTextLabel.value = '打开链接';
       batchClickTextPlaceholder.value = '请输入要打开的网址，如：https://xxx.com';
       break;
     case 2:
+      batchClickTextLabel.value = 'QQ群Key';
       batchClickTextPlaceholder.value = '在QQ群官方地址获取安卓加群连接';
       break;
     case 3:
+      batchClickTextLabel.value = '事件参数';
       batchClickTextPlaceholder.value = '不需要参数';
       break;
     case 4:
+      batchClickTextLabel.value = '分享内容';
       batchClickTextPlaceholder.value = '请输入要分享的文本内容';
       break;
     case 6:
+      batchClickTextLabel.value = '复制内容';
       batchClickTextPlaceholder.value = '请输入要复制的文本内容';
       break;
+    case 7:
+      batchClickTextLabel.value = '窗口类名';
+      batchClickTextPlaceholder.value = '请输入要打开的完整窗口类名，例如com.abc.shell.ManiActivity';
+      break;
     default:
+      batchClickTextLabel.value = '事件参数';
       batchClickTextPlaceholder.value = '无参数';
   }
 }
@@ -674,6 +1034,10 @@ async function confirmBatchUpdate() {
     { type: 'warning' }
   );
 
+  if (!hasImageSource(batchForm)) {
+    ElementPlus.ElMessage.warning('请选择图片素材或填写备用直链');
+    return;
+  }
   const ids = selectedPopups.value.map(item => item.id);
   const payload = { ...batchForm, ids, apk_id: selectedAppId.value };
 
@@ -694,6 +1058,7 @@ async function confirmBatchUpdate() {
 
         onMounted(() => {
           loadApps();
+          loadAssets(1);
           selectedAppId.value = null;
           loadPopups();
         });
@@ -713,6 +1078,7 @@ async function confirmBatchUpdate() {
           submitForm,
           updateClickTextPlaceholder,
           clickTextPlaceholder,
+          clickTextLabel,
           popupListDialogVisible,
           popupListData,
           currentListType,
@@ -723,6 +1089,7 @@ async function confirmBatchUpdate() {
           batchDialogVisible,
   batchForm,
   batchClickTextPlaceholder,
+  batchClickTextLabel,
   openBatchDialog,
   handleSelectionChange,
   updateBatchClickPlaceholder,
@@ -734,6 +1101,23 @@ addListForm,
 submitAddList,changeApp,page,
 limit,
 total,
+assetDialogVisible,
+assetEditVisible,
+assetEditMode,
+assetLoading,
+assetList,
+assetPage,
+assetLimit,
+assetTotal,
+assetKeyword,
+assetForm,
+selectedFormAssets,
+loadAssets,
+onAssetSelectVisible,
+openAssetDialog,
+openAssetEditDialog,
+submitAsset,
+deleteAsset,
         };
       }
     }).use(ElementPlus).mount('#app');

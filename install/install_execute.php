@@ -924,6 +924,51 @@ function installDatabase(PDO $pdo)
             'click_count'  => "INT NOT NULL DEFAULT 0 COMMENT '点击次数'"
         ]);
         addForeignKeyIfNotExist($pdo, $imagePopupTable, 'config_id', $configTable, 'id');
+        addIndexIfNotExist($pdo, $imagePopupTable, 'idx_config_type_enable', '`config_id`, `popup_type`, `enable`');
+
+        // --------------------
+        // 20.1 图片弹窗素材库
+        // --------------------
+        $imageAssetTable = $tablePrefix . 'popup_image_asset';
+
+        $pdo->exec("CREATE TABLE IF NOT EXISTS `$imageAssetTable` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键'
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+        addFieldsIfNotExist($pdo, $imageAssetTable, [
+            'user_id'    => "INT NOT NULL COMMENT '所属用户ID'",
+            'name'       => "VARCHAR(100) NOT NULL DEFAULT '' COMMENT '图片名称'",
+            'url'        => "TEXT NOT NULL COMMENT '图片链接'",
+            'remark'     => "VARCHAR(255) NOT NULL DEFAULT '' COMMENT '备注'",
+            'created_at' => "DATETIME NOT NULL COMMENT '创建时间'",
+            'updated_at' => "DATETIME NOT NULL COMMENT '更新时间'"
+        ]);
+        addForeignKeyIfNotExist($pdo, $imageAssetTable, 'user_id', $userTable, 'id');
+        addIndexIfNotExist($pdo, $imageAssetTable, 'idx_user_created', '`user_id`, `created_at`');
+
+        // --------------------
+        // 20.2 图片弹窗与素材关联表
+        // --------------------
+        $imageAssetRefTable = $tablePrefix . 'popup_image_asset_ref';
+
+        $pdo->exec("CREATE TABLE IF NOT EXISTS `$imageAssetRefTable` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键'
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+        addFieldsIfNotExist($pdo, $imageAssetRefTable, [
+            'popup_id'   => "INT NOT NULL COMMENT '图片弹窗ID'",
+            'asset_id'   => "INT NOT NULL COMMENT '图片素材ID'",
+            'sort'       => "INT NOT NULL DEFAULT 0 COMMENT '排序值'",
+            'weight'     => "INT NOT NULL DEFAULT 1 COMMENT '随机权重'",
+            'created_at' => "DATETIME NOT NULL COMMENT '创建时间'"
+        ]);
+        addForeignKeyIfNotExist($pdo, $imageAssetRefTable, 'popup_id', $imagePopupTable, 'id');
+        addForeignKeyIfNotExist($pdo, $imageAssetRefTable, 'asset_id', $imageAssetTable, 'id');
+        addIndexIfNotExist($pdo, $imageAssetRefTable, 'idx_popup_sort', '`popup_id`, `sort`, `id`');
+        addIndexIfNotExist($pdo, $imageAssetRefTable, 'idx_asset_id', '`asset_id`');
+        if (!indexExists($pdo, $imageAssetRefTable, 'uniq_popup_asset')) {
+            $pdo->exec("ALTER TABLE `$imageAssetRefTable` ADD UNIQUE KEY `uniq_popup_asset` (`popup_id`, `asset_id`)");
+        }
         
         // --------------------
         // 21. 图片弹窗白名单表

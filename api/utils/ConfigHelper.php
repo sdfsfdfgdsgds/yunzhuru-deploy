@@ -4,6 +4,8 @@
  * 从 shell.php 提取，供 shell.php 和 BucketPush.php 共用
  */
 
+require_once __DIR__ . '/PopupImageAssetHelper.php';
+
 if (!function_exists('fetchCol')) {
     // 通用函数：返回单列结果
     function fetchCol($sql, $params) {
@@ -90,11 +92,41 @@ if (!function_exists('getImagePopups')) {
         $stmt = $pdo->prepare("SELECT * FROM cainiao_popup_image WHERE config_id = :id AND enable = 1 AND popup_type = :type");
         $stmt->execute([':id' => $configId, ':type' => $type]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        if (empty($rows)) {
+            return [];
+        }
+
+        $popupIds = array_map('intval', array_column($rows, 'id'));
+        $assetMap = popupImageAssetFetchByPopupIds($pdo, $popupIds);
+        $whiteMap = [];
+        $blackMap = [];
+
+        if (!empty($popupIds)) {
+            $placeholders = implode(',', array_fill(0, count($popupIds), '?'));
+
+            $whiteStmt = $pdo->prepare("SELECT popup_id, class_name FROM cainiao_popup_image_whitelist WHERE popup_id IN ($placeholders)");
+            $whiteStmt->execute($popupIds);
+            foreach ($whiteStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $whiteMap[(int)$row['popup_id']][] = $row['class_name'];
+            }
+
+            $blackStmt = $pdo->prepare("SELECT popup_id, class_name FROM cainiao_popup_fullscreen_blacklist WHERE popup_id IN ($placeholders)");
+            $blackStmt->execute($popupIds);
+            foreach ($blackStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $blackMap[(int)$row['popup_id']][] = $row['class_name'];
+            }
+        }
+
         $result = [];
         foreach ($rows as $popup) {
-            $urls = preg_split('/\r\n|\r|\n/', trim($popup['imageUrl']));
-            $urls = array_filter($urls);
-            $imageUrl = !empty($urls) ? $urls[array_rand($urls)] : '';
+            $id = (int)$popup['id'];
+            $assets = $assetMap[$id] ?? [];
+            $imageUrl = popupImageAssetPickUrl($assets);
+            if ($imageUrl === '') {
+                $urls = preg_split('/\r\n|\r|\n/', trim($popup['imageUrl']));
+                $urls = array_filter($urls);
+                $imageUrl = !empty($urls) ? $urls[array_rand($urls)] : '';
+            }
 
             $clickText = $popup['clickText'];
             if ((int)$popup['clickAction'] == 1) {
@@ -107,14 +139,11 @@ if (!function_exists('getImagePopups')) {
                 }
             }
 
-            $id = $popup['id'];
-            $white = fetchCol("SELECT class_name FROM cainiao_popup_image_whitelist WHERE popup_id = :id", [':id' => $id]);
-            $black = fetchCol("SELECT class_name FROM cainiao_popup_fullscreen_blacklist WHERE popup_id = :id", [':id' => $id]);
-
             $result[] = [
                 "id" => $id,
                 "enable" => true,
                 "imageUrl" => $imageUrl,
+                "imageAssets" => $assets,
                 "clickAction" => (int)$popup['clickAction'],
                 "clickText" => $clickText,
                 "callback" => $popup['callback'],
@@ -122,8 +151,8 @@ if (!function_exists('getImagePopups')) {
                 "canSkip" => (bool)$popup['canSkip'],
                 "autoClose" => (bool)$popup['autoClose'],
                 "lock" => (bool)$popup['lock'],
-                "white_list" => $white,
-                "black_list" => $black
+                "white_list" => $whiteMap[$id] ?? [],
+                "black_list" => $blackMap[$id] ?? []
             ];
         }
         return $result;

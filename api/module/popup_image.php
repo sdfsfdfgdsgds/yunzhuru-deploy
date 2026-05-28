@@ -65,6 +65,7 @@ function getList2(PDO $pdo, array $input)
 
 function getList(PDO $pdo, array $input)
 {
+    popupImageAssetEnsureTables($pdo);
     // 获取当前登录用户
     $user = Auth::check($pdo);
     $userId = (int)$user['id'];
@@ -161,6 +162,7 @@ function getList(PDO $pdo, array $input)
     $list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // 添加 apk_info 和 apk_id 字段
+    $assetMap = popupImageAssetFetchByPopupIds($pdo, array_column($list, 'id'));
     foreach ($list as &$item) {
         $cid = $item['config_id'];
         if (isset($configApkMap[$cid])) {
@@ -170,6 +172,9 @@ function getList(PDO $pdo, array $input)
             $item['apk_info'] = '';
             $item['apk_id'] = 0;
         }
+        $popupAssets = $assetMap[(int)$item['id']] ?? [];
+        $item['image_assets'] = $popupAssets;
+        $item['asset_ids'] = array_map(fn($asset) => (int)$asset['id'], $popupAssets);
     }
 
     return [
@@ -184,21 +189,26 @@ function getList(PDO $pdo, array $input)
 // 添加图片弹窗
 function addPopup(PDO $pdo, array $input)
 {
+    popupImageAssetEnsureTables($pdo);
     // 获取当前用户信息
     $user = Auth::check($pdo);
     $userId = (int)$user['id'];
     $isAdmin = $user['role'] === 'admin';
     // 检查必要参数
-    $required = ['apk_id', 'popup_type', 'remark', 'imageUrl'];
+    $required = ['apk_id', 'popup_type', 'remark'];
     foreach ($required as $field) {
         if (empty($input[$field])) {
             throw new Exception("缺少参数：$field");
         }
     }
-    
-    // 注释：必须以 http:// 或 https:// 开头
-    if (!preg_match('/^https?:\/\//i', $input['imageUrl'])) {
-        throw new Exception("图片链接不正确");
+
+    $assetIds = popupImageAssetNormalizeIdList($input['asset_ids'] ?? []);
+    $imageUrl = popupImageAssetNormalizeMultilineUrls((string)($input['imageUrl'] ?? ''));
+    if ($imageUrl === '' && !empty($assetIds)) {
+        $imageUrl = popupImageAssetFirstUrlByIds($pdo, $assetIds, $userId, $isAdmin);
+    }
+    if ($imageUrl === '') {
+        throw new Exception("请至少选择一张图片素材或填写图片链接");
     }
 
     // 根据 apk_id 和当前用户ID 获取配置ID
@@ -207,29 +217,46 @@ function addPopup(PDO $pdo, array $input)
         throw new Exception("配置不存在");
     }
 
-    // 插入记录
-    $stmt = $pdo->prepare("INSERT INTO cainiao_popup_image (
-        config_id, popup_type, remark, enable, imageUrl,
-        clickAction, clickText, callback, countdown, canSkip, autoClose, created_at, `lock`
-    ) VALUES (
-        :config_id, :popup_type, :remark, :enable, :imageUrl,
-        :clickAction, :clickText, :callback, :countdown, :canSkip, :autoClose, NOW(), :lock
-    )");
+    $startedTransaction = !$pdo->inTransaction();
+    if ($startedTransaction) {
+        $pdo->beginTransaction();
+    }
+    try {
+        // 插入记录
+        $stmt = $pdo->prepare("INSERT INTO cainiao_popup_image (
+            config_id, popup_type, remark, enable, imageUrl,
+            clickAction, clickText, callback, countdown, canSkip, autoClose, created_at, `lock`
+        ) VALUES (
+            :config_id, :popup_type, :remark, :enable, :imageUrl,
+            :clickAction, :clickText, :callback, :countdown, :canSkip, :autoClose, NOW(), :lock
+        )");
 
-    $stmt->execute([
-        ':config_id'   => $configId,
-        ':popup_type'  => $input['popup_type'],
-        ':remark'      => $input['remark'],
-        ':enable'      => !empty($input['enable']) ? 1 : 0,
-        ':imageUrl'    => $input['imageUrl'],
-        ':clickAction' => intval($input['clickAction'] ?? 0),
-        ':clickText'   => $input['clickText'] ?? '',
-        ':callback'    => $input['callback'] ?? '',
-        ':countdown'   => intval($input['countdown'] ?? 3),
-        ':canSkip'     => !empty($input['canSkip']) ? 1 : 0,
-        ':autoClose'   => !empty($input['autoClose']) ? 1 : 0,
-        ':lock'   => !empty($input['lock']) ? 1 : 0,
-    ]);
+        $stmt->execute([
+            ':config_id'   => $configId,
+            ':popup_type'  => $input['popup_type'],
+            ':remark'      => $input['remark'],
+            ':enable'      => !empty($input['enable']) ? 1 : 0,
+            ':imageUrl'    => $imageUrl,
+            ':clickAction' => intval($input['clickAction'] ?? 0),
+            ':clickText'   => $input['clickText'] ?? '',
+            ':callback'    => $input['callback'] ?? '',
+            ':countdown'   => intval($input['countdown'] ?? 3),
+            ':canSkip'     => !empty($input['canSkip']) ? 1 : 0,
+            ':autoClose'   => !empty($input['autoClose']) ? 1 : 0,
+            ':lock'        => !empty($input['lock']) ? 1 : 0,
+        ]);
+
+        $popupId = (int)$pdo->lastInsertId();
+        popupImageAssetSyncRefs($pdo, $popupId, $assetIds, $userId, $isAdmin);
+        if ($startedTransaction) {
+            $pdo->commit();
+        }
+    } catch (Throwable $e) {
+        if ($startedTransaction && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
 
     Auth::afterConfigChange($pdo, (int)$input['apk_id']);
     return ['message' => '创建成功'];
@@ -239,6 +266,7 @@ function addPopup(PDO $pdo, array $input)
 // 编辑弹窗
 function editPopup(PDO $pdo, array $input)
 {
+    popupImageAssetEnsureTables($pdo);
     // 获取当前登录用户
     $user = Auth::check($pdo);
     $userId = (int)$user['id'];
@@ -246,6 +274,24 @@ function editPopup(PDO $pdo, array $input)
 
     if (empty($input['id'])) {
         throw new Exception('缺少弹窗ID');
+    }
+
+    $hasAssetIds = array_key_exists('asset_ids', $input);
+    $assetIds = popupImageAssetNormalizeIdList($input['asset_ids'] ?? []);
+    if ($hasAssetIds) {
+        $imageUrl = popupImageAssetNormalizeMultilineUrls((string)($input['imageUrl'] ?? ''));
+        if ($imageUrl === '' && !empty($assetIds)) {
+            $imageUrl = popupImageAssetFirstUrlByIds($pdo, $assetIds, $userId, $isAdmin);
+        }
+        if ($imageUrl === '') {
+            throw new Exception('请至少选择一张图片素材或填写图片链接');
+        }
+        $input['imageUrl'] = $imageUrl;
+    } elseif (isset($input['imageUrl'])) {
+        $input['imageUrl'] = popupImageAssetNormalizeMultilineUrls((string)$input['imageUrl']);
+        if ($input['imageUrl'] === '') {
+            throw new Exception('图片链接不正确');
+        }
     }
 
     // 可更新字段
@@ -260,13 +306,6 @@ function editPopup(PDO $pdo, array $input)
     
     foreach ($fields as $field) {
         if (isset($input[$field])) {
-            // 注释：必须以 http:// 或 https:// 开头
-            if ($field === 'imageUrl') {
-                if (!preg_match('/^https?:\/\//i', $input[$field])) {
-                    throw new Exception("图片链接不正确");
-                }
-            }
-            
             // 对布尔值字段做转换
             if (in_array($field, ['enable', 'canSkip', 'autoClose', 'lock'])) {
                 $params[":$field"] = !empty($input[$field]) ? 1 : 0;
@@ -303,10 +342,27 @@ function editPopup(PDO $pdo, array $input)
         }
     }
 
-    // 执行更新
-    $sql = "UPDATE cainiao_popup_image SET " . implode(',', $updates) . " WHERE id = :id";
-    $stmt = $pdo->prepare($sql);
-    $stmt->execute($params);
+    $startedTransaction = !$pdo->inTransaction();
+    if ($startedTransaction) {
+        $pdo->beginTransaction();
+    }
+    try {
+        // 执行更新
+        $sql = "UPDATE cainiao_popup_image SET " . implode(',', $updates) . " WHERE id = :id";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        if ($hasAssetIds) {
+            popupImageAssetSyncRefs($pdo, (int)$input['id'], $assetIds, $userId, $isAdmin);
+        }
+        if ($startedTransaction) {
+            $pdo->commit();
+        }
+    } catch (Throwable $e) {
+        if ($startedTransaction && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
 
     // 推送配置到桶
     $cfgStmt = $pdo->prepare("SELECT config_id FROM cainiao_popup_image WHERE id = :id LIMIT 1");
@@ -325,9 +381,11 @@ function editPopup(PDO $pdo, array $input)
 //批量改弹窗
 function batchUpdate(PDO $pdo, array $input)
 {
+    popupImageAssetEnsureTables($pdo);
     // 获取当前登录用户
     $user = Auth::check($pdo);
     $userId = (int)$user['id'];
+    $isAdmin = ($user['role'] ?? '') === 'admin';
 
     if (empty($input['ids']) || !is_array($input['ids'])) {
         throw new Exception('缺少弹窗ID列表');
@@ -342,8 +400,26 @@ function batchUpdate(PDO $pdo, array $input)
     $fields = [
         'popup_type', 'remark', 'enable', 'imageUrl',
         'clickAction', 'clickText', 'callback',
-        'countdown', 'canSkip', 'autoClose'
+        'countdown', 'canSkip', 'autoClose', 'lock'
     ];
+
+    $hasAssetIds = array_key_exists('asset_ids', $input);
+    $assetIds = popupImageAssetNormalizeIdList($input['asset_ids'] ?? []);
+    if ($hasAssetIds) {
+        $imageUrl = popupImageAssetNormalizeMultilineUrls((string)($input['imageUrl'] ?? ''));
+        if ($imageUrl === '' && !empty($assetIds)) {
+            $imageUrl = popupImageAssetFirstUrlByIds($pdo, $assetIds, $userId, $isAdmin);
+        }
+        if ($imageUrl === '') {
+            throw new Exception('请至少选择一张图片素材或填写图片链接');
+        }
+        $input['imageUrl'] = $imageUrl;
+    } elseif (isset($input['imageUrl'])) {
+        $input['imageUrl'] = popupImageAssetNormalizeMultilineUrls((string)$input['imageUrl']);
+        if ($input['imageUrl'] === '') {
+            throw new Exception('图片链接不正确');
+        }
+    }
 
     $updates = [];
     $params = [];
@@ -351,7 +427,7 @@ function batchUpdate(PDO $pdo, array $input)
     foreach ($fields as $field) {
         if (isset($input[$field])) {
             // 对布尔字段处理
-            if (in_array($field, ['enable', 'canSkip', 'autoClose'])) {
+            if (in_array($field, ['enable', 'canSkip', 'autoClose', 'lock'])) {
                 $params[":$field"] = !empty($input[$field]) ? 1 : 0;
             } else {
                 $params[":$field"] = $input[$field];
@@ -364,31 +440,54 @@ function batchUpdate(PDO $pdo, array $input)
         throw new Exception('没有可更新字段');
     }
 
-    // 权限校验：只允许更新当前用户所属的弹窗记录
+    // 权限校验：管理员可批量更新全部，普通用户只允许更新自己的弹窗。
     $inPlaceholders = implode(',', array_fill(0, count($idList), '?'));
-    $checkSql = "
-        SELECT i.id
-        FROM cainiao_popup_image i
-        JOIN cainiao_apk_config c ON i.config_id = c.id
-        JOIN cainiao_apk a ON c.apk_id = a.id
-        WHERE i.id IN ($inPlaceholders) AND a.user_id = ?
-    ";
-    $checkStmt = $pdo->prepare($checkSql);
-    $checkStmt->execute([...$idList, $userId]);
+    if ($isAdmin) {
+        $checkSql = "SELECT id FROM cainiao_popup_image WHERE id IN ($inPlaceholders)";
+        $checkStmt = $pdo->prepare($checkSql);
+        $checkStmt->execute($idList);
+    } else {
+        $checkSql = "
+            SELECT i.id
+            FROM cainiao_popup_image i
+            JOIN cainiao_apk_config c ON i.config_id = c.id
+            JOIN cainiao_apk a ON c.apk_id = a.id
+            WHERE i.id IN ($inPlaceholders) AND a.user_id = ?
+        ";
+        $checkStmt = $pdo->prepare($checkSql);
+        $checkStmt->execute([...$idList, $userId]);
+    }
     $rows = $checkStmt->fetchAll(PDO::FETCH_COLUMN);
 
     if (empty($rows)) {
         throw new Exception('没有权限更新这些弹窗');
     }
 
-    // 构建更新语句
-    $updateSql = "UPDATE cainiao_popup_image SET " . implode(',', $updates) . " WHERE id = :id";
-    $stmt = $pdo->prepare($updateSql);
+    $startedTransaction = !$pdo->inTransaction();
+    if ($startedTransaction) {
+        $pdo->beginTransaction();
+    }
+    try {
+        // 构建更新语句
+        $updateSql = "UPDATE cainiao_popup_image SET " . implode(',', $updates) . " WHERE id = :id";
+        $stmt = $pdo->prepare($updateSql);
 
-    // 依次更新每条数据
-    foreach ($rows as $popupId) {
-        $params[':id'] = $popupId;
-        $stmt->execute($params);
+        // 依次更新每条数据
+        foreach ($rows as $popupId) {
+            $params[':id'] = $popupId;
+            $stmt->execute($params);
+            if ($hasAssetIds) {
+                popupImageAssetSyncRefs($pdo, (int)$popupId, $assetIds, $userId, $isAdmin);
+            }
+        }
+        if ($startedTransaction) {
+            $pdo->commit();
+        }
+    } catch (Throwable $e) {
+        if ($startedTransaction && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
     }
 
     // 推送受影响的应用配置到桶
@@ -433,6 +532,9 @@ function deletePopup(PDO $pdo, array $input)
     }
 
     // 删除相关记录
+    if (popupImageAssetTablesReady($pdo)) {
+        $pdo->prepare("DELETE FROM cainiao_popup_image_asset_ref WHERE popup_id = ?")->execute([$input['id']]);
+    }
     $pdo->prepare("DELETE FROM cainiao_popup_image_whitelist WHERE popup_id = ?")->execute([$input['id']]);
     $pdo->prepare("DELETE FROM cainiao_popup_fullscreen_blacklist WHERE popup_id = ?")->execute([$input['id']]);
     $pdo->prepare("DELETE FROM cainiao_popup_image WHERE id = ?")->execute([$input['id']]);
@@ -745,7 +847,5 @@ function getConfigIdByApk($pdo, $userId, $apkId, $isAdmin = false)
 
     return $stmt->fetchColumn();
 }
-
-
 
 
