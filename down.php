@@ -519,7 +519,8 @@ function shouldBlockRailwayDirectReleaseDownload(string $downType, int $fileSize
         return false;
     }
 
-    $maxBytes = (int)(getenv('DIRECT_RELEASE_MAX_BYTES') ?: (8 * 1024 * 1024));
+    // 80MB 以下的小中型 APK 继续允许 Railway 直连；更大的产物必须走 OSS/下载服，避免残缺完成。
+    $maxBytes = (int)(getenv('DIRECT_RELEASE_MAX_BYTES') ?: (80 * 1024 * 1024));
     return $fileSize > max(1024 * 1024, $maxBytes);
 }
 
