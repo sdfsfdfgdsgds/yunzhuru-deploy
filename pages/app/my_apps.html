@@ -286,7 +286,7 @@
       <template #footer>
         <span class="dialog-footer">
           <el-button @click="editDialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="saveEdit">保存</el-button>
+          <el-button type="primary" :loading="editSaving" @click="saveEdit">保存</el-button>
         </span>
       </template>
     </el-dialog>
@@ -1065,6 +1065,7 @@ function handleDelete(row) {
         
         
         const editDialogVisible = ref(false);
+        const editSaving = ref(false);
         const editForm = reactive({
           id: null,
           name: '',
@@ -1249,12 +1250,15 @@ function selectFile() {
 
         
 async function saveEdit() {
+  if (editSaving.value) return;
+
   // 校验：如果选择了复用配置方式但未选择复用的应用ID
   if (editForm.config_mode === 1 && !editForm.reuse_apk_id) {
       ElementPlus.ElMessage.warning('请选择要复用的应用');
       return;
     }
 
+  editSaving.value = true;
   try {
     const res = await fetch('/api/index.php?module=app&method=updateAppInfo', {
       method: 'POST',
@@ -1271,6 +1275,8 @@ async function saveEdit() {
     }
   } catch (err) {
     ElementPlus.ElMessage.error('请求失败');
+  } finally {
+    editSaving.value = false;
   }
 }
 
@@ -1403,6 +1409,7 @@ onMounted(() => {
           selectFile,
           handleFileChange,
           editDialogVisible,
+          editSaving,
           editForm,
           saveEdit,
           injectApp,

@@ -2578,22 +2578,11 @@ function updateAppInfo(PDO $pdo, array $input)
     $update = $pdo->prepare($sql);
     $update->execute($params);
 
-    // 清除该应用的Redis缓存，使修改立即生效
+    // 配置变更后的缓存清理和存储桶推送走统一异步流程，避免保存按钮被外部桶网络阻塞。
     try {
-        $redisDb0 = getRedisConnection(0); // 配置响应缓存
-        $redisDb2 = getRedisConnection(2); // APK信息缓存
-        $redisDb0->del((string)$appId);
-        $redisDb2->del((string)$appId);
+        Auth::afterConfigChange($pdo, $appId);
     } catch (\Throwable $e) {
-        // Redis清除失败不影响保存结果
-    }
-
-    // 推送配置到 S3/R2/B2 存储桶（最佳努力，失败不影响保存）
-    try {
-        require_once __DIR__ . '/../utils/BucketPush.php';
-        pushConfigWithDependents($pdo, $appId);
-    } catch (\Throwable $e) {
-        error_log("[BucketPush] 推送失败 appId={$appId}: " . $e->getMessage());
+        error_log("[updateAppInfo] 配置变更后处理失败 appId={$appId}: " . $e->getMessage());
     }
 
     return ['message' => '修改成功'];
