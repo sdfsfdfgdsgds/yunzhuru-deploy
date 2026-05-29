@@ -22,6 +22,20 @@ function getBuckets(PDO $pdo, array $input) {
     return $rows;
 }
 
+// 获取单个存储桶详情（编辑弹窗需要回显完整 secret_key）
+function getBucket(PDO $pdo, array $input) {
+    $user = Auth::check($pdo);
+    if ($user['role'] !== 'admin') throw new Exception('无权限');
+    if (empty($input['id'])) throw new Exception('缺少ID');
+
+    $stmt = $pdo->prepare("SELECT * FROM cainiao_s3_bucket WHERE id = :id LIMIT 1");
+    $stmt->execute([':id' => (int)$input['id']]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row) throw new Exception('存储桶不存在');
+
+    return $row;
+}
+
 // 添加存储桶
 function addBucket(PDO $pdo, array $input) {
     $user = Auth::check($pdo);

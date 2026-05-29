@@ -77,8 +77,7 @@
         <el-input v-model="form.access_key"></el-input>
       </el-form-item>
       <el-form-item label="Secret Key" required>
-        <el-input v-model="form.secret_key" type="password" show-password
-          :placeholder="isEdit ? '不修改请留空' : ''"></el-input>
+        <el-input v-model="form.secret_key" type="password" show-password></el-input>
       </el-form-item>
       <el-form-item label="Endpoint" required>
         <el-input v-model="form.endpoint" placeholder="https://xxx.r2.cloudflarestorage.com"></el-input>
@@ -153,20 +152,26 @@ createApp({
       dialogVisible.value = true;
     }
 
-    function showEditDialog(row) {
+    async function showEditDialog(row) {
       isEdit.value = true;
+      const json = await api('getBucket', { id: row.id });
+      if (json.code !== 200) {
+        ElementPlus.ElMessage.error(json.message || '加载存储桶详情失败');
+        return;
+      }
+      const detail = json.data || {};
       Object.assign(form, {
-        id: row.id,
-        name: row.name,
-        provider: row.provider,
-        access_key: row.access_key,
-        secret_key: '', // 不回显密钥
-        endpoint: row.endpoint,
-        bucket: row.bucket,
-        region: row.region,
-        domain: row.domain,
-        enabled: parseInt(row.enabled),
-        inject: parseInt(row.inject),
+        id: detail.id,
+        name: detail.name,
+        provider: detail.provider,
+        access_key: detail.access_key,
+        secret_key: detail.secret_key || '',
+        endpoint: detail.endpoint,
+        bucket: detail.bucket,
+        region: detail.region,
+        domain: detail.domain,
+        enabled: parseInt(detail.enabled),
+        inject: parseInt(detail.inject),
       });
       dialogVisible.value = true;
     }
