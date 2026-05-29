@@ -294,6 +294,7 @@ function installDatabase(PDO $pdo)
             'upload_time'    => "DATETIME NOT NULL COMMENT '上传时间'",
             'config_mode'    => "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '配置使用方式：0=独用一套配置，1=复用其他应用配置'",
             'reuse_apk_id'   => "INT DEFAULT NULL COMMENT '复用的应用ID'",
+            'is_reusable'    => "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否允许作为配置复用目标'",
             'domain_mode'    => "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '接口域名配置方式：0=壳内置，1=自定义'",
             'custom_domains' => "TEXT DEFAULT NULL COMMENT '自定义域名列表，换行分隔，需带协议前缀'",
             'reuse_options'  => "TEXT DEFAULT NULL COMMENT '复用选项，JSON数组格式存储勾选的功能项'", // 新增字段

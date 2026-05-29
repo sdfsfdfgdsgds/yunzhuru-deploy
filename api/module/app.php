@@ -131,6 +131,29 @@
     ];
 }*/
 
+// 确保旧库也具备“可作为复用目标”的应用标记字段，避免部署后列表接口直接报错。
+function ensureApkReusableColumn(PDO $pdo): void
+{
+    static $checked = false;
+    if ($checked) {
+        return;
+    }
+
+    $stmt = $pdo->query("SHOW COLUMNS FROM `cainiao_apk` LIKE 'is_reusable'");
+    if (!$stmt->fetch(PDO::FETCH_ASSOC)) {
+        try {
+            $pdo->exec("ALTER TABLE `cainiao_apk` ADD `is_reusable` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否允许作为配置复用目标' AFTER `reuse_apk_id`");
+        } catch (Throwable $e) {
+            // 并发请求可能在同一时间补字段，重复字段错误可忽略，其它错误继续抛出。
+            if (stripos($e->getMessage(), 'Duplicate column') === false && strpos($e->getMessage(), '1060') === false) {
+                throw $e;
+            }
+        }
+    }
+
+    $checked = true;
+}
+
 //获取我的应用列表
 function getMyAppList(PDO $pdo, array $input)
 {
@@ -138,6 +161,7 @@ function getMyAppList(PDO $pdo, array $input)
     $userId = $user['id'];
 
     $table = 'cainiao_apk';
+    ensureApkReusableColumn($pdo);
 
     $page = isset($input['page']) && is_numeric($input['page']) ? max(1, (int)$input['page']) : 1;
     $limit = isset($input['limit']) && is_numeric($input['limit']) ? max(1, (int)$input['limit']) : 20;
@@ -189,6 +213,12 @@ function getMyAppList(PDO $pdo, array $input)
     if (!empty($input['reuse_apk_id'])) {
         $where .= " AND a.config_mode = 1 AND a.reuse_apk_id = :reuse_apk_id";
         $params[':reuse_apk_id'] = (int)$input['reuse_apk_id'];
+    }
+
+    // 按是否允许作为复用目标筛选
+    if (isset($input['is_reusable']) && $input['is_reusable'] !== '') {
+        $where .= " AND a.is_reusable = :is_reusable";
+        $params[':is_reusable'] = (int)$input['is_reusable'];
     }
     
     // 只有管理员才能按 tag 查询
@@ -368,10 +398,12 @@ function getMyReuseAppList(PDO $pdo, array $input)
     $userId = $user['id'];
 
     $table = 'cainiao_apk';
+    ensureApkReusableColumn($pdo);
 
     $page = isset($input['page']) && is_numeric($input['page']) ? max(1, (int)$input['page']) : 1;
     $limit = isset($input['limit']) && is_numeric($input['limit']) ? max(1, (int)$input['limit']) : 20;
     $offset = ($page - 1) * $limit;
+    $currentAppId = isset($input['appid']) && is_numeric($input['appid']) ? (int)$input['appid'] : 0;
 
     //$where = "WHERE user_id = :user_id";
     //$params = [':user_id' => $userId];
@@ -403,6 +435,15 @@ function getMyReuseAppList(PDO $pdo, array $input)
         }
     }
 
+    // 复用目标只展示明确开启“允许被复用”的应用。
+    $where .= " AND a.is_reusable = 1";
+
+    // 当前应用不能复用自己，即便它也开启了可复用标记。
+    if ($currentAppId > 0) {
+        $where .= " AND a.id <> :current_app_id";
+        $params[':current_app_id'] = $currentAppId;
+    }
+
     // 按名称模糊搜索
     if (!empty($input['name'])) {
         $where .= " AND (a.name LIKE :name OR a.package LIKE :name_pkg)";
@@ -410,10 +451,15 @@ function getMyReuseAppList(PDO $pdo, array $input)
         $params[':name_pkg'] = '%' . $input['name'] . '%';
     }
 
+    $countStmt = $pdo->prepare("SELECT COUNT(*) FROM `$table` a $where");
+    $countStmt->execute($params);
+    $total = (int)$countStmt->fetchColumn();
+    $pages = (int)ceil($total / $limit);
+
     // 获取数据
     $dataStmt = $pdo->prepare("
     SELECT 
-            a.id, a.package, a.name
+            a.id, a.package, a.name, a.is_reusable
         FROM `$table` a
         LEFT JOIN `cainiao_user` u ON a.user_id = u.id
         $where
@@ -2378,6 +2424,7 @@ function updateAppInfo(PDO $pdo, array $input)
     $user = Auth::check($pdo);
     $userId = (int)$user['id'];
     $apkTable = 'cainiao_apk';
+    ensureApkReusableColumn($pdo);
 
     if (empty($input['id']) || !is_numeric($input['id'])) {
         throw new Exception('参数错误：缺少或非法的应用 ID');
@@ -2416,6 +2463,17 @@ function updateAppInfo(PDO $pdo, array $input)
         $fields[] = "app_key = :app_key";
         $params[':app_key'] = trim($input['app_key']);
     }
+
+    // 当前应用是否允许出现在“复用谁”的目标列表中。
+    if (isset($input['is_reusable'])) {
+        $isReusable = (int)$input['is_reusable'];
+        if (!in_array($isReusable, [0, 1], true)) {
+            throw new Exception('非法的复用标记');
+        }
+
+        $fields[] = "is_reusable = :is_reusable";
+        $params[':is_reusable'] = $isReusable;
+    }
     
     //APP包名和版本不可修改
     /*if (isset($input['version'])) {
@@ -2449,10 +2507,10 @@ function updateAppInfo(PDO $pdo, array $input)
                 throw new Exception('不能复用自身的配置');
             }
 
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM `$apkTable` WHERE id = :id AND user_id = :user_id");
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM `$apkTable` WHERE id = :id AND user_id = :user_id AND is_reusable = 1");
             $stmt->execute([':id' => $reuseApkId, ':user_id' => $userId]);
             if ((int)$stmt->fetchColumn() === 0) {
-                throw new Exception('要复用的应用不存在或无权限');
+                throw new Exception('要复用的应用不存在、无权限或未开启可复用标记');
             }
 
             $fields[] = "reuse_apk_id = :reuse_apk_id";
@@ -4594,4 +4652,3 @@ function createTaskFromUrl(PDO $pdo, array $input)
         'task_id' => $taskId,
     ];
 }
-

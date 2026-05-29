@@ -52,6 +52,12 @@
       <el-form-item label="包名">
         <el-input v-model="query.package" placeholder="包名"></el-input>
       </el-form-item>
+      <el-form-item label="可复用">
+        <el-select v-model="query.is_reusable" placeholder="全部" clearable style="width: 130px;">
+          <el-option label="可被复用" value="1"></el-option>
+          <el-option label="未开启" value="0"></el-option>
+        </el-select>
+      </el-form-item>
       <el-form-item>
         <el-button type="primary" @click="loadData">查询</el-button>
         <el-button @click="resetForm">重置</el-button>
@@ -98,6 +104,12 @@
       <el-table-column label="配置方式">
         <template #default="scope">
           <span>{{ scope.row.config_mode == 1 ? '复用' : '独享' }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="可复用" width="90">
+        <template #default="scope">
+          <el-tag v-if="scope.row.is_reusable == 1" type="success">是</el-tag>
+          <span v-else>-</span>
         </template>
       </el-table-column>
 
@@ -316,6 +328,7 @@ createApp({
       uid: '',
       version: '',
       package: '',
+      is_reusable: '',
       tag: '', 
       page: 1,
       limit: 20
@@ -475,6 +488,7 @@ createApp({
 
     function resetForm() {
       query.name = query.appid = query.uid = query.version = query.package = '';
+      query.is_reusable = '';
       query.tag = '';
       query.page = 1;
       loadData();

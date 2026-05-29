@@ -52,6 +52,12 @@
           <el-option label="复用中" value="1"></el-option>
         </el-select>
       </el-form-item>
+      <el-form-item label="可复用">
+        <el-select v-model="query.is_reusable" placeholder="全部" clearable style="width: 130px;">
+          <el-option label="可被复用" value="1"></el-option>
+          <el-option label="未开启" value="0"></el-option>
+        </el-select>
+      </el-form-item>
       <el-form-item label="复用谁">
         <el-select v-model="query.reuse_apk_id" placeholder="输名称或包名搜索" clearable filterable remote :remote-method="searchReuseTarget" :loading="reuseSearchLoading" style="width: 220px;">
           <el-option v-for="app in reuseSearchResults" :key="app.id" :label="`[${app.id}] ${app.name}`" :value="app.id"></el-option>
@@ -104,6 +110,12 @@
       <el-table-column label="配置方式">
         <template #default="scope">
           <span>{{ scope.row.config_mode == 1 ? '复用' : '独享' }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="可复用" width="90">
+        <template #default="scope">
+          <el-tag v-if="scope.row.is_reusable == 1" type="success">是</el-tag>
+          <span v-else>-</span>
         </template>
       </el-table-column>
     
@@ -215,6 +227,18 @@
             <el-option label="复用其他应用配置" :value="1"></el-option>
           </el-select>
         </el-form-item>
+        <el-form-item label="复用身份">
+          <el-switch
+            v-model="editForm.is_reusable"
+            :active-value="1"
+            :inactive-value="0"
+            active-text="允许被复用"
+            inactive-text="不展示">
+          </el-switch>
+          <div style="margin-top: 5px; color: #FF0000; font-size: 12px;">
+            开启后，这个应用才会出现在其它应用的“复用谁”列表里；它仍然可以正常作为独立应用使用。
+          </div>
+        </el-form-item>
         
         <el-form-item v-if="editForm.config_mode === 1" label="复用谁">
           <el-select v-model="editForm.reuse_apk_id" placeholder="请选择复用的应用">
@@ -228,6 +252,10 @@
           </el-select>
         </el-form-item>
         <el-form-item v-if="editForm.config_mode === 1" label="复用选项">
+          <div style="margin-bottom: 8px;">
+            <el-button type="primary" plain size="small" @click="selectAllReuseOptions">全选</el-button>
+            <el-button size="small" @click="clearReuseOptions">清空</el-button>
+          </div>
           <el-checkbox-group v-model="editForm.reuse_options">
             <el-checkbox label="卡密数据"></el-checkbox>
             <el-checkbox label="全屏弹窗"></el-checkbox>
@@ -576,6 +604,9 @@
           uid: '',
           version: '',
           package: '',
+          config_mode: '',
+          is_reusable: '',
+          reuse_apk_id: '',
           page: 1,
           limit: 20
         });
@@ -830,6 +861,7 @@ const permissionOptions = [
           query.version = '';
           query.package = '';
           query.config_mode = '';
+          query.is_reusable = '';
           query.reuse_apk_id = '';
           query.page = 1;
           loadData();
@@ -1039,6 +1071,7 @@ function handleDelete(row) {
           version: '',
           package: '',
           config_mode: 0,
+          is_reusable: 0,
           reuse_apk_id: null,     // 被复用的 app id
           domain_mode: 0,         // 接口域名模式：0=壳内置，1=自定义
           custom_domains: '',      // 自定义域名，一行一个
@@ -1053,6 +1086,7 @@ function editInfo(row) {
   editForm.package = row.package;
 
   editForm.config_mode = row.config_mode !== undefined ? Number(row.config_mode) : 0;
+  editForm.is_reusable = row.is_reusable !== undefined ? Number(row.is_reusable) : 0;
   editForm.reuse_apk_id = (editForm.config_mode === 1 && row.reuse_apk_id) ? row.reuse_apk_id : null;
 
   editForm.domain_mode = row.domain_mode !== undefined ? Number(row.domain_mode) : 0;
@@ -1136,6 +1170,30 @@ async function submitCreate() {
 const allApps = ref([]);
 const reuseSearchResults = ref([]);
 const reuseSearchLoading = ref(false);
+const reuseOptionLabels = [
+  '卡密数据',
+  '全屏弹窗',
+  '图片弹窗',
+  '文字弹窗',
+  '输入框弹窗',
+  'HTML弹窗',
+  'SP写入劫持',
+  'SP读取劫持',
+  'SP重写',
+  '通杀拦截',
+  'activity拦截',
+  '关键词拦截',
+  'URI劫持',
+  '包名检测'
+];
+
+function selectAllReuseOptions() {
+  editForm.reuse_options = [...reuseOptionLabels];
+}
+
+function clearReuseOptions() {
+  editForm.reuse_options = [];
+}
 
 async function searchReuseTarget(keyword) {
   if (!keyword) { reuseSearchResults.value = []; return; }
@@ -1366,6 +1424,8 @@ onMounted(() => {
           reuseSearchResults,
           reuseSearchLoading,
           searchReuseTarget,
+          selectAllReuseOptions,
+          clearReuseOptions,
           allowHttp,
           kill_Inject,
           network,
