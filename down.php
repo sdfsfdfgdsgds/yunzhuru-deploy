@@ -358,11 +358,15 @@ if($diydown && !empty($downurl)){
     exit;
 }
 
+$fileSize = filesize($filePath);
+if (tryRedirectRailwayReleaseDownloadViaBuckets($pdo, $redis, $down_type, $filename, $filePath, $downloadName, $task ?? [], $ip, $IpLocation, $debug, $debug_pass)) {
+    exit;
+}
+
 if(!empty($task['id'])){
     recordDownload($pdo, $task['id'], $ip, $IpLocation, $task['size'], $_SERVER['HTTP_USER_AGENT'], 'ecs', $filename);//记录下载
 }
 
-$fileSize = filesize($filePath);
 $start = 0;
 $end = $fileSize - 1;
 $length = $fileSize;
@@ -372,7 +376,7 @@ if (shouldBlockRailwayDirectReleaseDownload($down_type, $fileSize)) {
     http_response_code(503);
     header('Content-Type: text/plain; charset=utf-8');
     header('X-Download-Source: blocked-railway-direct');
-    exit('大文件下载通道生成失败：当前生产环境不允许通过 Railway/PHP 直连下载大 APK，请稍后重试或联系管理员检查 OSS/下载服配置。');
+    exit('APK 下载通道生成失败：当前生产环境不允许通过 Railway/PHP 直连下载 APK，且桶/下载服链接生成失败，请稍后重试或联系管理员检查桶配置。');
 }
 
 // 处理断点续传 Range 头
@@ -514,13 +518,92 @@ function getSignedUrlForLargeDownload(OSS $ossObj, string $ossPath, string $loca
     return $ossObj->getSignedUrl($ossPath, $speedLimit, $ttl);
 }
 
+function tryRedirectRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, string $downType, string $filename, string $filePath, string $downloadName, array $task, string $ip, string $ipLocation, string $debug, string $debugPass): bool {
+    if ($downType !== 'release' || !isRailwayRuntime() || !is_file($filePath)) {
+        return false;
+    }
+
+    try {
+        require_once __DIR__ . '/api/utils/S3Client.php';
+        $stmt = $pdo->query("
+            SELECT id, name, provider, access_key, secret_key, endpoint, bucket, region, domain
+            FROM cainiao_s3_bucket
+            WHERE enabled = 1
+            AND inject = 1
+            AND access_key <> ''
+            AND secret_key <> ''
+            AND endpoint <> ''
+            AND bucket <> ''
+            AND domain <> ''
+            ORDER BY
+                CASE
+                    WHEN provider = 'r2' THEN 0
+                    WHEN provider = 's3' THEN 1
+                    WHEN provider = 'b2' THEN 2
+                    ELSE 3
+                END,
+                id ASC
+        ");
+        $buckets = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        error_log('[DownloadBucket] 读取桶配置失败：' . $e->getMessage());
+        return false;
+    }
+
+    if (!$buckets) {
+        return false;
+    }
+
+    $objectKey = 'release_downloads/' . date('Ymd') . '/' . basename($filename);
+    foreach ($buckets as $bucket) {
+        try {
+            $client = new S3Client(
+                $bucket['access_key'],
+                $bucket['secret_key'],
+                $bucket['endpoint'],
+                $bucket['bucket'],
+                $bucket['region'] ?: 'auto'
+            );
+            $result = $client->putObjectFromFile($objectKey, $filePath, 'application/vnd.android.package-archive');
+            if (($result['code'] ?? 500) !== 200) {
+                error_log('[DownloadBucket] 上传失败 bucket_id=' . $bucket['id'] . ' message=' . ($result['message'] ?? 'unknown'));
+                continue;
+            }
+
+            $url = buildBucketPublicUrl($bucket['domain'], $objectKey);
+            if (!empty($task['id']) && $debug !== $debugPass) {
+                recordDownload($pdo, $task['id'], $ip, $ipLocation, filesize($filePath), $_SERVER['HTTP_USER_AGENT'] ?? '', 'bucket', $bucket['id'] . ':' . $objectKey);
+            }
+
+            if ($redis) {
+                $redis->select(5);
+                $redis->setex($_GET['file'], 3600, $url);
+            }
+
+            header('X-Download-Source: bucket');
+            header('X-Download-Bucket-Id: ' . $bucket['id']);
+            header('Location: ' . $url);
+            return true;
+        } catch (Throwable $e) {
+            error_log('[DownloadBucket] 异常 bucket_id=' . ($bucket['id'] ?? 'unknown') . ' message=' . $e->getMessage());
+        }
+    }
+
+    return false;
+}
+
+function buildBucketPublicUrl(string $domain, string $objectKey): string {
+    $encodedKey = implode('/', array_map('rawurlencode', explode('/', ltrim($objectKey, '/'))));
+    return rtrim($domain, '/') . '/' . $encodedKey;
+}
+
 function shouldBlockRailwayDirectReleaseDownload(string $downType, int $fileSize): bool {
     if ($downType !== 'release' || !isRailwayRuntime()) {
         return false;
     }
 
-    // 80MB 以下的小中型 APK 继续允许 Railway 直连；更大的产物必须走 OSS/下载服，避免残缺完成。
-    $maxBytes = (int)(getenv('DIRECT_RELEASE_MAX_BYTES') ?: (80 * 1024 * 1024));
+    // Railway 下载 release APK 不稳定；桶和下载服都失败时，只允许极小文件直连，避免生成残缺 APK。
+    $maxBytes = (int)(getenv('DIRECT_RELEASE_MAX_BYTES') ?: (1 * 1024 * 1024));
     return $fileSize > max(1024 * 1024, $maxBytes);
 }
 
