@@ -6,6 +6,15 @@ $isCheck = isset($_GET['check']) && $_GET['check'] === '1';
 $debug = $_GET['debug'] ?? '';//如果有值，则不记录高速下载次数
 $debug_pass = 'yunzhuru';
 
+if (!defined('OSS_DOWNLOAD_KEEP_MINUTES')) {
+    // 大 APK 在限速通道下可能需要几十分钟到数小时，临时 OSS 文件不能 5 分钟就清理。
+    define('OSS_DOWNLOAD_KEEP_MINUTES', (int)(getenv('OSS_DOWNLOAD_KEEP_MINUTES') ?: 720));
+}
+if (!defined('OSS_SIGNED_URL_MIN_SECONDS')) {
+    // 签名 URL 有效期至少与临时文件保留时间一致，避免断点续传时链接已经过期。
+    define('OSS_SIGNED_URL_MIN_SECONDS', OSS_DOWNLOAD_KEEP_MINUTES * 60);
+}
+
 
 
 require_once __DIR__ . '/config/redis.php';
@@ -124,34 +133,7 @@ if (!$pdo || !($pdo instanceof PDO)) {
     echo '无法连接到数据库';
     exit;
 }else{
-    
-    // 查询超过5分钟的 OSS 下载记录
-    $stmt = $pdo->prepare("
-        SELECT id, file 
-        FROM cainiao_download_record 
-        WHERE source = 'oss' 
-        AND file IS NOT NULL 
-        AND file <> '' 
-        AND download_time < (NOW() - INTERVAL 5 MINUTE)
-    ");
-    $stmt->execute();
-    $expiredFiles = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    foreach ($expiredFiles as $row) {
-        $file = $row['file'];
-        if (!$file) continue;
-
-        // 调用OSS删除方法
-        $result = $ossObj->deleteFile($file);
-        if ($result['code'] == 200) {
-            // OSS删除成功，将file字段置为NULL
-            $update = $pdo->prepare("UPDATE cainiao_download_record SET file = NULL WHERE id = :id");
-            $update->execute([':id' => $row['id']]);
-        } else {
-            // 删除失败写入错误日志，但不中断主流程
-        }
-    }
-    
+    cleanupExpiredOssDownloadFiles($pdo, $ossObj);
 }
 
 $oss = Auth::getSetting($pdo,"oss","0");//编译后转存oss,默认0
@@ -240,7 +222,7 @@ if($oss){
                     $speedLimit = 8192000 * 20;//VIP用户，2000KB
                     $time = 600;
                 }
-                $result = $ossObj->getSignedUrl($newFilePath, $speedLimit, $time);
+                $result = getSignedUrlForLargeDownload($ossObj, $newFilePath, $filePath, $speedLimit, $time);
                 if($result['code'] == 200){
                     if($debug !== $debug_pass){
                         recordDownload($pdo, $task['id'], $ip, $IpLocation, $task['size'], $_SERVER['HTTP_USER_AGENT'], 'oss', $newFilePath);//记录下载
@@ -267,7 +249,7 @@ if($oss){
                 $result = $ossObj->uploadFile($filePath, $newFilePath);
                 if($result['code'] == 200){
                     //上传成功,开始签名URL
-                    $result = $ossObj->getSignedUrl($newFilePath);
+                    $result = getSignedUrlForLargeDownload($ossObj, $newFilePath, $filePath);
                     if($result['code'] == 200){
                         if($debug !== $debug_pass){
                             recordDownload($pdo, $task['id'], $ip, $IpLocation, $task['size'], $_SERVER['HTTP_USER_AGENT'], 'oss', $newFilePath);//记录下载
@@ -310,7 +292,7 @@ if($oss){
                     if($_GET['debug'] == 'yunzhuru'){
                         $speedLimit = 245760000;//调试机器不限速
                     }
-                    $result = $ossObj->getSignedUrl($newFilePath, $speedLimit, $time);
+                    $result = getSignedUrlForLargeDownload($ossObj, $newFilePath, $filePath, $speedLimit, $time);
                     if($result['code'] == 200){
                         if($debug !== $debug_pass){
                             recordDownload($pdo, $task['id'], $ip, $IpLocation, $task['size'], $_SERVER['HTTP_USER_AGENT'], 'oss', $newFilePath);//记录下载
@@ -379,19 +361,46 @@ $fileSize = filesize($filePath);
 $start = 0;
 $end = $fileSize - 1;
 $length = $fileSize;
+$statusCode = 200;
 
 // 处理断点续传 Range 头
-if (isset($_SERVER['HTTP_RANGE'])) {
-    if (preg_match('/bytes=(\d+)-(\d*)/', $_SERVER['HTTP_RANGE'], $matches)) {
-        $start = intval($matches[1]);
-        if ($matches[2] !== '') {
-            $end = intval($matches[2]);
-        }
-        $length = $end - $start + 1;
-
-        header('HTTP/1.1 206 Partial Content');
-        header("Content-Range: bytes $start-$end/$fileSize");
+if (!empty($_SERVER['HTTP_RANGE']) && preg_match('/bytes=(\d*)-(\d*)/i', $_SERVER['HTTP_RANGE'], $matches)) {
+    if ($matches[1] === '' && $matches[2] === '') {
+        header("HTTP/1.1 416 Requested Range Not Satisfiable");
+        header("Content-Range: bytes */{$fileSize}");
+        exit;
     }
+
+    if ($matches[1] === '') {
+        $suffixLength = (int)$matches[2];
+        $start = max(0, $fileSize - $suffixLength);
+    } else {
+        $start = (int)$matches[1];
+        if ($matches[2] !== '') {
+            $end = (int)$matches[2];
+        }
+    }
+
+    $end = min($end, $fileSize - 1);
+    if ($start > $end || $start >= $fileSize) {
+        header("HTTP/1.1 416 Requested Range Not Satisfiable");
+        header("Content-Range: bytes */{$fileSize}");
+        exit;
+    }
+
+    $length = $end - $start + 1;
+    $statusCode = 206;
+}
+
+while (ob_get_level()) {
+    ob_end_clean();
+}
+ignore_user_abort(true);
+@ini_set('zlib.output_compression', 'Off');
+
+if ($statusCode === 206) {
+    header('HTTP/1.1 206 Partial Content');
+    header("Content-Range: bytes $start-$end/$fileSize");
 }
 
 // 通用下载头
@@ -403,6 +412,7 @@ header('md5: ' . md5_file($filePath));
 header('Cache-Control: must-revalidate');
 header('Pragma: public');
 header('Expires: 0');
+header('X-Accel-Buffering: no');
 
 // 打开文件并分段输出（防止爆内存）
 $fp = fopen($filePath, 'rb');
@@ -412,14 +422,24 @@ if ($fp === false) {
 }
 
 fseek($fp, $start);
-$bufferSize = 1024 * 1024 * 0.5; // 每次读取 0.5MB
+$bufferSize = 1024 * 1024; // 每次读取 1MB，降低大文件下载时的 PHP 循环压力。
 $bytesSent = 0;
 
 while (!feof($fp) && $bytesSent < $length) {
-    $chunkSize = min($bufferSize, $length - $bytesSent);
-    echo fread($fp, $chunkSize);
+    $chunkSize = (int)min($bufferSize, $length - $bytesSent);
+    $data = fread($fp, $chunkSize);
+    if ($data === false || $data === '') {
+        break;
+    }
+    echo $data;
+    $bytesSent += strlen($data);
+    if (function_exists('ob_flush')) {
+        @ob_flush();
+    }
     flush();
-    $bytesSent += $chunkSize;
+    if (connection_aborted()) {
+        break;
+    }
 }
 
 fclose($fp);
@@ -443,6 +463,42 @@ function recordDownload($pdo, $task_id, $ip_address, $ip_location, $size, $user_
         ':source'     => $source,
         ':file'     => $file
     ]);
+}
+
+function cleanupExpiredOssDownloadFiles(PDO $pdo, OSS $ossObj) {
+    $keepMinutes = max(60, (int)OSS_DOWNLOAD_KEEP_MINUTES);
+    $stmt = $pdo->prepare("
+        SELECT id, file
+        FROM cainiao_download_record
+        WHERE source = 'oss'
+        AND file IS NOT NULL
+        AND file <> ''
+        AND download_time < (NOW() - INTERVAL {$keepMinutes} MINUTE)
+    ");
+    $stmt->execute();
+    $expiredFiles = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($expiredFiles as $row) {
+        $file = $row['file'];
+        if (!$file) continue;
+
+        // 清理失败只影响 OSS 临时空间，不应该打断用户当前下载流程。
+        $result = $ossObj->deleteFile($file);
+        if ($result['code'] == 200) {
+            $update = $pdo->prepare("UPDATE cainiao_download_record SET file = NULL WHERE id = :id");
+            $update->execute([':id' => $row['id']]);
+        }
+    }
+}
+
+function getSignedUrlForLargeDownload(OSS $ossObj, string $ossPath, string $localFilePath, int $speedLimit = 245760000, int $requestedSeconds = 600) {
+    $fileSize = is_file($localFilePath) ? (int)filesize($localFilePath) : 0;
+    // OSS 的 x-oss-traffic-limit 使用 bit/s，这里折算成 byte/s 估算下载耗时。
+    $bytesPerSecond = max(1, (int)floor(max(1, $speedLimit) / 8));
+    $estimatedSeconds = $fileSize > 0 ? (int)ceil($fileSize / $bytesPerSecond) : 0;
+    $ttl = max((int)$requestedSeconds, (int)OSS_SIGNED_URL_MIN_SECONDS, $estimatedSeconds + 1800);
+
+    return $ossObj->getSignedUrl($ossPath, $speedLimit, $ttl);
 }
 
 

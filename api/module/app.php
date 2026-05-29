@@ -1,5 +1,39 @@
 <?php
 
+if (!defined('OSS_DOWNLOAD_KEEP_MINUTES')) {
+    // 注入产物可能达到数百 MB 到数 GB，OSS 临时下载对象需要覆盖完整下载和断点续传窗口。
+    define('OSS_DOWNLOAD_KEEP_MINUTES', (int)(getenv('OSS_DOWNLOAD_KEEP_MINUTES') ?: 720));
+}
+
+function cleanupExpiredOssDownloadFiles(PDO $pdo) {
+    $keepMinutes = max(60, (int)OSS_DOWNLOAD_KEEP_MINUTES);
+    $ossObj = new OSS();
+    $stmt = $pdo->prepare("
+        SELECT id, file
+        FROM cainiao_download_record
+        WHERE source = 'oss'
+        AND file IS NOT NULL
+        AND file <> ''
+        AND download_time < (NOW() - INTERVAL {$keepMinutes} MINUTE)
+    ");
+    $stmt->execute();
+    $expiredFiles = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $lastResult = null;
+
+    foreach ($expiredFiles as $row) {
+        if (empty($row['file'])) continue;
+
+        // 清理失败只会占用临时 OSS 空间，不能影响任务列表刷新。
+        $lastResult = $ossObj->deleteFile($row['file']);
+        if ($lastResult['code'] == 200) {
+            $update = $pdo->prepare("UPDATE cainiao_download_record SET file = NULL WHERE id = :id");
+            $update->execute([':id' => $row['id']]);
+        }
+    }
+
+    return $lastResult;
+}
+
 /*function getMyAppList(PDO $pdo, array $input)
 {
     $user = Auth::check($pdo);
@@ -3639,32 +3673,7 @@ function getUnifiedTaskList(PDO $pdo, array $input)
     $stmt->execute($params);
     $list = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    //oss文件清理工作=====================================
-    $ossObj = new OSS();
-    // 查询超过5分钟的 OSS 下载记录
-    $stmt = $pdo->prepare("
-        SELECT id, file 
-        FROM cainiao_download_record 
-        WHERE source = 'oss' 
-        AND file IS NOT NULL 
-        AND file <> '' 
-        AND download_time < (NOW() - INTERVAL 5 MINUTE)
-    ");
-    $stmt->execute();
-    $expiredFiles = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    foreach ($expiredFiles as $row) {
-        $file = $row['file'];
-        if (!$file) continue;
-
-        // 调用OSS删除方法
-        $result = $ossObj->deleteFile($file);
-        if ($result['code'] == 200) {
-            // OSS删除成功，将file字段置为NULL
-            $update = $pdo->prepare("UPDATE cainiao_download_record SET file = NULL WHERE id = :id");
-            $update->execute([':id' => $row['id']]);
-        }
-    }
+    cleanupExpiredOssDownloadFiles($pdo);
 
     return [
         'list'  => $list,
@@ -3748,32 +3757,7 @@ function getJiaguTaskList(PDO $pdo, array $input)
     $stmt->execute($params);
     $list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // ---------- OSS 清理（与 inject 保持一致） ----------
-    $ossObj = new OSS();
-    $stmt = $pdo->prepare("
-        SELECT id, file
-        FROM cainiao_download_record
-        WHERE source = 'oss'
-          AND file IS NOT NULL
-          AND file <> ''
-          AND download_time < (NOW() - INTERVAL 5 MINUTE)
-    ");
-    $stmt->execute();
-    $expiredFiles = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    foreach ($expiredFiles as $row) {
-        if (empty($row['file'])) continue;
-
-        $result = $ossObj->deleteFile($row['file']);
-        if ($result['code'] == 200) {
-            $update = $pdo->prepare("
-                UPDATE cainiao_download_record
-                SET file = NULL
-                WHERE id = :id
-            ");
-            $update->execute([':id' => $row['id']]);
-        }
-    }
+    $ossCleanup = cleanupExpiredOssDownloadFiles($pdo);
 
     return [
         'list'  => $list,
@@ -3781,7 +3765,7 @@ function getJiaguTaskList(PDO $pdo, array $input)
         'page'  => $page,
         'limit' => $limit,
         'pages' => ceil($total / $limit),
-        'oss'   => $result ?? null
+        'oss'   => $ossCleanup
     ];
 }
 //自动删除过期加固任务
@@ -3913,32 +3897,7 @@ function getInjectTaskList(PDO $pdo, array $input)
     
     
     
-    //oss文件清理工作=====================================
-    $ossObj = new OSS();
-    // 查询超过5分钟的 OSS 下载记录
-    $stmt = $pdo->prepare("
-        SELECT id, file 
-        FROM cainiao_download_record 
-        WHERE source = 'oss' 
-        AND file IS NOT NULL 
-        AND file <> '' 
-        AND download_time < (NOW() - INTERVAL 5 MINUTE)
-    ");
-    $stmt->execute();
-    $expiredFiles = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    foreach ($expiredFiles as $row) {
-        $file = $row['file'];
-        if (!$file) continue;
-
-        // 调用OSS删除方法
-        $result = $ossObj->deleteFile($file);
-        if ($result['code'] == 200) {
-            // OSS删除成功，将file字段置为NULL
-            $update = $pdo->prepare("UPDATE cainiao_download_record SET file = NULL WHERE id = :id");
-            $update->execute([':id' => $row['id']]);
-        }
-    }
+    $ossCleanup = cleanupExpiredOssDownloadFiles($pdo);
 
     return [
         'list' => $list,
@@ -3946,7 +3905,7 @@ function getInjectTaskList(PDO $pdo, array $input)
         'page' => $page,
         'limit' => $limit,
         'pages' => ceil($total / $limit),
-        'oss' => $result
+        'oss' => $ossCleanup
     ];
 }
 
