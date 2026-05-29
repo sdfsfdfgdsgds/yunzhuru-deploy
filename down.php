@@ -537,9 +537,9 @@ function tryRedirectRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, string $d
             AND domain <> ''
             ORDER BY
                 CASE
-                    WHEN provider = 'r2' THEN 0
-                    WHEN provider = 's3' THEN 1
-                    WHEN provider = 'b2' THEN 2
+                    WHEN provider = 's3' THEN 0
+                    WHEN provider = 'b2' THEN 1
+                    WHEN provider = 'r2' THEN 2
                     ELSE 3
                 END,
                 id ASC
