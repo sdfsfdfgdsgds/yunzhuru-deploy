@@ -108,6 +108,10 @@ if($down_type == 'uploads'){
     }
 }
 
+if ((!$filePath || !file_exists($filePath)) && tryRedirectMissingRailwayReleaseDownloadViaBuckets($pdo, $redis, $down_type, $filename)) {
+    exit;
+}
+
 if (!$filePath || !file_exists($filePath) || (strpos($filePath, realpath($uploadDir)) !== 0 && strpos($filePath, realpath($appTmpDir)) !== 0)) {
     http_response_code(414);
     exit('文件不存在');
@@ -595,6 +599,165 @@ function tryRedirectRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, string $d
 function buildBucketPublicUrl(string $domain, string $objectKey): string {
     $encodedKey = implode('/', array_map('rawurlencode', explode('/', ltrim($objectKey, '/'))));
     return rtrim($domain, '/') . '/' . $encodedKey;
+}
+
+function tryRedirectMissingRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, string $downType, string $filename): bool {
+    if ($downType !== 'release' || !isRailwayRuntime()) {
+        return false;
+    }
+
+    $task = findInjectTaskByOutputFile($pdo, $filename);
+    if (!$task) {
+        return false;
+    }
+
+    foreach (buildRecordedBucketUrlCandidates($pdo, (int)$task['id']) as $candidate) {
+        if (probePublicBucketUrl($candidate['url'])) {
+            cacheAndRedirectBucketDownload($redis, $filename, $candidate['url'], 'bucket-record', $candidate['bucket_id']);
+            return true;
+        }
+    }
+
+    $dates = buildTaskDateCandidates($task);
+    if (!$dates) {
+        return false;
+    }
+
+    foreach (loadReleaseDownloadBuckets($pdo) as $bucket) {
+        foreach ($dates as $date) {
+            $objectKey = 'release_downloads/' . $date . '/' . basename($filename);
+            $url = buildBucketPublicUrl($bucket['domain'], $objectKey);
+            if (probePublicBucketUrl($url)) {
+                cacheAndRedirectBucketDownload($redis, $filename, $url, 'bucket-recovered', $bucket['id']);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+function findInjectTaskByOutputFile(PDO $pdo, string $filename) {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT id, injected_apk, created_at, completed_at
+            FROM cainiao_inject_task
+            WHERE injected_apk = :filename
+            LIMIT 1
+        ");
+        $stmt->execute([':filename' => $filename]);
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        error_log('[DownloadBucket] 查询任务失败：' . $e->getMessage());
+        return false;
+    }
+}
+
+function buildRecordedBucketUrlCandidates(PDO $pdo, int $taskId): array {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT r.file, b.id AS bucket_id, b.domain
+            FROM cainiao_download_record r
+            JOIN cainiao_s3_bucket b ON b.id = SUBSTRING_INDEX(r.file, ':', 1)
+            WHERE r.task_id = :task_id
+            AND r.source = 'bucket'
+            AND r.file LIKE '%:%'
+            AND b.enabled = 1
+            AND b.inject = 1
+            AND b.domain <> ''
+            ORDER BY r.download_time DESC, r.id DESC
+            LIMIT 10
+        ");
+        $stmt->execute([':task_id' => $taskId]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        error_log('[DownloadBucket] 查询下载记录失败：' . $e->getMessage());
+        return [];
+    }
+
+    $candidates = [];
+    foreach ($rows as $row) {
+        $parts = explode(':', (string)$row['file'], 2);
+        if (count($parts) !== 2 || $parts[1] === '') {
+            continue;
+        }
+        $candidates[] = [
+            'bucket_id' => $row['bucket_id'],
+            'url' => buildBucketPublicUrl($row['domain'], $parts[1]),
+        ];
+    }
+
+    return $candidates;
+}
+
+function buildTaskDateCandidates(array $task): array {
+    $dates = [];
+    foreach (['completed_at', 'created_at'] as $field) {
+        if (empty($task[$field])) {
+            continue;
+        }
+        $time = strtotime($task[$field]);
+        if ($time) {
+            $dates[] = date('Ymd', $time);
+        }
+    }
+    $dates[] = date('Ymd');
+    return array_values(array_unique($dates));
+}
+
+function loadReleaseDownloadBuckets(PDO $pdo): array {
+    try {
+        $stmt = $pdo->query("
+            SELECT id, provider, domain
+            FROM cainiao_s3_bucket
+            WHERE enabled = 1
+            AND inject = 1
+            AND domain <> ''
+            ORDER BY
+                CASE
+                    WHEN provider = 's3' THEN 0
+                    WHEN provider = 'b2' THEN 1
+                    WHEN provider = 'r2' THEN 2
+                    ELSE 3
+                END,
+                id ASC
+        ");
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        error_log('[DownloadBucket] 读取恢复桶失败：' . $e->getMessage());
+        return [];
+    }
+}
+
+function probePublicBucketUrl(string $url): bool {
+    if (!function_exists('curl_init')) {
+        return false;
+    }
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_NOBODY => true,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => false,
+        CURLOPT_CONNECTTIMEOUT => 3,
+        CURLOPT_TIMEOUT => 6,
+    ]);
+    curl_exec($ch);
+    $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    return $status >= 200 && $status < 400;
+}
+
+function cacheAndRedirectBucketDownload($redis, string $filename, string $url, string $source, $bucketId): void {
+    if ($redis) {
+        $redis->select(5);
+        $redis->setex($filename, 86400, $url);
+    }
+
+    header('X-Download-Source: ' . $source);
+    header('X-Download-Bucket-Id: ' . $bucketId);
+    header('Location: ' . $url);
 }
 
 function shouldBlockRailwayDirectReleaseDownload(string $downType, int $fileSize): bool {
