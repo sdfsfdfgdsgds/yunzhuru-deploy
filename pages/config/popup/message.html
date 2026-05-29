@@ -193,7 +193,7 @@
       </el-select>
     </el-form-item>
 
-    <el-form-item v-if="hasClickParam(buttonForm.click)" label="全局参数资源">
+    <el-form-item v-if="hasClickParam(buttonForm.click)" label="事件参数资源">
       <div style="width: 100%">
         <el-select
           v-model="buttonClickParamAssetIds"
@@ -201,7 +201,7 @@
           :multiple-limit="1"
           filterable
           clearable
-          placeholder="选择全局事件参数资源"
+          placeholder="选择事件参数资源"
           style="width: 100%"
           @visible-change="visible => clickParam.onSelectVisible(visible, buttonForm.click)">
           <el-option
@@ -230,11 +230,12 @@
       </div>
     </el-form-item>
 
-    <el-form-item v-if="hasClickParam(buttonForm.click)" :label="clickTextLabel">
+    <el-form-item v-if="hasClickParam(buttonForm.click)" label="备用参数">
       <el-input
         :type="clickTextInputType(buttonForm.click)"
         v-model="buttonForm.clickText"
         :rows="3"
+        :disabled="buttonClickParamAssetIds.length > 0"
         :placeholder="clickTextTip"></el-input>
     </el-form-item>
 
@@ -536,8 +537,8 @@ function openEditButtonDialog(button) {
 	  if (!hasClickParam(buttonForm.click)) {
 	    payload.clickText = '';
 	    payload.clickParamAssetId = 0;
-	  } else if (!String(buttonForm.clickText || '').trim()) {
-	    ElementPlus.ElMessage.warning('请填写事件参数或选择全局参数资源');
+	  } else if (!buttonForm.clickParamAssetId && !String(buttonForm.clickText || '').trim()) {
+	    ElementPlus.ElMessage.warning('请填写备用参数或选择事件参数资源');
 	    return;
 	  }
 

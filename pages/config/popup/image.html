@@ -207,7 +207,7 @@
           </el-select>
         </el-form-item>
         
-        <el-form-item v-if="hasClickParam(form.clickAction)" label="全局参数资源">
+        <el-form-item v-if="hasClickParam(form.clickAction)" label="事件参数资源">
           <div style="width: 100%">
             <el-select
               v-model="formClickParamAssetIds"
@@ -215,7 +215,7 @@
               :multiple-limit="1"
               filterable
               clearable
-              placeholder="选择全局事件参数资源"
+              placeholder="选择事件参数资源"
               style="width: 100%"
               @visible-change="visible => clickParam.onSelectVisible(visible, form.clickAction)">
               <el-option
@@ -243,11 +243,12 @@
             </div>
           </div>
         </el-form-item>
-        <el-form-item v-if="hasClickParam(form.clickAction)" :label="clickTextLabel">
+        <el-form-item v-if="hasClickParam(form.clickAction)" label="备用参数">
           <el-input
             :type="clickTextInputType(form.clickAction)"
             v-model="form.clickText"
             :rows="3"
+            :disabled="formClickParamAssetIds.length > 0"
             :placeholder="clickTextPlaceholder"></el-input>
         </el-form-item>
         <el-form-item label="回调地址">
@@ -364,7 +365,7 @@
             <el-option label="打开窗口类" :value="7"></el-option>
           </el-select>
         </el-form-item>
-        <el-form-item v-if="hasClickParam(batchForm.clickAction)" label="全局参数资源">
+        <el-form-item v-if="hasClickParam(batchForm.clickAction)" label="事件参数资源">
           <div style="width: 100%">
             <el-select
               v-model="batchClickParamAssetIds"
@@ -372,7 +373,7 @@
               :multiple-limit="1"
               filterable
               clearable
-              placeholder="选择全局事件参数资源"
+              placeholder="选择事件参数资源"
               style="width: 100%"
               @visible-change="visible => clickParam.onSelectVisible(visible, batchForm.clickAction)">
               <el-option
@@ -400,11 +401,12 @@
             </div>
           </div>
         </el-form-item>
-        <el-form-item v-if="hasClickParam(batchForm.clickAction)" :label="batchClickTextLabel">
+        <el-form-item v-if="hasClickParam(batchForm.clickAction)" label="备用参数">
           <el-input
             :type="clickTextInputType(batchForm.clickAction)"
             v-model="batchForm.clickText"
             :rows="3"
+            :disabled="batchClickParamAssetIds.length > 0"
             :placeholder="batchClickTextPlaceholder"></el-input>
         </el-form-item>
         <el-form-item label="回调地址">
@@ -727,8 +729,8 @@ function changeApp() {
 	          if (!hasClickParam(form.clickAction)) {
 	            form.clickText = '';
 	            form.clickParamAssetId = null;
-	          } else if (!String(form.clickText || '').trim()) {
-	            ElementPlus.ElMessage.warning('请填写事件参数或选择全局参数资源');
+	          } else if (!form.clickParamAssetId && !String(form.clickText || '').trim()) {
+	            ElementPlus.ElMessage.warning('请填写备用参数或选择事件参数资源');
 	            return;
 	          }
 	          const data = { ...form, apk_id: selectedAppId.value };
@@ -982,8 +984,8 @@ async function confirmBatchUpdate() {
 	  if (!hasClickParam(batchForm.clickAction)) {
 	    batchForm.clickText = '';
 	    batchForm.clickParamAssetId = null;
-	  } else if (!String(batchForm.clickText || '').trim()) {
-	    ElementPlus.ElMessage.warning('请填写事件参数或选择全局参数资源');
+	  } else if (!batchForm.clickParamAssetId && !String(batchForm.clickText || '').trim()) {
+	    ElementPlus.ElMessage.warning('请填写备用参数或选择事件参数资源');
 	    return;
 	  }
 	  const ids = selectedPopups.value.map(item => item.id);
