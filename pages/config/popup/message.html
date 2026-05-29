@@ -196,13 +196,14 @@
     <el-form-item v-if="hasClickParam(buttonForm.click)" label="全局参数资源">
       <div style="width: 100%">
         <el-select
-          v-model="buttonForm.clickParamAssetId"
+          v-model="buttonClickParamAssetIds"
+          multiple
+          :multiple-limit="1"
           filterable
           clearable
           placeholder="选择全局事件参数资源"
           style="width: 100%"
-          @visible-change="visible => clickParam.onSelectVisible(visible, buttonForm.click)"
-          @change="applyButtonClickParamAsset">
+          @visible-change="visible => clickParam.onSelectVisible(visible, buttonForm.click)">
           <el-option
             v-for="item in clickParam.options(buttonForm.click)"
             :key="item.id"
@@ -216,6 +217,15 @@
         </el-select>
         <div class="param-toolbar">
           <el-button size="small" @click="clickParam.load(buttonForm.click, 1)">刷新资源</el-button>
+        </div>
+        <div class="param-preview-list" v-if="selectedButtonClickParamAssets.length">
+          <div class="param-preview-item" v-for="item in selectedButtonClickParamAssets" :key="item.id">
+            <div class="param-preview-head">
+              <span class="param-preview-name">{{ item.name }}</span>
+              <el-tag size="small">{{ clickActionLabel(item.action_type) }}</el-tag>
+            </div>
+            <div class="param-preview-text">{{ item.param_text }}</div>
+          </div>
         </div>
       </div>
     </el-form-item>
@@ -314,7 +324,7 @@
   </div>
 
   <script>
-    const { createApp, ref, reactive, onMounted } = Vue;
+    const { createApp, ref, reactive, computed, onMounted } = Vue;
 
     createApp({
       setup() {
@@ -352,9 +362,9 @@
 	        const clickActionLabel = ClickParamAsset.actionLabel;
 	        const hasClickParam = ClickParamAsset.hasParam;
 	        const clickParamLabel = ClickParamAsset.paramLabel;
-	        const clickParamPlaceholder = ClickParamAsset.paramPlaceholder;
-	        const clickTextInputType = ClickParamAsset.paramInputType;
-        
+		        const clickParamPlaceholder = ClickParamAsset.paramPlaceholder;
+		        const clickTextInputType = ClickParamAsset.paramInputType;
+
         async function loadApps() {
           const res = await fetch('/api/index.php?module=config&method=getMyApps');
           const json = await res.json();
@@ -420,10 +430,10 @@
 	            clickParam.load(val, 1);
 	          }
 	        }
-	        function applyButtonClickParamAsset(assetId) {
-	          clickParam.applyTo(buttonForm, 'click', 'clickText', assetId, 'clickParamAssetId');
-	          updateClickTextTip(buttonForm.click);
-	        }
+		        function applyButtonClickParamAsset(assetId) {
+		          clickParam.applySelection(buttonForm, 'click', 'clickText', 'clickParamAssetId', assetId);
+		          updateClickTextTip(buttonForm.click);
+		        }
         async function submitForm() {
           const payload = { ...form, apk_id: selectedAppId.value };
           const method = editMode.value ? 'editPopup' : 'addPopup';
@@ -493,17 +503,22 @@ function openEditButtonDialog(button) {
   updateClickTextTip(button.click);
   addButtonDialogVisible.value = true;
 }
-	const buttonForm = reactive({
-	  title: '',
-	  textcolor: '#FFFFFF',
-	  backgroundColor: '#008577',
-	  click: 0,
-	  clickText: '',
-	  clickParamAssetId: null,
-	  dismiss: true
-	});
+		const buttonForm = reactive({
+		  title: '',
+		  textcolor: '#FFFFFF',
+		  backgroundColor: '#008577',
+		  click: 0,
+		  clickText: '',
+		  clickParamAssetId: null,
+		  dismiss: true
+		});
+		const buttonClickParamAssetIds = computed({
+		  get: () => clickParam.toIdList(buttonForm.clickParamAssetId),
+		  set: ids => applyButtonClickParamAsset(ids)
+		});
+		const selectedButtonClickParamAssets = computed(() => clickParam.selected(buttonClickParamAssetIds.value));
 
-async function submitAddButton() {
+	async function submitAddButton() {
   const url = buttonEditMode.value
     ? '/api/index.php?module=popup_message&method=editButton'
     : '/api/index.php?module=popup_message&method=addButton';
@@ -712,9 +727,11 @@ buttonEditMode,
 	clickTextTip,
 	clickTextLabel,
 	updateClickTextTip,
-	onButtonClickActionChange,
-	applyButtonClickParamAsset,
-		openEditButtonDialog,
+		onButtonClickActionChange,
+		applyButtonClickParamAsset,
+		buttonClickParamAssetIds,
+		selectedButtonClickParamAssets,
+			openEditButtonDialog,
 		clickParam,
 		clickActionOptions,
 	clickActionLabel,

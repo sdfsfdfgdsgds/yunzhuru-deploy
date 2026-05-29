@@ -58,7 +58,91 @@
     return ACTION_LABELS[toAction(actionType)] || '未知事件';
   }
 
+  function ensureStyles() {
+    if (typeof document === 'undefined' || document.getElementById('click-param-asset-style')) {
+      return;
+    }
+    const style = document.createElement('style');
+    style.id = 'click-param-asset-style';
+    style.textContent = `
+      .param-option {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+      }
+      .param-option-text {
+        color: #909399;
+        font-size: 12px;
+        max-width: 260px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .param-toolbar {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+        flex-wrap: wrap;
+      }
+      .param-preview-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .param-preview-item {
+        width: 190px;
+        min-height: 74px;
+        border: 1px solid #ebeef5;
+        border-radius: 6px;
+        padding: 8px;
+        background: #fafafa;
+      }
+      .param-preview-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+      .param-preview-name {
+        color: #303133;
+        font-size: 13px;
+        font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .param-preview-text {
+        color: #606266;
+        font-size: 12px;
+        line-height: 1.45;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        word-break: break-all;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function toIdList(value) {
+    const values = Array.isArray(value) ? value : [value];
+    return values
+      .map(item => Number(item || 0))
+      .filter(item => item > 0);
+  }
+
+  function firstId(value) {
+    const ids = toIdList(value);
+    return ids.length > 0 ? ids[ids.length - 1] : 0;
+  }
+
   function createStore(Vue, ElementPlus) {
+    ensureStyles();
+
     const list = Vue.ref([]);
     const page = Vue.ref(1);
     const limit = Vue.ref(20);
@@ -91,6 +175,14 @@
           existed.add(Number(item.id));
         }
       });
+    }
+
+    function selected(value) {
+      const ids = new Set(toIdList(value));
+      if (ids.size === 0) {
+        return [];
+      }
+      return list.value.filter(item => ids.has(Number(item.id)));
     }
 
     async function load(actionType = null, p = page.value) {
@@ -195,7 +287,8 @@
     }
 
     function applyTo(target, actionField, textField, assetId, assetIdField) {
-      const asset = list.value.find(item => Number(item.id) === Number(assetId));
+      const id = firstId(assetId);
+      const asset = list.value.find(item => Number(item.id) === id);
       if (!asset) {
         return;
       }
@@ -203,6 +296,14 @@
       target[textField] = asset.param_text || '';
       if (assetIdField) {
         target[assetIdField] = asset.id;
+      }
+    }
+
+    function applySelection(target, actionField, textField, assetIdField, assetIds) {
+      const id = firstId(assetIds);
+      target[assetIdField] = id || null;
+      if (id > 0) {
+        applyTo(target, actionField, textField, id, assetIdField);
       }
     }
 
@@ -219,13 +320,17 @@
       form,
       options,
       merge,
+      selected,
+      toIdList,
+      firstId,
       load,
       onSelectVisible,
       openDialog,
       openEdit,
       submit,
       remove,
-      applyTo
+      applyTo,
+      applySelection
     };
   }
 

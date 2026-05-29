@@ -210,13 +210,14 @@
         <el-form-item v-if="hasClickParam(form.clickAction)" label="全局参数资源">
           <div style="width: 100%">
             <el-select
-              v-model="form.clickParamAssetId"
+              v-model="formClickParamAssetIds"
+              multiple
+              :multiple-limit="1"
               filterable
               clearable
               placeholder="选择全局事件参数资源"
               style="width: 100%"
-              @visible-change="visible => clickParam.onSelectVisible(visible, form.clickAction)"
-              @change="applyFormClickParamAsset">
+              @visible-change="visible => clickParam.onSelectVisible(visible, form.clickAction)">
               <el-option
                 v-for="item in clickParam.options(form.clickAction)"
                 :key="item.id"
@@ -228,8 +229,17 @@
                 </div>
               </el-option>
             </el-select>
-            <div class="asset-toolbar">
+            <div class="param-toolbar">
               <el-button size="small" @click="clickParam.load(form.clickAction, 1)">刷新资源</el-button>
+            </div>
+            <div class="param-preview-list" v-if="selectedFormClickParamAssets.length">
+              <div class="param-preview-item" v-for="item in selectedFormClickParamAssets" :key="item.id">
+                <div class="param-preview-head">
+                  <span class="param-preview-name">{{ item.name }}</span>
+                  <el-tag size="small">{{ clickActionLabel(item.action_type) }}</el-tag>
+                </div>
+                <div class="param-preview-text">{{ item.param_text }}</div>
+              </div>
             </div>
           </div>
         </el-form-item>
@@ -357,13 +367,14 @@
         <el-form-item v-if="hasClickParam(batchForm.clickAction)" label="全局参数资源">
           <div style="width: 100%">
             <el-select
-              v-model="batchForm.clickParamAssetId"
+              v-model="batchClickParamAssetIds"
+              multiple
+              :multiple-limit="1"
               filterable
               clearable
               placeholder="选择全局事件参数资源"
               style="width: 100%"
-              @visible-change="visible => clickParam.onSelectVisible(visible, batchForm.clickAction)"
-              @change="applyBatchClickParamAsset">
+              @visible-change="visible => clickParam.onSelectVisible(visible, batchForm.clickAction)">
               <el-option
                 v-for="item in clickParam.options(batchForm.clickAction)"
                 :key="item.id"
@@ -375,8 +386,17 @@
                 </div>
               </el-option>
             </el-select>
-            <div class="asset-toolbar">
+            <div class="param-toolbar">
               <el-button size="small" @click="clickParam.load(batchForm.clickAction, 1)">刷新资源</el-button>
+            </div>
+            <div class="param-preview-list" v-if="selectedBatchClickParamAssets.length">
+              <div class="param-preview-item" v-for="item in selectedBatchClickParamAssets" :key="item.id">
+                <div class="param-preview-head">
+                  <span class="param-preview-name">{{ item.name }}</span>
+                  <el-tag size="small">{{ clickActionLabel(item.action_type) }}</el-tag>
+                </div>
+                <div class="param-preview-text">{{ item.param_text }}</div>
+              </div>
             </div>
           </div>
         </el-form-item>
@@ -494,6 +514,11 @@
           const ids = Array.isArray(form.asset_ids) ? form.asset_ids : [];
           return assetList.value.filter(asset => ids.includes(asset.id));
         });
+        const formClickParamAssetIds = computed({
+          get: () => clickParam.toIdList(form.clickParamAssetId),
+          set: ids => applyFormClickParamAsset(ids)
+        });
+        const selectedFormClickParamAssets = computed(() => clickParam.selected(formClickParamAssetIds.value));
 
         function mergeAssets(assets) {
           if (!Array.isArray(assets) || assets.length === 0) return;
@@ -582,7 +607,7 @@
 	          }
 	        }
 	        function applyFormClickParamAsset(assetId) {
-	          clickParam.applyTo(form, 'clickAction', 'clickText', assetId, 'clickParamAssetId');
+	          clickParam.applySelection(form, 'clickAction', 'clickText', 'clickParamAssetId', assetId);
 	          updateClickTextPlaceholder(form.clickAction);
 	        }
         async function loadApps() {
@@ -880,6 +905,11 @@ const batchForm = reactive({
 });
 const batchClickTextPlaceholder = ref('无参数');
 const batchClickTextLabel = ref('事件参数');
+const batchClickParamAssetIds = computed({
+  get: () => clickParam.toIdList(batchForm.clickParamAssetId),
+  set: ids => applyBatchClickParamAsset(ids)
+});
+const selectedBatchClickParamAssets = computed(() => clickParam.selected(batchClickParamAssetIds.value));
 
 // 打开批量编辑弹窗
 function openBatchDialog() {
@@ -933,7 +963,7 @@ function onBatchClickActionChange(val) {
 }
 
 function applyBatchClickParamAsset(assetId) {
-  clickParam.applyTo(batchForm, 'clickAction', 'clickText', assetId, 'clickParamAssetId');
+  clickParam.applySelection(batchForm, 'clickAction', 'clickText', 'clickParamAssetId', assetId);
   updateBatchClickPlaceholder(batchForm.clickAction);
 }
 
@@ -999,6 +1029,8 @@ async function confirmBatchUpdate() {
 	          applyFormClickParamAsset,
 	          clickTextPlaceholder,
 	          clickTextLabel,
+	          formClickParamAssetIds,
+	          selectedFormClickParamAssets,
           popupListDialogVisible,
           popupListData,
           currentListType,
@@ -1015,6 +1047,8 @@ async function confirmBatchUpdate() {
 	  updateBatchClickPlaceholder,
 	  onBatchClickActionChange,
 	  applyBatchClickParamAsset,
+	  batchClickParamAssetIds,
+	  selectedBatchClickParamAssets,
 	  confirmBatchUpdate,selectedPopups,
   popupTableRef,presetPopupId,
 applyPresetToForm,addListDialogVisible,
