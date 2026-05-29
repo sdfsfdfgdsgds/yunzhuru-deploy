@@ -41,7 +41,6 @@
       </el-select>
       <el-button @click="loadApps">刷新应用列表</el-button>
       <el-button type="primary" @click="openAddDialog">添加弹窗</el-button>
-      <el-button type="success" plain @click="clickParam.openDialog">全局事件参数库</el-button>
     </div>
 
     <!-- 弹窗列表表格 -->
@@ -217,8 +216,6 @@
         </el-select>
         <div class="param-toolbar">
           <el-button size="small" @click="clickParam.load(buttonForm.click, 1)">刷新资源</el-button>
-          <el-button size="small" type="primary" @click="clickParam.openEdit(null, buttonForm.click)">新增资源</el-button>
-          <el-button size="small" @click="clickParam.openDialog">管理资源库</el-button>
         </div>
       </div>
     </el-form-item>
@@ -243,74 +240,6 @@
     </el-button>
   </template>
 </el-dialog>
-
-
-    <el-dialog v-model="clickParam.dialogVisible" title="全局事件参数库" width="900px">
-      <div style="display:flex; gap:10px; margin-bottom:12px; align-items:center; flex-wrap:wrap">
-        <el-select v-model="clickParamFilterAction" placeholder="事件分类" clearable style="width: 180px" @change="value => clickParam.load(value, 1)">
-          <el-option v-for="item in clickActionOptions" :key="item.value" :label="item.label" :value="item.value"></el-option>
-        </el-select>
-        <el-input
-          v-model="clickParam.keyword"
-          placeholder="搜索名称、参数或备注"
-          clearable
-          style="width: 320px"
-          @keyup.enter="clickParam.load(clickParamFilterAction, 1)"></el-input>
-        <el-button @click="clickParam.load(clickParamFilterAction, 1)">查询</el-button>
-        <el-button type="primary" @click="clickParam.openEdit(null, clickParamFilterAction || 1)">新增参数</el-button>
-      </div>
-      <el-table :data="clickParam.list" border v-loading="clickParam.loading">
-        <el-table-column label="名称" prop="name" width="160"></el-table-column>
-        <el-table-column label="事件分类" width="120">
-          <template #default="scope">{{ clickActionLabel(scope.row.action_type) }}</template>
-        </el-table-column>
-        <el-table-column label="事件参数" prop="param_text" show-overflow-tooltip></el-table-column>
-        <el-table-column label="备注" prop="remark" width="160" show-overflow-tooltip></el-table-column>
-        <el-table-column label="操作" width="150">
-          <template #default="scope">
-            <el-button size="small" type="primary" @click="clickParam.openEdit(scope.row)">编辑</el-button>
-            <el-button size="small" type="danger" @click="clickParam.remove(scope.row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-      <div style="margin-top: 12px; text-align: right">
-        <el-pagination
-          background
-          layout="total, prev, pager, next"
-          :total="clickParam.total"
-          :page-size="clickParam.limit"
-          :current-page="clickParam.page"
-          @current-change="page => clickParam.load(clickParamFilterAction, page)"></el-pagination>
-      </div>
-    </el-dialog>
-
-    <el-dialog v-model="clickParam.editVisible" :title="clickParam.editMode ? '编辑事件参数' : '新增事件参数'" width="560px" append-to-body>
-      <el-form :model="clickParam.form" label-width="90px">
-        <el-form-item label="参数名">
-          <el-input v-model="clickParam.form.name" placeholder="例如：官网链接、QQ群、卡密接口"></el-input>
-        </el-form-item>
-        <el-form-item label="事件分类">
-          <el-select v-model="clickParam.form.action_type" style="width: 100%">
-            <el-option v-for="item in clickActionOptions" :key="item.value" :label="item.label" :value="item.value"></el-option>
-          </el-select>
-        </el-form-item>
-        <el-form-item :label="clickParamLabel(clickParam.form.action_type)">
-          <el-input
-            :type="clickTextInputType(clickParam.form.action_type)"
-            v-model="clickParam.form.param_text"
-            :rows="4"
-            :placeholder="clickParamPlaceholder(clickParam.form.action_type)"></el-input>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="clickParam.form.remark"></el-input>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="clickParam.editVisible = false">取消</el-button>
-        <el-button type="primary" @click="clickParam.submit">保存</el-button>
-      </template>
-    </el-dialog>
-
 
     <el-dialog v-model="whitelistDialogVisible" title="白名单(当窗口为这些类名的时候才会弹出)" width="600px">
       <el-button type="primary" @click="addToWhitelist">添加</el-button>
@@ -417,10 +346,9 @@
 	        const addListForm = reactive({
 	          class_name: '',
 	          remark: ''
-	        })
-	        const clickParam = ClickParamAsset.createStore(Vue, ElementPlus);
-	        const clickParamFilterAction = ref(null);
-	        const clickActionOptions = ClickParamAsset.ACTION_OPTIONS;
+		        })
+		        const clickParam = ClickParamAsset.createStore(Vue, ElementPlus);
+		        const clickActionOptions = ClickParamAsset.ACTION_OPTIONS;
 	        const clickActionLabel = ClickParamAsset.actionLabel;
 	        const hasClickParam = ClickParamAsset.hasParam;
 	        const clickParamLabel = ClickParamAsset.paramLabel;
@@ -786,10 +714,9 @@ buttonEditMode,
 	updateClickTextTip,
 	onButtonClickActionChange,
 	applyButtonClickParamAsset,
-	openEditButtonDialog,
-	clickParam,
-	clickParamFilterAction,
-	clickActionOptions,
+		openEditButtonDialog,
+		clickParam,
+		clickActionOptions,
 	clickActionLabel,
 	hasClickParam,
 	clickParamLabel,
