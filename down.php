@@ -21,6 +21,7 @@ require_once __DIR__ . '/config/redis.php';
 $redis = getRedisConnection(5);
 $exists = $redis->get($_GET['file']);
 if($exists !== false){
+    header('X-Download-Source: cached-redirect');
     header("location:{$exists}");
     exit;
 }
@@ -229,6 +230,7 @@ if($oss){
                     }
                     $redis->select(5);//选择数据库5，作为下载缓存接口
                     $redis->setex($_GET['file'], 30, $result['url']);
+                    header('X-Download-Source: oss');
                     header("location:{$result['url']}");
                     exit;
                 }else{
@@ -256,6 +258,7 @@ if($oss){
                         }
                         $redis->select(5);//选择数据库5，作为下载缓存接口
                         $redis->setex($_GET['file'], 30, $result['url']);
+                        header('X-Download-Source: oss');
                         header("location:{$result['url']}");
                         exit;
                     }else{
@@ -299,6 +302,7 @@ if($oss){
                         }
                         $redis->select(5);//选择数据库5，作为下载缓存接口
                         $redis->setex($_GET['file'], 30, $result['url']);
+                        header('X-Download-Source: oss');
                         header("location:{$result['url']}");
                         exit;
                     }else{
@@ -349,6 +353,7 @@ if($diydown && !empty($downurl)){
     $downurl = $downurl . "?type={$down_type}&filename={$filename}&name={$downloadName}&speed={$speed}";//得到下载服务器需要的链接
     $redis->select(5);//选择数据库5，作为下载缓存接口
     $redis->setex($_GET['file'], 30, $downurl);
+    header('X-Download-Source: diy');
     header("location:{$downurl}");
     exit;
 }
@@ -362,6 +367,13 @@ $start = 0;
 $end = $fileSize - 1;
 $length = $fileSize;
 $statusCode = 200;
+
+if (shouldBlockRailwayDirectReleaseDownload($down_type, $fileSize)) {
+    http_response_code(503);
+    header('Content-Type: text/plain; charset=utf-8');
+    header('X-Download-Source: blocked-railway-direct');
+    exit('大文件下载通道生成失败：当前生产环境不允许通过 Railway/PHP 直连下载大 APK，请稍后重试或联系管理员检查 OSS/下载服配置。');
+}
 
 // 处理断点续传 Range 头
 if (!empty($_SERVER['HTTP_RANGE']) && preg_match('/bytes=(\d*)-(\d*)/i', $_SERVER['HTTP_RANGE'], $matches)) {
@@ -413,6 +425,7 @@ header('Cache-Control: must-revalidate');
 header('Pragma: public');
 header('Expires: 0');
 header('X-Accel-Buffering: no');
+header('X-Download-Source: php-direct');
 
 // 打开文件并分段输出（防止爆内存）
 $fp = fopen($filePath, 'rb');
@@ -499,6 +512,25 @@ function getSignedUrlForLargeDownload(OSS $ossObj, string $ossPath, string $loca
     $ttl = max((int)$requestedSeconds, (int)OSS_SIGNED_URL_MIN_SECONDS, $estimatedSeconds + 1800);
 
     return $ossObj->getSignedUrl($ossPath, $speedLimit, $ttl);
+}
+
+function shouldBlockRailwayDirectReleaseDownload(string $downType, int $fileSize): bool {
+    if ($downType !== 'release' || !isRailwayRuntime()) {
+        return false;
+    }
+
+    $maxBytes = (int)(getenv('DIRECT_RELEASE_MAX_BYTES') ?: (8 * 1024 * 1024));
+    return $fileSize > max(1024 * 1024, $maxBytes);
+}
+
+function isRailwayRuntime(): bool {
+    foreach (['RAILWAY_ENVIRONMENT', 'RAILWAY_SERVICE_NAME', 'RAILWAY_PROJECT_ID'] as $key) {
+        if (getenv($key)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 
