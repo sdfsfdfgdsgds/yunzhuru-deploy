@@ -47,7 +47,14 @@ chmod -R 777 /var/www/html/temp
 for dir in icon release signfile templates; do
     mkdir -p /var/www/html/uploads/$dir
     if [ -d "/var/www/html/$dir" ] && [ ! -L "/var/www/html/$dir" ]; then
-        cp -rn /var/www/html/$dir/* /var/www/html/uploads/$dir/ 2>/dev/null || true
+        if [ "$dir" = "templates" ]; then
+            # 内置壳模板属于代码发布产物，同名文件必须随新镜像覆盖到持久化卷。
+            cp -rf /var/www/html/$dir/* /var/www/html/uploads/$dir/ 2>/dev/null || true
+            echo "[entrypoint] 内置 templates 已同步到持久化目录"
+        else
+            # 用户上传和产物目录只补齐缺失文件，避免部署覆盖用户数据。
+            cp -rn /var/www/html/$dir/* /var/www/html/uploads/$dir/ 2>/dev/null || true
+        fi
         rm -rf /var/www/html/$dir
     fi
     if [ ! -L "/var/www/html/$dir" ]; then
