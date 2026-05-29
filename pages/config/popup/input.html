@@ -204,7 +204,7 @@
             <el-select
               v-model="buttonClickParamAssetIds"
               multiple
-              :multiple-limit="1"
+              :multiple-limit="clickParam.multipleLimit(buttonForm.click)"
               filterable
               clearable
               placeholder="选择事件参数资源"
@@ -459,6 +459,7 @@ const buttonForm = reactive({
   click: 0,
   clickText: '',
   clickParamAssetId: null,
+  clickParamAssetIds: [],
   dismiss: true
 })
 const clickTextTip = ref('无参数')
@@ -471,7 +472,7 @@ const clickParamLabel = ClickParamAsset.paramLabel
 const clickParamPlaceholder = ClickParamAsset.paramPlaceholder
 const clickTextInputType = ClickParamAsset.paramInputType
 const buttonClickParamAssetIds = computed({
-  get: () => clickParam.toIdList(buttonForm.clickParamAssetId),
+  get: () => clickParam.toIdList(buttonForm.clickParamAssetIds || buttonForm.clickParamAssetId),
   set: ids => applyButtonClickParamAsset(ids)
 })
 const selectedButtonClickParamAssets = computed(() => clickParam.selected(buttonClickParamAssetIds.value))
@@ -483,6 +484,7 @@ function updateClickTextTip(val) {
 
 function onButtonClickActionChange(val) {
   buttonForm.clickParamAssetId = null;
+  buttonForm.clickParamAssetIds = [];
   buttonForm.clickText = '';
   updateClickTextTip(val);
   if (hasClickParam(val)) {
@@ -491,7 +493,7 @@ function onButtonClickActionChange(val) {
 }
 
 function applyButtonClickParamAsset(assetId) {
-  clickParam.applySelection(buttonForm, 'click', 'clickText', 'clickParamAssetId', assetId);
+  clickParam.applySelection(buttonForm, 'click', 'clickText', 'clickParamAssetId', assetId, 'clickParamAssetIds');
   updateClickTextTip(buttonForm.click);
 }
 
@@ -504,7 +506,7 @@ async function manageButtons(popupId) {
   });
 	  const json = await res.json();
 	  buttonList.value = json.data;
-	  buttonList.value.forEach(row => clickParam.merge(row.click_param_asset));
+	  buttonList.value.forEach(row => clickParam.merge(row.click_param_assets || row.click_param_asset));
 	  buttonDialogVisible.value = true;
 }
 
@@ -516,10 +518,11 @@ function openAddButtonDialog() {
     textcolor: '#FFFFFF',
 	    backgroundColor: '#008577',
 	    click: 0,
-	    clickText: '',
-	    clickParamAssetId: null,
-	    dismiss: true
-	  });
+		    clickText: '',
+		    clickParamAssetId: null,
+		    clickParamAssetIds: [],
+		    dismiss: true
+		  });
   clickTextTip.value = '无参数';
   addButtonDialogVisible.value = true;
 }
@@ -529,9 +532,10 @@ function editButton(row) {
   Object.assign(buttonForm, {
 	    ...row,
 	    click: Number(row.click || 0),
-	    dismiss: row.dismiss == 1,
-	    clickParamAssetId: row.click_param_asset_id || 0
-	  });
+		    dismiss: row.dismiss == 1,
+	    clickParamAssetId: row.click_param_asset_id || 0,
+	    clickParamAssetIds: Array.isArray(row.click_param_asset_ids) ? [...row.click_param_asset_ids] : clickParam.toIdList(row.click_param_asset_id)
+		  });
   updateClickTextTip(row.click);
   addButtonDialogVisible.value = true;
 }
@@ -546,15 +550,17 @@ async function submitAddButton() {
     title: buttonForm.title,
     textcolor: buttonForm.textcolor,
 	    backgroundColor: buttonForm.backgroundColor,
-	    click: buttonForm.click,
-	    clickText: buttonForm.clickText,
-	    clickParamAssetId: buttonForm.clickParamAssetId || 0,
-	    dismiss: buttonForm.dismiss ? 1 : 0
-	  };
-	  if (!hasClickParam(buttonForm.click)) {
+		    click: buttonForm.click,
+		    clickText: buttonForm.clickText,
+		    clickParamAssetId: buttonForm.clickParamAssetId || 0,
+		    clickParamAssetIds: buttonClickParamAssetIds.value,
+		    dismiss: buttonForm.dismiss ? 1 : 0
+		  };
+		  if (!hasClickParam(buttonForm.click)) {
 	    payload.clickText = '';
 	    payload.clickParamAssetId = 0;
-	  } else if (!buttonForm.clickParamAssetId && !String(buttonForm.clickText || '').trim()) {
+	    payload.clickParamAssetIds = [];
+	  } else if (buttonClickParamAssetIds.value.length === 0 && !String(buttonForm.clickText || '').trim()) {
 	    ElementPlus.ElMessage.warning('请填写备用参数或选择事件参数资源');
 	    return;
 	  }

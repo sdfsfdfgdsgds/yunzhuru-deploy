@@ -1005,8 +1005,11 @@ function installDatabase(PDO $pdo)
         addForeignKeyIfNotExist($pdo, $clickParamAssetRefTable, 'asset_id', $clickParamAssetTable, 'id');
         addIndexIfNotExist($pdo, $clickParamAssetRefTable, 'idx_target', '`target_type`, `target_id`');
         addIndexIfNotExist($pdo, $clickParamAssetRefTable, 'idx_asset_id', '`asset_id`');
-        if (!indexExists($pdo, $clickParamAssetRefTable, 'uniq_target')) {
-            $pdo->exec("ALTER TABLE `$clickParamAssetRefTable` ADD UNIQUE KEY `uniq_target` (`target_type`, `target_id`)");
+        if (indexExists($pdo, $clickParamAssetRefTable, 'uniq_target')) {
+            $pdo->exec("ALTER TABLE `$clickParamAssetRefTable` DROP INDEX `uniq_target`");
+        }
+        if (!indexExists($pdo, $clickParamAssetRefTable, 'uniq_target_asset')) {
+            $pdo->exec("ALTER TABLE `$clickParamAssetRefTable` ADD UNIQUE KEY `uniq_target_asset` (`target_type`, `target_id`, `asset_id`)");
         }
         
         // --------------------

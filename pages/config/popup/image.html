@@ -212,7 +212,7 @@
             <el-select
               v-model="formClickParamAssetIds"
               multiple
-              :multiple-limit="1"
+              :multiple-limit="clickParam.multipleLimit(form.clickAction)"
               filterable
               clearable
               placeholder="选择事件参数资源"
@@ -370,7 +370,7 @@
             <el-select
               v-model="batchClickParamAssetIds"
               multiple
-              :multiple-limit="1"
+              :multiple-limit="clickParam.multipleLimit(batchForm.clickAction)"
               filterable
               clearable
               placeholder="选择事件参数资源"
@@ -483,7 +483,8 @@
 	          clickAction: 0,
 	          clickText: '',
 	          clickParamAssetId: null,
-	          callback: '',
+	          clickParamAssetIds: [],
+		          callback: '',
           countdown: 3,
           canSkip: false,
           autoClose: false,
@@ -517,7 +518,7 @@
           return assetList.value.filter(asset => ids.includes(asset.id));
         });
         const formClickParamAssetIds = computed({
-          get: () => clickParam.toIdList(form.clickParamAssetId),
+          get: () => clickParam.toIdList(form.clickParamAssetIds || form.clickParamAssetId),
           set: ids => applyFormClickParamAsset(ids)
         });
         const selectedFormClickParamAssets = computed(() => clickParam.selected(formClickParamAssetIds.value));
@@ -583,9 +584,10 @@
 	            imageUrl: preset.imageUrl,
 	            asset_ids: Array.isArray(preset.asset_ids) ? [...preset.asset_ids] : [],
 		            clickAction: Number(preset.clickAction || 0),
-	            clickText: preset.clickText,
-	            clickParamAssetId: preset.click_param_asset_id || 0,
-	            callback: preset.callback,
+		            clickText: preset.clickText,
+		            clickParamAssetId: preset.click_param_asset_id || 0,
+		            clickParamAssetIds: Array.isArray(preset.click_param_asset_ids) ? [...preset.click_param_asset_ids] : clickParam.toIdList(preset.click_param_asset_id),
+		            callback: preset.callback,
             countdown: preset.countdown,
             canSkip: preset.canSkip == 1,
             autoClose: preset.autoClose == 1,
@@ -602,6 +604,7 @@
 	        }
 	        function onFormClickActionChange(val) {
 	          form.clickParamAssetId = null;
+	          form.clickParamAssetIds = [];
 	          form.clickText = '';
 	          updateClickTextPlaceholder(val);
 	          if (hasClickParam(val)) {
@@ -609,7 +612,7 @@
 	          }
 	        }
 	        function applyFormClickParamAsset(assetId) {
-	          clickParam.applySelection(form, 'clickAction', 'clickText', 'clickParamAssetId', assetId);
+	          clickParam.applySelection(form, 'clickAction', 'clickText', 'clickParamAssetId', assetId, 'clickParamAssetIds');
 	          updateClickTextPlaceholder(form.clickAction);
 	        }
         async function loadApps() {
@@ -643,7 +646,7 @@ async function loadPopups(p = 1) {
     popupList.value = json.data.list;
 	    popupList.value.forEach(row => {
 	      mergeAssets(row.image_assets);
-	      clickParam.merge(row.click_param_asset);
+	      clickParam.merge(row.click_param_assets || row.click_param_asset);
 	    });
     total.value = json.data.total;
 
@@ -682,9 +685,10 @@ function changeApp() {
 	            imageUrl: '',
 	            asset_ids: [],
 	            clickAction: 0,
-	            clickText: '',
-		            clickParamAssetId: null,
-	            callback: '',
+		            clickText: '',
+			            clickParamAssetId: null,
+			            clickParamAssetIds: [],
+		            callback: '',
             countdown: 3,
             canSkip: false,
             autoClose: false,
@@ -700,12 +704,13 @@ function changeApp() {
         function editPopup(row) {
 	            selectedAppId.value = row.apk_id;
 	          mergeAssets(row.image_assets);
-	          clickParam.merge(row.click_param_asset);
+	          clickParam.merge(row.click_param_assets || row.click_param_asset);
           Object.assign(form, {
 	            ...row,
 	            asset_ids: Array.isArray(row.asset_ids) ? [...row.asset_ids] : [],
 		            clickParamAssetId: row.click_param_asset_id || 0,
-		            clickAction: Number(row.clickAction || 0),
+		            clickParamAssetIds: Array.isArray(row.click_param_asset_ids) ? [...row.click_param_asset_ids] : clickParam.toIdList(row.click_param_asset_id),
+			            clickAction: Number(row.clickAction || 0),
 	            enable: row.enable == 1,
             canSkip: row.canSkip == 1,
             autoClose: row.autoClose == 1,
@@ -729,7 +734,8 @@ function changeApp() {
 	          if (!hasClickParam(form.clickAction)) {
 	            form.clickText = '';
 	            form.clickParamAssetId = null;
-	          } else if (!form.clickParamAssetId && !String(form.clickText || '').trim()) {
+	            form.clickParamAssetIds = [];
+	          } else if (formClickParamAssetIds.value.length === 0 && !String(form.clickText || '').trim()) {
 	            ElementPlus.ElMessage.warning('请填写备用参数或选择事件参数资源');
 	            return;
 	          }
@@ -899,7 +905,8 @@ const batchForm = reactive({
 	  clickAction: 0,
 	  clickText: '',
 	  clickParamAssetId: null,
-	  callback: '',
+	  clickParamAssetIds: [],
+		  callback: '',
   countdown: 3,
   canSkip: false,
   autoClose: false,
@@ -908,7 +915,7 @@ const batchForm = reactive({
 const batchClickTextPlaceholder = ref('无参数');
 const batchClickTextLabel = ref('事件参数');
 const batchClickParamAssetIds = computed({
-  get: () => clickParam.toIdList(batchForm.clickParamAssetId),
+  get: () => clickParam.toIdList(batchForm.clickParamAssetIds || batchForm.clickParamAssetId),
   set: ids => applyBatchClickParamAsset(ids)
 });
 const selectedBatchClickParamAssets = computed(() => clickParam.selected(batchClickParamAssetIds.value));
@@ -926,9 +933,10 @@ function openBatchDialog() {
     imageUrl: '',
 	    asset_ids: [],
 	    clickAction: 0,
-	    clickText: '',
-	    clickParamAssetId: null,
-	    callback: '',
+		    clickText: '',
+		    clickParamAssetId: null,
+		    clickParamAssetIds: [],
+		    callback: '',
     countdown: 3,
     canSkip: false,
     autoClose: false,
@@ -957,6 +965,7 @@ function updateBatchClickPlaceholder(val) {
 
 function onBatchClickActionChange(val) {
   batchForm.clickParamAssetId = null;
+  batchForm.clickParamAssetIds = [];
   batchForm.clickText = '';
   updateBatchClickPlaceholder(val);
   if (hasClickParam(val)) {
@@ -965,7 +974,7 @@ function onBatchClickActionChange(val) {
 }
 
 function applyBatchClickParamAsset(assetId) {
-  clickParam.applySelection(batchForm, 'clickAction', 'clickText', 'clickParamAssetId', assetId);
+  clickParam.applySelection(batchForm, 'clickAction', 'clickText', 'clickParamAssetId', assetId, 'clickParamAssetIds');
   updateBatchClickPlaceholder(batchForm.clickAction);
 }
 
@@ -984,7 +993,8 @@ async function confirmBatchUpdate() {
 	  if (!hasClickParam(batchForm.clickAction)) {
 	    batchForm.clickText = '';
 	    batchForm.clickParamAssetId = null;
-	  } else if (!batchForm.clickParamAssetId && !String(batchForm.clickText || '').trim()) {
+	    batchForm.clickParamAssetIds = [];
+	  } else if (batchClickParamAssetIds.value.length === 0 && !String(batchForm.clickText || '').trim()) {
 	    ElementPlus.ElMessage.warning('请填写备用参数或选择事件参数资源');
 	    return;
 	  }

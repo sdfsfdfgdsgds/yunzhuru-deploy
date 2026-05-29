@@ -137,7 +137,11 @@
 
   function firstId(value) {
     const ids = toIdList(value);
-    return ids.length > 0 ? ids[ids.length - 1] : 0;
+    return ids.length > 0 ? ids[0] : 0;
+  }
+
+  function multipleLimit(actionType) {
+    return toAction(actionType) === 1 ? 0 : 1;
   }
 
   function createStore(Vue, ElementPlus) {
@@ -178,11 +182,13 @@
     }
 
     function selected(value) {
-      const ids = new Set(toIdList(value));
-      if (ids.size === 0) {
+      const ids = toIdList(value);
+      if (ids.length === 0) {
         return [];
       }
-      return list.value.filter(item => ids.has(Number(item.id)));
+      return ids
+        .map(id => list.value.find(item => Number(item.id) === id))
+        .filter(Boolean);
     }
 
     async function load(actionType = null, p = page.value) {
@@ -299,11 +305,22 @@
       }
     }
 
-    function applySelection(target, actionField, textField, assetIdField, assetIds) {
-      const id = firstId(assetIds);
+    function applySelection(target, actionField, textField, assetIdField, assetIds, assetIdsField) {
+      const ids = toIdList(assetIds);
+      const assets = selected(ids);
+      const id = firstId(ids);
       target[assetIdField] = id || null;
-      if (id > 0) {
-        applyTo(target, actionField, textField, id, assetIdField);
+      if (assetIdsField) {
+        target[assetIdsField] = ids;
+      }
+      if (assets.length > 0) {
+        target[actionField] = Number(assets[0].action_type);
+        target[textField] = assets
+          .map(asset => asset.param_text || '')
+          .filter(Boolean)
+          .join('\n');
+      } else {
+        target[textField] = '';
       }
     }
 
@@ -323,6 +340,7 @@
       selected,
       toIdList,
       firstId,
+      multipleLimit,
       load,
       onSelectVisible,
       openDialog,
@@ -341,6 +359,7 @@
     paramLabel,
     paramPlaceholder,
     paramInputType,
+    multipleLimit,
     createStore
   };
 })();

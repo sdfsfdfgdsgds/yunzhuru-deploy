@@ -293,9 +293,12 @@ function getButtons(PDO $pdo, array $input) {
     $stmt = $pdo->prepare("SELECT * FROM cainiao_popup_message_button WHERE popup_id = ?");
     $stmt->execute([$input['popup_id']]);
     $list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    $assetMap = clickParamAssetFetchByTargets($pdo, 'popup_message_button', array_column($list, 'id'));
+    $assetMap = clickParamAssetFetchListByTargets($pdo, 'popup_message_button', array_column($list, 'id'));
     foreach ($list as &$row) {
-        $asset = $assetMap[(int)$row['id']] ?? null;
+        $assets = $assetMap[(int)$row['id']] ?? [];
+        $asset = $assets[0] ?? null;
+        $row['click_param_assets'] = $assets;
+        $row['click_param_asset_ids'] = array_map(fn($item) => (int)$item['id'], $assets);
         $row['click_param_asset'] = $asset;
         $row['click_param_asset_id'] = $asset ? (int)$asset['id'] : 0;
     }
@@ -313,7 +316,7 @@ function addButton(PDO $pdo, array $input) {
         throw new Exception('无权限');
     }
 
-    $clickParamAssetId = clickParamAssetReadIdFromInput($input);
+    $clickParamAssetIds = clickParamAssetReadIdsFromInput($input);
     $startedTransaction = !$pdo->inTransaction();
     if ($startedTransaction) {
         $pdo->beginTransaction();
@@ -332,7 +335,7 @@ function addButton(PDO $pdo, array $input) {
             !empty($input['dismiss']) ? 1 : 0
         ]);
         $buttonId = (int)$pdo->lastInsertId();
-        clickParamAssetSyncRef($pdo, 'popup_message_button', $buttonId, $clickParamAssetId, intval($input['click'] ?? 0), (int)$userId, $isAdmin);
+        clickParamAssetSyncRefs($pdo, 'popup_message_button', $buttonId, $clickParamAssetIds, intval($input['click'] ?? 0), (int)$userId, $isAdmin);
         if ($startedTransaction) {
             $pdo->commit();
         }
@@ -516,7 +519,7 @@ function editButton(PDO $pdo, array $input) {
         'clickText', 'dismiss'
     ];
     $hasClickParamAssetId = clickParamAssetHasIdInInput($input);
-    $clickParamAssetId = clickParamAssetReadIdFromInput($input);
+    $clickParamAssetIds = clickParamAssetReadIdsFromInput($input);
 
     $updates = [];
     $params = [':id' => $input['id']];
@@ -569,7 +572,7 @@ function editButton(PDO $pdo, array $input) {
         $stmt = $pdo->prepare($sql);
         $stmt->execute($params);
         if ($hasClickParamAssetId) {
-            clickParamAssetSyncRef($pdo, 'popup_message_button', (int)$input['id'], $clickParamAssetId, intval($input['click'] ?? 0), $userId, $isAdmin);
+            clickParamAssetSyncRefs($pdo, 'popup_message_button', (int)$input['id'], $clickParamAssetIds, intval($input['click'] ?? 0), $userId, $isAdmin);
         }
         if ($startedTransaction) {
             $pdo->commit();

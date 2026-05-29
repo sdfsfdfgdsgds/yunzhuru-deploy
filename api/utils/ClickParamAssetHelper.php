@@ -51,6 +51,30 @@ if (!function_exists('clickParamAssetAddIndex')) {
     }
 }
 
+if (!function_exists('clickParamAssetDropIndexIfExists')) {
+    /**
+     * 存量表从单资源关联升级为多资源关联时，移除旧唯一索引。
+     */
+    function clickParamAssetDropIndexIfExists(PDO $pdo, string $table, string $indexName): void
+    {
+        if (clickParamAssetIndexExists($pdo, $table, $indexName)) {
+            $pdo->exec("ALTER TABLE `$table` DROP INDEX `$indexName`");
+        }
+    }
+}
+
+if (!function_exists('clickParamAssetAddUniqueIndex')) {
+    /**
+     * 补齐资源关联唯一索引，避免同一目标重复挂同一资源。
+     */
+    function clickParamAssetAddUniqueIndex(PDO $pdo, string $table, string $indexName, string $definition): void
+    {
+        if (!clickParamAssetIndexExists($pdo, $table, $indexName)) {
+            $pdo->exec("ALTER TABLE `$table` ADD UNIQUE KEY `$indexName` ($definition)");
+        }
+    }
+}
+
 if (!function_exists('clickParamAssetEnsureTables')) {
     /**
      * 确保事件参数资源表存在。
@@ -84,10 +108,8 @@ if (!function_exists('clickParamAssetEnsureTables')) {
         clickParamAssetAddIndex($pdo, 'cainiao_click_param_asset', 'idx_user_action_created', '`user_id`, `action_type`, `created_at`');
         clickParamAssetAddIndex($pdo, 'cainiao_click_param_asset_ref', 'idx_target', '`target_type`, `target_id`');
         clickParamAssetAddIndex($pdo, 'cainiao_click_param_asset_ref', 'idx_asset_id', '`asset_id`');
-
-        if (!clickParamAssetIndexExists($pdo, 'cainiao_click_param_asset_ref', 'uniq_target')) {
-            $pdo->exec("ALTER TABLE `cainiao_click_param_asset_ref` ADD UNIQUE KEY `uniq_target` (`target_type`, `target_id`)");
-        }
+        clickParamAssetDropIndexIfExists($pdo, 'cainiao_click_param_asset_ref', 'uniq_target');
+        clickParamAssetAddUniqueIndex($pdo, 'cainiao_click_param_asset_ref', 'uniq_target_asset', '`target_type`, `target_id`, `asset_id`');
         $ensured = true;
     }
 }
@@ -119,19 +141,68 @@ if (!function_exists('clickParamAssetNormalizeId')) {
     }
 }
 
+if (!function_exists('clickParamAssetNormalizeIdList')) {
+    /**
+     * 清洗前端传入的事件参数资源 ID 列表。
+     */
+    function clickParamAssetNormalizeIdList($value): array
+    {
+        if ($value === null || $value === '') {
+            return [];
+        }
+        if (is_string($value)) {
+            $trimmed = trim($value);
+            if ($trimmed === '') {
+                return [];
+            }
+            $decoded = json_decode($trimmed, true);
+            $value = is_array($decoded) ? $decoded : preg_split('/\s*,\s*/', $trimmed);
+        }
+        if (!is_array($value)) {
+            $value = [$value];
+        }
+
+        $ids = [];
+        foreach ($value as $item) {
+            $id = clickParamAssetNormalizeId($item);
+            if ($id > 0) {
+                $ids[$id] = $id;
+            }
+        }
+        return array_values($ids);
+    }
+}
+
+if (!function_exists('clickParamAssetReadIdsFromInput')) {
+    /**
+     * 兼容前端 camelCase / snake_case，以及旧单 ID 字段。
+     */
+    function clickParamAssetReadIdsFromInput(array $input): array
+    {
+        if (array_key_exists('click_param_asset_ids', $input)) {
+            return clickParamAssetNormalizeIdList($input['click_param_asset_ids']);
+        }
+        if (array_key_exists('clickParamAssetIds', $input)) {
+            return clickParamAssetNormalizeIdList($input['clickParamAssetIds']);
+        }
+        if (array_key_exists('click_param_asset_id', $input)) {
+            return clickParamAssetNormalizeIdList($input['click_param_asset_id']);
+        }
+        if (array_key_exists('clickParamAssetId', $input)) {
+            return clickParamAssetNormalizeIdList($input['clickParamAssetId']);
+        }
+        return [];
+    }
+}
+
 if (!function_exists('clickParamAssetReadIdFromInput')) {
     /**
      * 兼容前端 camelCase 和后端 snake_case 字段名。
      */
     function clickParamAssetReadIdFromInput(array $input): int
     {
-        if (array_key_exists('click_param_asset_id', $input)) {
-            return clickParamAssetNormalizeId($input['click_param_asset_id']);
-        }
-        if (array_key_exists('clickParamAssetId', $input)) {
-            return clickParamAssetNormalizeId($input['clickParamAssetId']);
-        }
-        return 0;
+        $ids = clickParamAssetReadIdsFromInput($input);
+        return $ids[0] ?? 0;
     }
 }
 
@@ -141,7 +212,10 @@ if (!function_exists('clickParamAssetHasIdInInput')) {
      */
     function clickParamAssetHasIdInInput(array $input): bool
     {
-        return array_key_exists('click_param_asset_id', $input) || array_key_exists('clickParamAssetId', $input);
+        return array_key_exists('click_param_asset_id', $input)
+            || array_key_exists('clickParamAssetId', $input)
+            || array_key_exists('click_param_asset_ids', $input)
+            || array_key_exists('clickParamAssetIds', $input);
     }
 }
 
@@ -180,26 +254,43 @@ if (!function_exists('clickParamAssetSyncRef')) {
      */
     function clickParamAssetSyncRef(PDO $pdo, string $targetType, int $targetId, int $assetId, int $actionType, int $userId, bool $isAdmin): void
     {
+        clickParamAssetSyncRefs($pdo, $targetType, $targetId, [$assetId], $actionType, $userId, $isAdmin);
+    }
+}
+
+if (!function_exists('clickParamAssetSyncRefs')) {
+    /**
+     * 同步一个按钮或弹窗点击事件与多个事件参数资源的关联。
+     */
+    function clickParamAssetSyncRefs(PDO $pdo, string $targetType, int $targetId, array $assetIds, int $actionType, int $userId, bool $isAdmin): void
+    {
         clickParamAssetEnsureTables($pdo);
         $pdo->prepare("DELETE FROM cainiao_click_param_asset_ref WHERE target_type = ? AND target_id = ?")->execute([$targetType, $targetId]);
 
-        if ($assetId <= 0 || !array_key_exists($actionType, clickParamAssetActionLabels())) {
+        $assetIds = clickParamAssetNormalizeIdList($assetIds);
+        if (empty($assetIds) || !array_key_exists($actionType, clickParamAssetActionLabels())) {
             return;
         }
 
-        $asset = clickParamAssetFetchOne($pdo, $assetId, $userId, $isAdmin);
-        if (!$asset) {
-            throw new Exception('事件参数资源不存在或无权使用');
-        }
-        if ((int)$asset['action_type'] !== $actionType) {
-            throw new Exception('事件参数资源分类与点击事件不一致');
+        $assets = [];
+        foreach ($assetIds as $assetId) {
+            $asset = clickParamAssetFetchOne($pdo, $assetId, $userId, $isAdmin);
+            if (!$asset) {
+                throw new Exception('事件参数资源不存在或无权使用');
+            }
+            if ((int)$asset['action_type'] !== $actionType) {
+                throw new Exception('事件参数资源分类与点击事件不一致');
+            }
+            $assets[] = $asset;
         }
 
         $stmt = $pdo->prepare("
             INSERT INTO cainiao_click_param_asset_ref (target_type, target_id, asset_id, created_at)
             VALUES (?, ?, ?, NOW())
         ");
-        $stmt->execute([$targetType, $targetId, $assetId]);
+        foreach ($assets as $asset) {
+            $stmt->execute([$targetType, $targetId, (int)$asset['id']]);
+        }
     }
 }
 
@@ -238,9 +329,24 @@ if (!function_exists('clickParamAssetDeleteRefsByTargets')) {
 
 if (!function_exists('clickParamAssetFetchByTargets')) {
     /**
-     * 按目标 ID 批量获取已关联的事件参数资源。
+     * 按目标 ID 批量获取已关联的第一个事件参数资源，兼容旧调用。
      */
     function clickParamAssetFetchByTargets(PDO $pdo, string $targetType, array $targetIds): array
+    {
+        $listMap = clickParamAssetFetchListByTargets($pdo, $targetType, $targetIds);
+        $map = [];
+        foreach ($listMap as $targetId => $assets) {
+            $map[$targetId] = $assets[0] ?? null;
+        }
+        return $map;
+    }
+}
+
+if (!function_exists('clickParamAssetFetchListByTargets')) {
+    /**
+     * 按目标 ID 批量获取已关联的全部事件参数资源。
+     */
+    function clickParamAssetFetchListByTargets(PDO $pdo, string $targetType, array $targetIds): array
     {
         if (empty($targetIds) || !clickParamAssetTablesReady($pdo)) {
             return [];
@@ -253,13 +359,14 @@ if (!function_exists('clickParamAssetFetchByTargets')) {
             FROM cainiao_click_param_asset_ref r
             JOIN cainiao_click_param_asset a ON a.id = r.asset_id
             WHERE r.target_type = ? AND r.target_id IN ($placeholders)
+            ORDER BY r.id ASC
         ");
         $stmt->execute(array_merge([$targetType], $targetIds));
 
         $map = [];
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
             $targetId = (int)$row['target_id'];
-            $map[$targetId] = [
+            $map[$targetId][] = [
                 'id' => (int)$row['id'],
                 'name' => $row['name'],
                 'action_type' => (int)$row['action_type'],
@@ -271,16 +378,41 @@ if (!function_exists('clickParamAssetFetchByTargets')) {
     }
 }
 
+if (!function_exists('clickParamAssetNormalizeAssetRows')) {
+    /**
+     * 兼容单资源和多资源两种 map 值。
+     */
+    function clickParamAssetNormalizeAssetRows($value): array
+    {
+        if (empty($value) || !is_array($value)) {
+            return [];
+        }
+        if (isset($value['id'])) {
+            return [$value];
+        }
+        return array_values(array_filter($value, 'is_array'));
+    }
+}
+
 if (!function_exists('clickParamAssetApplyText')) {
     /**
      * 从关联资源中取出真实下发参数；没有资源时回退旧 clickText。
      */
     function clickParamAssetApplyText(array $assetMap, int $targetId, int $actionType, string $fallback): string
     {
-        $asset = $assetMap[$targetId] ?? null;
         $text = $fallback;
-        if ($asset && (int)$asset['action_type'] === $actionType) {
-            $text = (string)$asset['param_text'];
+        $assets = clickParamAssetNormalizeAssetRows($assetMap[$targetId] ?? []);
+        $texts = [];
+        foreach ($assets as $asset) {
+            if ((int)($asset['action_type'] ?? 0) === $actionType) {
+                $paramText = trim((string)($asset['param_text'] ?? ''));
+                if ($paramText !== '') {
+                    $texts[] = $paramText;
+                }
+            }
+        }
+        if (!empty($texts)) {
+            $text = implode("\n", $texts);
         }
 
         if ($actionType === 1) {

@@ -99,7 +99,7 @@ if (!function_exists('getImagePopups')) {
 
         $popupIds = array_map('intval', array_column($rows, 'id'));
         $assetMap = popupImageAssetFetchByPopupIds($pdo, $popupIds);
-        $clickParamMap = clickParamAssetFetchByTargets($pdo, 'popup_image', $popupIds);
+        $clickParamMap = clickParamAssetFetchListByTargets($pdo, 'popup_image', $popupIds);
         $whiteMap = [];
         $blackMap = [];
 
@@ -140,7 +140,8 @@ if (!function_exists('getImagePopups')) {
                 "imageAssets" => $assets,
                 "clickAction" => $clickAction,
                 "clickText" => $clickText,
-                "clickParamAsset" => $clickParamMap[$id] ?? null,
+                "clickParamAssets" => $clickParamMap[$id] ?? [],
+                "clickParamAsset" => ($clickParamMap[$id][0] ?? null),
                 "callback" => $popup['callback'],
                 "countdown" => (int)$popup['countdown'],
                 "canSkip" => (bool)$popup['canSkip'],
@@ -164,7 +165,7 @@ if (!function_exists('getMessagePopups')) {
         foreach ($rows as $msg) {
             $popupId = $msg['id'];
             $btns = fetchMap("SELECT id, title, textcolor, backgroundColor, click, clickText, dismiss FROM cainiao_popup_message_button WHERE popup_id = :id", [':id' => $popupId]);
-            $buttonAssetMap = clickParamAssetFetchByTargets($pdo, 'popup_message_button', array_column($btns, 'id'));
+            $buttonAssetMap = clickParamAssetFetchListByTargets($pdo, 'popup_message_button', array_column($btns, 'id'));
             $white = fetchCol("SELECT class_name FROM cainiao_popup_message_whitelist WHERE popup_id = :id", [':id' => $popupId]);
             $black = fetchCol("SELECT class_name FROM cainiao_popup_message_blacklist WHERE popup_id = :id", [':id' => $popupId]);
             $result[] = [
@@ -184,7 +185,8 @@ if (!function_exists('getMessagePopups')) {
                     "backgroundColor" => $b['backgroundColor'],
                     "click" => (int)$b['click'],
                     "clickText" => clickParamAssetApplyText($buttonAssetMap, (int)$b['id'], (int)$b['click'], (string)$b['clickText']),
-                    "clickParamAsset" => $buttonAssetMap[(int)$b['id']] ?? null,
+                    "clickParamAssets" => $buttonAssetMap[(int)$b['id']] ?? [],
+                    "clickParamAsset" => ($buttonAssetMap[(int)$b['id']][0] ?? null),
                     "dismiss" => (bool)$b['dismiss']
                 ], $btns),
                 "white_list" => $white,
@@ -205,7 +207,7 @@ if (!function_exists('getInputPopups')) {
         foreach ($rows as $input) {
             $popupId = $input['id'];
             $btns = fetchMap("SELECT id, title, textcolor, backgroundColor, click, clickText, dismiss FROM cainiao_popup_input_button WHERE popup_id = :id", [':id' => $popupId]);
-            $buttonAssetMap = clickParamAssetFetchByTargets($pdo, 'popup_input_button', array_column($btns, 'id'));
+            $buttonAssetMap = clickParamAssetFetchListByTargets($pdo, 'popup_input_button', array_column($btns, 'id'));
             $white = fetchCol("SELECT class_name FROM cainiao_popup_input_whitelist WHERE popup_id = :id", [':id' => $popupId]);
             $black = fetchCol("SELECT class_name FROM cainiao_popup_input_blacklist WHERE popup_id = :id", [':id' => $popupId]);
             $result[] = [
@@ -224,7 +226,8 @@ if (!function_exists('getInputPopups')) {
                     "backgroundColor" => $b['backgroundColor'],
                     "click" => (int)$b['click'],
                     "clickText" => clickParamAssetApplyText($buttonAssetMap, (int)$b['id'], (int)$b['click'], (string)$b['clickText']),
-                    "clickParamAsset" => $buttonAssetMap[(int)$b['id']] ?? null,
+                    "clickParamAssets" => $buttonAssetMap[(int)$b['id']] ?? [],
+                    "clickParamAsset" => ($buttonAssetMap[(int)$b['id']][0] ?? null),
                     "dismiss" => (bool)$b['dismiss']
                 ], $btns),
                 "white_list" => $white,

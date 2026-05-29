@@ -165,7 +165,7 @@ function getList(PDO $pdo, array $input)
     // 添加 apk_info 和 apk_id 字段
     $popupIds = array_column($list, 'id');
     $assetMap = popupImageAssetFetchByPopupIds($pdo, $popupIds);
-    $clickParamMap = clickParamAssetFetchByTargets($pdo, 'popup_image', $popupIds);
+    $clickParamMap = clickParamAssetFetchListByTargets($pdo, 'popup_image', $popupIds);
     foreach ($list as &$item) {
         $cid = $item['config_id'];
         if (isset($configApkMap[$cid])) {
@@ -178,7 +178,10 @@ function getList(PDO $pdo, array $input)
         $popupAssets = $assetMap[(int)$item['id']] ?? [];
         $item['image_assets'] = $popupAssets;
         $item['asset_ids'] = array_map(fn($asset) => (int)$asset['id'], $popupAssets);
-        $clickParamAsset = $clickParamMap[(int)$item['id']] ?? null;
+        $clickParamAssets = $clickParamMap[(int)$item['id']] ?? [];
+        $clickParamAsset = $clickParamAssets[0] ?? null;
+        $item['click_param_assets'] = $clickParamAssets;
+        $item['click_param_asset_ids'] = array_map(fn($asset) => (int)$asset['id'], $clickParamAssets);
         $item['click_param_asset'] = $clickParamAsset;
         $item['click_param_asset_id'] = $clickParamAsset ? (int)$clickParamAsset['id'] : 0;
     }
@@ -209,7 +212,7 @@ function addPopup(PDO $pdo, array $input)
     }
 
     $assetIds = popupImageAssetNormalizeIdList($input['asset_ids'] ?? []);
-    $clickParamAssetId = clickParamAssetReadIdFromInput($input);
+    $clickParamAssetIds = clickParamAssetReadIdsFromInput($input);
     $imageUrl = popupImageAssetNormalizeMultilineUrls((string)($input['imageUrl'] ?? ''));
     if ($imageUrl === '' && !empty($assetIds)) {
         $imageUrl = popupImageAssetFirstUrlByIds($pdo, $assetIds, $userId, $isAdmin);
@@ -255,7 +258,7 @@ function addPopup(PDO $pdo, array $input)
 
         $popupId = (int)$pdo->lastInsertId();
         popupImageAssetSyncRefs($pdo, $popupId, $assetIds, $userId, $isAdmin);
-        clickParamAssetSyncRef($pdo, 'popup_image', $popupId, $clickParamAssetId, intval($input['clickAction'] ?? 0), $userId, $isAdmin);
+        clickParamAssetSyncRefs($pdo, 'popup_image', $popupId, $clickParamAssetIds, intval($input['clickAction'] ?? 0), $userId, $isAdmin);
         if ($startedTransaction) {
             $pdo->commit();
         }
@@ -287,7 +290,7 @@ function editPopup(PDO $pdo, array $input)
     $hasAssetIds = array_key_exists('asset_ids', $input);
     $assetIds = popupImageAssetNormalizeIdList($input['asset_ids'] ?? []);
     $hasClickParamAssetId = clickParamAssetHasIdInInput($input);
-    $clickParamAssetId = clickParamAssetReadIdFromInput($input);
+    $clickParamAssetIds = clickParamAssetReadIdsFromInput($input);
     if ($hasAssetIds) {
         $imageUrl = popupImageAssetNormalizeMultilineUrls((string)($input['imageUrl'] ?? ''));
         if ($imageUrl === '' && !empty($assetIds)) {
@@ -365,7 +368,7 @@ function editPopup(PDO $pdo, array $input)
             popupImageAssetSyncRefs($pdo, (int)$input['id'], $assetIds, $userId, $isAdmin);
         }
         if ($hasClickParamAssetId) {
-            clickParamAssetSyncRef($pdo, 'popup_image', (int)$input['id'], $clickParamAssetId, intval($input['clickAction'] ?? 0), $userId, $isAdmin);
+            clickParamAssetSyncRefs($pdo, 'popup_image', (int)$input['id'], $clickParamAssetIds, intval($input['clickAction'] ?? 0), $userId, $isAdmin);
         }
         if ($startedTransaction) {
             $pdo->commit();
@@ -419,7 +422,7 @@ function batchUpdate(PDO $pdo, array $input)
     $hasAssetIds = array_key_exists('asset_ids', $input);
     $assetIds = popupImageAssetNormalizeIdList($input['asset_ids'] ?? []);
     $hasClickParamAssetId = clickParamAssetHasIdInInput($input);
-    $clickParamAssetId = clickParamAssetReadIdFromInput($input);
+    $clickParamAssetIds = clickParamAssetReadIdsFromInput($input);
     if ($hasAssetIds) {
         $imageUrl = popupImageAssetNormalizeMultilineUrls((string)($input['imageUrl'] ?? ''));
         if ($imageUrl === '' && !empty($assetIds)) {
@@ -495,7 +498,7 @@ function batchUpdate(PDO $pdo, array $input)
                 popupImageAssetSyncRefs($pdo, (int)$popupId, $assetIds, $userId, $isAdmin);
             }
             if ($hasClickParamAssetId) {
-                clickParamAssetSyncRef($pdo, 'popup_image', (int)$popupId, $clickParamAssetId, intval($input['clickAction'] ?? 0), $userId, $isAdmin);
+                clickParamAssetSyncRefs($pdo, 'popup_image', (int)$popupId, $clickParamAssetIds, intval($input['clickAction'] ?? 0), $userId, $isAdmin);
             }
         }
         if ($startedTransaction) {
