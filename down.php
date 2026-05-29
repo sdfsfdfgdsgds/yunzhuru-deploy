@@ -607,18 +607,16 @@ function tryRedirectMissingRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, st
     }
 
     $task = findInjectTaskByOutputFile($pdo, $filename);
-    if (!$task) {
-        return false;
-    }
-
-    foreach (buildRecordedBucketUrlCandidates($pdo, (int)$task['id']) as $candidate) {
-        if (probePublicBucketUrl($candidate['url'])) {
-            cacheAndRedirectBucketDownload($redis, $filename, $candidate['url'], 'bucket-record', $candidate['bucket_id']);
-            return true;
+    if ($task) {
+        foreach (buildRecordedBucketUrlCandidates($pdo, (int)$task['id']) as $candidate) {
+            if (probePublicBucketUrl($candidate['url'])) {
+                cacheAndRedirectBucketDownload($redis, $filename, $candidate['url'], 'bucket-record', $candidate['bucket_id']);
+                return true;
+            }
         }
     }
 
-    $dates = buildTaskDateCandidates($task);
+    $dates = $task ? buildTaskDateCandidates($task) : buildRecentDateCandidates();
     if (!$dates) {
         return false;
     }
@@ -703,6 +701,13 @@ function buildTaskDateCandidates(array $task): array {
     }
     $dates[] = date('Ymd');
     return array_values(array_unique($dates));
+}
+
+function buildRecentDateCandidates(): array {
+    return [
+        date('Ymd'),
+        date('Ymd', strtotime('-1 day')),
+    ];
 }
 
 function loadReleaseDownloadBuckets(PDO $pdo): array {
