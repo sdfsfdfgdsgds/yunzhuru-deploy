@@ -347,7 +347,6 @@ function handleInjectionTasks(PDO $pdo, $oss)
             ],
             // 词汇池：整体使用（中文 / 英文词）
             'words' => [
-                '你好','哈哈','世界', '操你妈','傻逼','看你妈呢', '小学生','滚犊子','傻狗','呆逼','快点叫爸爸',
                 // 品牌 / 项目相关
                 'yun','zhu','ru',
                 'dev','demo','sample','test',
@@ -2164,15 +2163,31 @@ function injectActivityWithXml2Axml($xml2axmlPath, $dir, $activityXml)
 function generateRandomPackageName($charPool, $segmentCount = 5, $segmentLength = 3)
 {
     $segments = [];
+    // DEX 改包后还要反编译成 smali 再回编译，包名段必须保持 ASCII Java 标识符。
+    $safeWords = array_values(array_filter($charPool['words'] ?? [], function ($word) {
+        return is_string($word) && preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $word);
+    }));
+    $firstLetters = array_values(array_filter($charPool['letters'] ?? [], function ($char) {
+        return is_string($char) && preg_match('/^[A-Za-z_]$/', $char);
+    }));
+    $bodyLetters = array_values(array_filter($charPool['letters'] ?? [], function ($char) {
+        return is_string($char) && preg_match('/^[A-Za-z0-9_]$/', $char);
+    }));
+    if (empty($firstLetters)) {
+        $firstLetters = range('a', 'z');
+    }
+    if (empty($bodyLetters)) {
+        $bodyLetters = array_merge(range('a', 'z'), range('0', '9'));
+    }
 
     for ($i = 0; $i < $segmentCount; $i++) {
 
         // 70% 概率使用词汇段
-        $useWord = !empty($charPool['words']) && rand(1, 100) <= 70;
+        $useWord = !empty($safeWords) && rand(1, 100) <= 70;
 
         // ===== 词汇段：单独成段 =====
         if ($useWord) {
-            $segments[] = $charPool['words'][array_rand($charPool['words'])];
+            $segments[] = $safeWords[array_rand($safeWords)];
             continue;
         }
 
@@ -2183,11 +2198,9 @@ function generateRandomPackageName($charPool, $segmentCount = 5, $segmentLength 
 
             if ($j === 0) {
                 // 首位不能是数字
-                do {
-                    $char = $charPool['letters'][array_rand($charPool['letters'])];
-                } while (is_numeric($char));
+                $char = $firstLetters[array_rand($firstLetters)];
             } else {
-                $char = $charPool['letters'][array_rand($charPool['letters'])];
+                $char = $bodyLetters[array_rand($bodyLetters)];
             }
 
             $segment .= $char;
