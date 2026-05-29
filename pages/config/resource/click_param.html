@@ -34,20 +34,20 @@
         placeholder="事件分类"
         clearable
         style="width: 180px"
-        @change="value => clickParam.load(value, 1)">
+        @change="value => loadParams(value, 1)">
         <el-option v-for="item in clickActionOptions" :key="item.value" :label="item.label" :value="item.value"></el-option>
       </el-select>
       <el-input
-        v-model="clickParam.keyword"
+        v-model="keyword"
         placeholder="搜索名称、参数或备注"
         clearable
         style="width: 320px"
-        @keyup.enter="clickParam.load(filterAction, 1)"></el-input>
-      <el-button @click="clickParam.load(filterAction, 1)">查询</el-button>
-      <el-button type="primary" @click="clickParam.openEdit(null, filterAction || 1)">新增参数</el-button>
+        @keyup.enter="loadParams(filterAction, 1)"></el-input>
+      <el-button @click="loadParams(filterAction, 1)">查询</el-button>
+      <el-button type="primary" @click="openEditDialog()">新增参数</el-button>
     </div>
 
-    <el-table :data="clickParam.list" border v-loading="clickParam.loading">
+    <el-table :data="list" border v-loading="loading">
       <el-table-column label="名称" prop="name" width="180"></el-table-column>
       <el-table-column label="事件分类" width="130">
         <template #default="scope">{{ clickActionLabel(scope.row.action_type) }}</template>
@@ -57,8 +57,8 @@
       <el-table-column label="更新时间" prop="updated_at" width="170"></el-table-column>
       <el-table-column label="操作" width="160" fixed="right">
         <template #default="scope">
-          <el-button size="small" type="primary" @click="clickParam.openEdit(scope.row)">编辑</el-button>
-          <el-button size="small" type="danger" @click="clickParam.remove(scope.row)">删除</el-button>
+          <el-button size="small" type="primary" @click="openEditDialog(scope.row)">编辑</el-button>
+          <el-button size="small" type="danger" @click="removeParam(scope.row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -67,36 +67,36 @@
       <el-pagination
         background
         layout="total, prev, pager, next"
-        :total="clickParam.total"
-        :page-size="clickParam.limit"
-        :current-page="clickParam.page"
-        @current-change="page => clickParam.load(filterAction, page)"></el-pagination>
+        :total="total"
+        :page-size="limit"
+        :current-page="page"
+        @current-change="page => loadParams(filterAction, page)"></el-pagination>
     </div>
 
-    <el-dialog v-model="clickParam.editVisible" :title="clickParam.editMode ? '编辑事件参数' : '新增事件参数'" width="560px">
-      <el-form :model="clickParam.form" label-width="90px">
+    <el-dialog v-model="editVisible" :title="editMode ? '编辑事件参数' : '新增事件参数'" width="560px">
+      <el-form :model="form" label-width="90px">
         <el-form-item label="参数名">
-          <el-input v-model="clickParam.form.name" placeholder="例如：官网链接、QQ群、卡密接口"></el-input>
+          <el-input v-model="form.name" placeholder="例如：官网链接、QQ群、卡密接口"></el-input>
         </el-form-item>
         <el-form-item label="事件分类">
-          <el-select v-model="clickParam.form.action_type" style="width: 100%">
+          <el-select v-model="form.action_type" style="width: 100%">
             <el-option v-for="item in clickActionOptions" :key="item.value" :label="item.label" :value="item.value"></el-option>
           </el-select>
         </el-form-item>
-        <el-form-item :label="clickParamLabel(clickParam.form.action_type)">
+        <el-form-item :label="clickParamLabel(form.action_type)">
           <el-input
-            :type="clickTextInputType(clickParam.form.action_type)"
-            v-model="clickParam.form.param_text"
+            :type="clickTextInputType(form.action_type)"
+            v-model="form.param_text"
             :rows="4"
-            :placeholder="clickParamPlaceholder(clickParam.form.action_type)"></el-input>
+            :placeholder="clickParamPlaceholder(form.action_type)"></el-input>
         </el-form-item>
         <el-form-item label="备注">
-          <el-input v-model="clickParam.form.remark"></el-input>
+          <el-input v-model="form.remark"></el-input>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="clickParam.editVisible = false">取消</el-button>
-        <el-button type="primary" @click="clickParam.submit">保存</el-button>
+        <el-button @click="editVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitParam">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -106,26 +106,68 @@
 
     createApp({
       setup() {
-        const clickParam = ClickParamAsset.createStore(Vue, ElementPlus);
+        const clickParamStore = ClickParamAsset.createStore(Vue, ElementPlus);
         const filterAction = ref(null);
+        const list = clickParamStore.list;
+        const page = clickParamStore.page;
+        const limit = clickParamStore.limit;
+        const total = clickParamStore.total;
+        const keyword = clickParamStore.keyword;
+        const loading = clickParamStore.loading;
+        const editVisible = clickParamStore.editVisible;
+        const editMode = clickParamStore.editMode;
+        const form = clickParamStore.form;
         const clickActionOptions = ClickParamAsset.ACTION_OPTIONS;
         const clickActionLabel = ClickParamAsset.actionLabel;
         const clickParamLabel = ClickParamAsset.paramLabel;
         const clickParamPlaceholder = ClickParamAsset.paramPlaceholder;
         const clickTextInputType = ClickParamAsset.paramInputType;
 
+        function loadParams(actionType = filterAction.value, targetPage = page.value) {
+          return clickParamStore.load(actionType, targetPage);
+        }
+
+        function openEditDialog(row = null) {
+          if (row) {
+            clickParamStore.openEdit(row);
+            return;
+          }
+          clickParamStore.openEdit(null, filterAction.value || 1);
+        }
+
+        function submitParam() {
+          return clickParamStore.submit();
+        }
+
+        function removeParam(row) {
+          return clickParamStore.remove(row);
+        }
+
         onMounted(() => {
-          clickParam.load(null, 1);
+          editVisible.value = false;
+          loadParams(null, 1);
         });
 
         return {
-          clickParam,
           filterAction,
+          list,
+          page,
+          limit,
+          total,
+          keyword,
+          loading,
+          editVisible,
+          editMode,
+          form,
           clickActionOptions,
           clickActionLabel,
           clickParamLabel,
           clickParamPlaceholder,
-          clickTextInputType
+          clickTextInputType,
+          loadParams,
+          openEditDialog,
+          submitParam,
+          removeParam
         };
       }
     }).use(ElementPlus).mount('#app');
