@@ -106,9 +106,11 @@ class S3Client {
      * @param string $objectKey    对象路径
      * @param string $filePath     本地文件路径
      * @param string $contentType  MIME 类型
+     * @param callable|null $progressCallback 上传进度回调
+     * @param array $extraHeaders 额外对象响应头，例如 Content-Disposition
      * @return array ['code' => 200|500, 'message' => string]
      */
-    public function putObjectFromFile($objectKey, $filePath, $contentType = 'application/octet-stream', $progressCallback = null) {
+    public function putObjectFromFile($objectKey, $filePath, $contentType = 'application/octet-stream', $progressCallback = null, array $extraHeaders = []) {
         $objectKey = ltrim($objectKey, '/');
         $uri = '/' . $this->bucket . '/' . $objectKey;
         $encodedUri = $this->uriEncodePath($uri);
@@ -127,6 +129,19 @@ class S3Client {
             'x-amz-content-sha256' => $payloadHash,
             'x-amz-date'          => $datetime,
         ];
+
+        // 允许下载链路为对象写入 Content-Disposition，这样公开桶重定向后仍按应用名保存。
+        foreach ($extraHeaders as $key => $value) {
+            $headerKey = strtolower(trim((string)$key));
+            $headerValue = trim((string)$value);
+            if ($headerKey === '' || $headerValue === '') {
+                continue;
+            }
+            if (in_array($headerKey, ['host', 'content-length', 'x-amz-content-sha256', 'x-amz-date'], true)) {
+                continue;
+            }
+            $headers[$headerKey] = $headerValue;
+        }
         ksort($headers);
 
         $canonicalHeaders = '';
@@ -158,6 +173,11 @@ class S3Client {
         $signature = hash_hmac('sha256', $stringToSign, $signingKey);
         $authorization = "AWS4-HMAC-SHA256 Credential={$this->accessKey}/{$scope}, SignedHeaders={$signedHeaders}, Signature={$signature}";
 
+        $curlHeaders = ["Authorization: {$authorization}"];
+        foreach ($headers as $key => $value) {
+            $curlHeaders[] = "{$key}: {$value}";
+        }
+
         // 流式上传
         $fp = fopen($filePath, 'r');
         if (!$fp) {
@@ -173,14 +193,7 @@ class S3Client {
             CURLOPT_INFILE         => $fp,
             CURLOPT_INFILESIZE     => $fileSize,
             CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_HTTPHEADER     => [
-                "Authorization: {$authorization}",
-                "Content-Type: {$contentType}",
-                "Content-Length: {$fileSize}",
-                "x-amz-content-sha256: {$payloadHash}",
-                "x-amz-date: {$datetime}",
-                "Host: {$this->host}",
-            ],
+            CURLOPT_HTTPHEADER     => $curlHeaders,
         ]);
 
         // 上传进度回调

@@ -200,7 +200,7 @@ class OSS {
 
 
     // 生成外网签名下载链接
-    public function getSignedUrl($fileName, $speedLimit = 245760000, $time = 600) {
+    public function getSignedUrl($fileName, $speedLimit = 245760000, $time = 600, $downloadName = '') {
         try {
             $ossClient = new OssClient($this->accessKeyId, $this->accessKeySecret, $this->endpoint);
             
@@ -214,6 +214,13 @@ class OSS {
             $options = [
                 OssClient::OSS_TRAFFIC_LIMIT => $speedLimit,
             ];
+            $contentDisposition = $this->buildContentDispositionHeader($downloadName);
+            if ($contentDisposition !== '') {
+                // 签名 URL 必须把响应头覆盖参数一起签进去，不能生成后再拼 query。
+                $options[OssClient::OSS_QUERY_STRING] = [
+                    'response-content-disposition' => $contentDisposition
+                ];
+            }
             $signedUrl = $ossClient->signUrl($this->bucket, $fileName, $time, "GET", $options); // 有效期10分钟
             $parsedUrl = parse_url($signedUrl);
             $customSignedUrl = $this->customDomain . $parsedUrl['path'] . '?' . $parsedUrl['query'];
@@ -232,12 +239,21 @@ class OSS {
     }
 
     // 上传文件(内网通道)
-    public function uploadFile($localFilePath, $ossFilePath) {
+    public function uploadFile($localFilePath, $ossFilePath, $downloadName = '') {
         try {
             $ossClient = new OssClient($this->accessKeyId, $this->accessKeySecret, $this->internalEndpoint);
 
+            $options = [];
+            $contentDisposition = $this->buildContentDispositionHeader($downloadName);
+            if ($contentDisposition !== '') {
+                // 临时 OSS 对象也写入下载名，兼容不使用响应头覆盖参数的客户端。
+                $options[OssClient::OSS_HEADERS] = [
+                    OssClient::OSS_CONTENT_DISPOSTION => $contentDisposition
+                ];
+            }
+
             // 上传文件
-            $ossClient->uploadFile($this->bucket, $ossFilePath, $localFilePath);
+            $ossClient->uploadFile($this->bucket, $ossFilePath, $localFilePath, $options);
 
             return [
                 'code' => 200,
@@ -250,6 +266,34 @@ class OSS {
                 'message' => '上传失败：' . $e->getMessage()
             ];
         }
+    }
+
+    private function buildContentDispositionHeader($downloadName) {
+        $name = trim((string)$downloadName);
+        if ($name === '') {
+            return '';
+        }
+
+        // 下载名进入 HTTP 响应头前要去掉路径字符和控制字符，避免头注入或跨平台非法文件名。
+        $name = preg_replace('/[\x00-\x1F\x7F]+/', '', $name);
+        $name = preg_replace('/[<>:"\/\\\\|?*]+/u', '_', $name);
+        $name = preg_replace('/\s+/u', ' ', $name);
+        $name = trim($name, " ._\t\n\r\0\x0B");
+        if ($name === '') {
+            return '';
+        }
+        if (strtolower(substr($name, -4)) !== '.apk') {
+            $name .= '.apk';
+        }
+
+        $asciiName = preg_replace('/[^A-Za-z0-9._-]+/', '_', $name);
+        $asciiName = trim($asciiName, '._-');
+        if ($asciiName === '' || strtolower(substr($asciiName, -4)) !== '.apk') {
+            $asciiName = 'download.apk';
+        }
+
+        $asciiName = addcslashes($asciiName, "\\\"");
+        return 'attachment; filename="' . $asciiName . '"; filename*=UTF-8\'\'' . rawurlencode($name);
     }
     
     //删除oss中的文件

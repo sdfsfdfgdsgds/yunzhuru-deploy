@@ -2,6 +2,7 @@
 
 $filename = $_GET['file'] ?? '';
 $downloadName = $_GET['name'] ?? '';
+$downloadCacheKey = buildDownloadCacheKey($filename, $downloadName);
 $isCheck = isset($_GET['check']) && $_GET['check'] === '1';
 $debug = $_GET['debug'] ?? '';//如果有值，则不记录高速下载次数
 $debug_pass = 'yunzhuru';
@@ -19,7 +20,7 @@ if (!defined('OSS_SIGNED_URL_MIN_SECONDS')) {
 
 require_once __DIR__ . '/config/redis.php';
 $redis = getRedisConnection(5);
-$exists = $redis->get($_GET['file']);
+$exists = $redis->get($downloadCacheKey);
 if($exists !== false){
     header('X-Download-Source: cached-redirect');
     header("location:{$exists}");
@@ -170,7 +171,13 @@ if($down_type == 'release'){
     
     header("IP:{$ip}");
     header("IpLocation:" . iconv('UTF-8', 'GBK', $IpLocation));
-    $stmtTask = $pdo->prepare("SELECT * FROM `cainiao_inject_task` WHERE injected_apk = :filename LIMIT 1");
+    $stmtTask = $pdo->prepare("
+        SELECT t.*, a.name AS apk_name
+        FROM `cainiao_inject_task` t
+        LEFT JOIN `cainiao_apk` a ON a.id = t.apk_id
+        WHERE t.injected_apk = :filename
+        LIMIT 1
+    ");
     $stmtTask->execute([':filename' => $filename]);
     $task = $stmtTask->fetch(PDO::FETCH_ASSOC);
     if (!$task) {
@@ -193,6 +200,13 @@ if($down_type == 'release'){
         }
     }
 }
+
+// 确定最终下载文件名：优先使用前端传入的应用名，其次回退到任务关联的应用名，最后才使用内部存储文件名。
+$fallbackDownloadName = basename($filePath);
+if (!empty($task['apk_name'])) {
+    $fallbackDownloadName = $task['apk_name'];
+}
+$downloadName = normalizeDownloadName($downloadName, $fallbackDownloadName);
 //此时已经拿到了全部参数了
 if($_GET['debug'] == 'yunzhuru'){
     $oss = false;//调试机不走oss通道下载
@@ -213,7 +227,7 @@ if($oss){
         // 下载次数超限，走常规下载流程
         // 下载次数超限，且开启了OSS通道，走限速下载流程
         if($task['size'] > $ossmini){
-            $result = $ossObj->uploadFile($filePath, $newFilePath);
+            $result = $ossObj->uploadFile($filePath, $newFilePath, $downloadName);
             if($result['code'] == 200){
                 $speedLimit = 819200 * 3 ;//限制为100kb/秒
                 $time = 600;
@@ -227,13 +241,13 @@ if($oss){
                     $speedLimit = 8192000 * 20;//VIP用户，2000KB
                     $time = 600;
                 }
-                $result = getSignedUrlForLargeDownload($ossObj, $newFilePath, $filePath, $speedLimit, $time);
+                $result = getSignedUrlForLargeDownload($ossObj, $newFilePath, $filePath, $speedLimit, $time, $downloadName);
                 if($result['code'] == 200){
                     if($debug !== $debug_pass){
                         recordDownload($pdo, $task['id'], $ip, $IpLocation, $task['size'], $_SERVER['HTTP_USER_AGENT'], 'oss', $newFilePath);//记录下载
                     }
                     $redis->select(5);//选择数据库5，作为下载缓存接口
-                    $redis->setex($_GET['file'], 30, $result['url']);
+                    $redis->setex($downloadCacheKey, 30, $result['url']);
                     header('X-Download-Source: oss');
                     header("location:{$result['url']}");
                     exit;
@@ -252,16 +266,16 @@ if($oss){
             //只有vip才能用
             if($user['isVip'] && $task['size'] > $ossmini){
                 //VIP用户，转存到oss并生成下载地址
-                $result = $ossObj->uploadFile($filePath, $newFilePath);
+                $result = $ossObj->uploadFile($filePath, $newFilePath, $downloadName);
                 if($result['code'] == 200){
                     //上传成功,开始签名URL
-                    $result = getSignedUrlForLargeDownload($ossObj, $newFilePath, $filePath);
+                    $result = getSignedUrlForLargeDownload($ossObj, $newFilePath, $filePath, 245760000, 600, $downloadName);
                     if($result['code'] == 200){
                         if($debug !== $debug_pass){
                             recordDownload($pdo, $task['id'], $ip, $IpLocation, $task['size'], $_SERVER['HTTP_USER_AGENT'], 'oss', $newFilePath);//记录下载
                         }
                         $redis->select(5);//选择数据库5，作为下载缓存接口
-                        $redis->setex($_GET['file'], 30, $result['url']);
+                        $redis->setex($downloadCacheKey, 30, $result['url']);
                         header('X-Download-Source: oss');
                         header("location:{$result['url']}");
                         exit;
@@ -293,19 +307,19 @@ if($oss){
             }
             if($task['size'] > $ossmini){
                 //所有用户允许使用oss通道下载
-                $result = $ossObj->uploadFile($filePath, $newFilePath);
+                $result = $ossObj->uploadFile($filePath, $newFilePath, $downloadName);
                 if($result['code'] == 200){
                     //上传成功,开始签名URL
                     if($_GET['debug'] == 'yunzhuru'){
                         $speedLimit = 245760000;//调试机器不限速
                     }
-                    $result = getSignedUrlForLargeDownload($ossObj, $newFilePath, $filePath, $speedLimit, $time);
+                    $result = getSignedUrlForLargeDownload($ossObj, $newFilePath, $filePath, $speedLimit, $time, $downloadName);
                     if($result['code'] == 200){
                         if($debug !== $debug_pass){
                             recordDownload($pdo, $task['id'], $ip, $IpLocation, $task['size'], $_SERVER['HTTP_USER_AGENT'], 'oss', $newFilePath);//记录下载
                         }
                         $redis->select(5);//选择数据库5，作为下载缓存接口
-                        $redis->setex($_GET['file'], 30, $result['url']);
+                        $redis->setex($downloadCacheKey, 30, $result['url']);
                         header('X-Download-Source: oss');
                         header("location:{$result['url']}");
                         exit;
@@ -323,16 +337,6 @@ if($oss){
 }else{
     
     
-}
-
-
-// 确定最终下载文件名
-if (empty($downloadName)) {
-    $downloadName = basename($filePath);
-} else {
-    if (strtolower(substr($downloadName, -4)) !== '.apk') {
-        $downloadName .= '.apk';
-    }
 }
 
 
@@ -354,16 +358,22 @@ if($diydown && !empty($downurl)){
     if(!empty($task['id'])){
         recordDownload($pdo, $task['id'], $ip, $IpLocation, $task['size'], $_SERVER['HTTP_USER_AGENT'], 'diy', $filename);//记录下载
     }
-    $downurl = $downurl . "?type={$down_type}&filename={$filename}&name={$downloadName}&speed={$speed}";//得到下载服务器需要的链接
+    $separator = strpos($downurl, '?') === false ? '?' : '&';
+    $downurl = rtrim($downurl, '?&') . $separator . http_build_query([
+        'type' => $down_type,
+        'filename' => $filename,
+        'name' => $downloadName,
+        'speed' => $speed,
+    ], '', '&', PHP_QUERY_RFC3986);//得到下载服务器需要的链接
     $redis->select(5);//选择数据库5，作为下载缓存接口
-    $redis->setex($_GET['file'], 30, $downurl);
+    $redis->setex($downloadCacheKey, 30, $downurl);
     header('X-Download-Source: diy');
     header("location:{$downurl}");
     exit;
 }
 
 $fileSize = filesize($filePath);
-if (tryRedirectRailwayReleaseDownloadViaBuckets($pdo, $redis, $down_type, $filename, $filePath, $downloadName, $task ?? [], $ip, $IpLocation, $debug, $debug_pass)) {
+if (tryRedirectRailwayReleaseDownloadViaBuckets($pdo, $redis, $down_type, $filename, $filePath, $downloadName, $downloadCacheKey, $task ?? [], $ip, $IpLocation, $debug, $debug_pass)) {
     exit;
 }
 
@@ -425,7 +435,7 @@ if ($statusCode === 206) {
 
 // 通用下载头
 header('Content-Type: application/vnd.android.package-archive');
-header('Content-Disposition: attachment; filename="' . urlencode($downloadName) . '"');
+header('Content-Disposition: ' . buildContentDispositionHeaderValue($downloadName));
 header('Accept-Ranges: bytes');
 header('Content-Length: ' . $length);
 header('md5: ' . md5_file($filePath));
@@ -472,6 +482,50 @@ exit;
 
 
 
+function buildDownloadCacheKey(string $filename, string $downloadName): string {
+    $downloadName = trim($downloadName);
+    if ($downloadName === '') {
+        return $filename;
+    }
+
+    // 同一个内部文件可能用不同展示名下载，缓存 key 必须区分展示名，避免复用旧重定向。
+    return $filename . '|name:' . md5($downloadName);
+}
+
+function normalizeDownloadName(string $downloadName, string $fallbackName): string {
+    $name = trim($downloadName);
+    if ($name === '') {
+        $name = trim($fallbackName);
+    }
+
+    // 下载名只用于响应头和外部下载服务，清掉路径分隔符、控制字符和 Windows 不支持的文件名字符。
+    $name = preg_replace('/[\x00-\x1F\x7F]+/', '', $name);
+    $name = preg_replace('/[<>:"\/\\\\|?*]+/u', '_', $name);
+    $name = preg_replace('/\s+/u', ' ', $name);
+    $name = trim($name, " ._\t\n\r\0\x0B");
+
+    if ($name === '') {
+        $name = 'download';
+    }
+    if (strtolower(substr($name, -4)) !== '.apk') {
+        $name .= '.apk';
+    }
+
+    return $name;
+}
+
+function buildContentDispositionHeaderValue(string $downloadName): string {
+    $downloadName = normalizeDownloadName($downloadName, 'download.apk');
+    $asciiName = preg_replace('/[^A-Za-z0-9._-]+/', '_', $downloadName);
+    $asciiName = trim($asciiName, '._-');
+    if ($asciiName === '' || strtolower(substr($asciiName, -4)) !== '.apk') {
+        $asciiName = 'download.apk';
+    }
+
+    $asciiName = addcslashes($asciiName, "\\\"");
+    return 'attachment; filename="' . $asciiName . '"; filename*=UTF-8\'\'' . rawurlencode($downloadName);
+}
+
 function recordDownload($pdo, $task_id, $ip_address, $ip_location, $size, $user_agent, $source, $file) {
     $stmt = $pdo->prepare("INSERT INTO `cainiao_download_record` (task_id, ip_address, ip_location, size, user_agent, download_time, source, file) 
                            VALUES (:task_id, :ip_address, :ip_location, :size, :user_agent, NOW(), :source, :file)");
@@ -512,17 +566,17 @@ function cleanupExpiredOssDownloadFiles(PDO $pdo, OSS $ossObj) {
     }
 }
 
-function getSignedUrlForLargeDownload(OSS $ossObj, string $ossPath, string $localFilePath, int $speedLimit = 245760000, int $requestedSeconds = 600) {
+function getSignedUrlForLargeDownload(OSS $ossObj, string $ossPath, string $localFilePath, int $speedLimit = 245760000, int $requestedSeconds = 600, string $downloadName = '') {
     $fileSize = is_file($localFilePath) ? (int)filesize($localFilePath) : 0;
     // OSS 的 x-oss-traffic-limit 使用 bit/s，这里折算成 byte/s 估算下载耗时。
     $bytesPerSecond = max(1, (int)floor(max(1, $speedLimit) / 8));
     $estimatedSeconds = $fileSize > 0 ? (int)ceil($fileSize / $bytesPerSecond) : 0;
     $ttl = max((int)$requestedSeconds, (int)OSS_SIGNED_URL_MIN_SECONDS, $estimatedSeconds + 1800);
 
-    return $ossObj->getSignedUrl($ossPath, $speedLimit, $ttl);
+    return $ossObj->getSignedUrl($ossPath, $speedLimit, $ttl, $downloadName);
 }
 
-function tryRedirectRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, string $downType, string $filename, string $filePath, string $downloadName, array $task, string $ip, string $ipLocation, string $debug, string $debugPass): bool {
+function tryRedirectRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, string $downType, string $filename, string $filePath, string $downloadName, string $downloadCacheKey, array $task, string $ip, string $ipLocation, string $debug, string $debugPass): bool {
     if ($downType !== 'release' || !isRailwayRuntime() || !is_file($filePath)) {
         return false;
     }
@@ -559,6 +613,7 @@ function tryRedirectRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, string $d
     }
 
     $objectKey = 'release_downloads/' . date('Ymd') . '/' . basename($filename);
+    $contentDisposition = buildContentDispositionHeaderValue($downloadName);
     foreach ($buckets as $bucket) {
         try {
             $client = new S3Client(
@@ -568,7 +623,13 @@ function tryRedirectRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, string $d
                 $bucket['bucket'],
                 $bucket['region'] ?: 'auto'
             );
-            $result = $client->putObjectFromFile($objectKey, $filePath, 'application/vnd.android.package-archive');
+            $result = $client->putObjectFromFile(
+                $objectKey,
+                $filePath,
+                'application/vnd.android.package-archive',
+                null,
+                ['Content-Disposition' => $contentDisposition]
+            );
             if (($result['code'] ?? 500) !== 200) {
                 error_log('[DownloadBucket] 上传失败 bucket_id=' . $bucket['id'] . ' message=' . ($result['message'] ?? 'unknown'));
                 continue;
@@ -581,7 +642,7 @@ function tryRedirectRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, string $d
 
             if ($redis) {
                 $redis->select(5);
-                $redis->setex($_GET['file'], 3600, $url);
+                $redis->setex($downloadCacheKey, 3600, $url);
             }
 
             header('X-Download-Source: bucket');
