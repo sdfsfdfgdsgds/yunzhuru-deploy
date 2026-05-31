@@ -3361,7 +3361,7 @@ function createInjectTask(PDO $pdo, array $input)
     $inject_to_top = isset($input['inject_to_top']) ? (int)(bool)$input['inject_to_top'] : 0;
     $debug = isset($input['debug']) ? (int)(bool)$input['debug'] : 0;
     $allowHttp = isset($input['allow_http']) ? (int)(bool)$input['allow_http'] : 0;
-    $network = isset($input['network']) ? (int)(bool)$input['network'] : 1;
+    $network = isset($input['network']) ? (int)(bool)$input['network'] : 0;
     $jiagu = isset($input['jiagu']) ? (int)(bool)$input['jiagu'] : 0;
     $fake = isset($input['fake']) ? (int)(bool)$input['fake'] : 0;
     $vpncheck = isset($input['vpncheck']) ? (int)(bool)$input['vpncheck'] : 0;
@@ -4522,7 +4522,7 @@ function createTaskFromUrl(PDO $pdo, array $input)
     $mode = isset($input['mode']) ? (int)$input['mode'] : 3;
     $debug = (int)(bool)($input['debug'] ?? 0);
     $allowHttp = (int)(bool)($input['allow_http'] ?? 0);
-    $network = (int)(bool)($input['network'] ?? 1);
+    $network = (int)(bool)($input['network'] ?? 0);
     $jiagu = (int)(bool)($input['jiagu'] ?? 0);
     $fake = (int)(bool)($input['fake'] ?? 0);
     $vpncheck = (int)(bool)($input['vpncheck'] ?? 0);
