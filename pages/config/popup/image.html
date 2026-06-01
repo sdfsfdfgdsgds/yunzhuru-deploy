@@ -149,7 +149,7 @@
 
 
     <!-- 添加弹窗对话框 -->
-    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="600px">
+    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="900px">
       <el-form :model="form" label-width="100px">
         <el-form-item label="类型">
           <el-select v-model="form.popup_type">
@@ -298,7 +298,7 @@
       </el-table>
     </el-dialog>
 
-    <el-dialog v-model="batchDialogVisible" title="批量修改弹窗" width="600px">
+    <el-dialog v-model="batchDialogVisible" title="批量修改弹窗" width="900px">
         
 
       <el-form :model="batchForm" label-width="100px">
@@ -572,7 +572,7 @@
           return (Array.isArray(target.asset_ids) && target.asset_ids.length > 0) || !!String(target.imageUrl || '').trim();
         }
 
-        function applyPresetToForm(id) {
+        async function applyPresetToForm(id) {
           const preset = selectedPopups.value.find(p => p.id === id);
           if (!preset) return;
           mergeAssets(preset.image_assets);
@@ -594,8 +594,9 @@
             enable: preset.enable == 1
           });
         
-	          updateBatchClickPlaceholder(batchForm.clickAction);
-	        }
+		          updateBatchClickPlaceholder(batchForm.clickAction);
+		          await clickParam.restoreSelectionFromText(batchForm, 'clickAction', 'clickText', 'clickParamAssetId', 'clickParamAssetIds');
+		        }
 	        const clickTextPlaceholder = ref('无参数');
 	        const clickTextLabel = ref('事件参数');
 	        function updateClickTextPlaceholder(val) {
@@ -701,7 +702,7 @@ function changeApp() {
           editMode.value = false;
         }
 
-        function editPopup(row) {
+        async function editPopup(row) {
 	            selectedAppId.value = row.apk_id;
 	          mergeAssets(row.image_assets);
 	          clickParam.merge(row.click_param_assets || row.click_param_asset);
@@ -716,11 +717,12 @@ function changeApp() {
             autoClose: row.autoClose == 1,
             lock: row.lock == 1
           });
-          updateClickTextPlaceholder(form.clickAction);
-          if (assetList.value.length === 0) loadAssets(1);
-          dialogVisible.value = true;
-          editMode.value = true;
-        }
+	          updateClickTextPlaceholder(form.clickAction);
+	          if (assetList.value.length === 0) loadAssets(1);
+	          dialogVisible.value = true;
+	          editMode.value = true;
+	          await clickParam.restoreSelectionFromText(form, 'clickAction', 'clickText', 'clickParamAssetId', 'clickParamAssetIds');
+	        }
 
         async function submitForm() {
           if (!selectedAppId.value) {

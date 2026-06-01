@@ -145,6 +145,19 @@
     return normalized.length > 0 ? normalized : toIdList(fallback);
   }
 
+  function normalizeParamText(value) {
+    return String(value || '')
+      .split(/\r\n|\r|\n/)
+      .map(item => item.trim())
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  function firstKeyword(value) {
+    const lines = normalizeParamText(value).split('\n').filter(Boolean);
+    return lines[0] || '';
+  }
+
   function multipleLimit(actionType) {
     return toAction(actionType) === 1 ? 0 : 1;
   }
@@ -227,6 +240,31 @@
       return ids
         .map(id => rows.find(item => Number(item.id) === id))
         .filter(Boolean);
+    }
+
+    function inferIdsByText(actionType, text) {
+      const normalizedText = normalizeParamText(text);
+      if (!normalizedText) {
+        return [];
+      }
+      const textLines = new Set(normalizedText.split('\n').filter(Boolean));
+      return options(actionType)
+        .filter(item => {
+          const itemText = normalizeParamText(item.param_text);
+          if (!itemText) {
+            return false;
+          }
+          if (itemText === normalizedText) {
+            return true;
+          }
+          if (toAction(actionType) !== 1) {
+            return false;
+          }
+          const itemLines = itemText.split('\n').filter(Boolean);
+          return itemLines.length > 0 && itemLines.every(line => textLines.has(line));
+        })
+        .map(item => Number(item.id))
+        .filter(id => id > 0);
     }
 
     async function load(actionType = null, p = page.value) {
@@ -363,6 +401,43 @@
       }
     }
 
+    async function restoreSelectionFromText(target, actionField, textField, assetIdField, assetIdsField) {
+      const currentIds = idsOrFallback(target[assetIdsField], target[assetIdField]);
+      const actionType = toAction(target[actionField]);
+      const text = target[textField];
+      if (currentIds.length > 0 || !hasParam(actionType) || !normalizeParamText(text)) {
+        return [];
+      }
+
+      const cachedIds = inferIdsByText(actionType, text);
+      if (cachedIds.length > 0) {
+        target[assetIdField] = cachedIds[0];
+        target[assetIdsField] = multipleLimit(actionType) === 1 ? [cachedIds[0]] : cachedIds;
+        return target[assetIdsField];
+      }
+
+      const oldKeyword = keyword.value;
+      const lookupKeyword = firstKeyword(text);
+      if (!lookupKeyword) {
+        return [];
+      }
+      // 历史数据可能只有备用参数，没有资源关联；这里按参数内容反查同类资源用于回显。
+      keyword.value = lookupKeyword;
+      try {
+        await load(actionType, 1);
+      } finally {
+        keyword.value = oldKeyword;
+      }
+
+      const loadedIds = inferIdsByText(actionType, text);
+      if (loadedIds.length > 0) {
+        target[assetIdField] = loadedIds[0];
+        target[assetIdsField] = multipleLimit(actionType) === 1 ? [loadedIds[0]] : loadedIds;
+        return target[assetIdsField];
+      }
+      return [];
+    }
+
     return {
       list,
       page,
@@ -388,7 +463,8 @@
       submit,
       remove,
       applyTo,
-      applySelection
+      applySelection,
+      restoreSelectionFromText
     };
   }
 

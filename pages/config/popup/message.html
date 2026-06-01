@@ -89,7 +89,7 @@
         </el-pagination>
     </div>
     <!-- 添加/编辑弹窗 -->
-    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="600px">
+    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="760px">
       <el-form :model="form" label-width="100px">
         <el-form-item label="标题">
           <el-input v-model="form.title"></el-input>
@@ -161,7 +161,7 @@
       </el-table>
     </el-dialog>
     
-    <el-dialog v-model="addButtonDialogVisible" :title="buttonEditMode ? '编辑按钮' : '添加按钮'" width="500px">
+    <el-dialog v-model="addButtonDialogVisible" :title="buttonEditMode ? '编辑按钮' : '添加按钮'" width="760px">
   <el-form :model="buttonForm" label-width="100px">
     <el-form-item label="标题">
       <el-input v-model="buttonForm.title"></el-input>
@@ -500,7 +500,7 @@ function openAddButtonDialog() {
   addButtonDialogVisible.value = true;
 }
 
-function openEditButtonDialog(button) {
+async function openEditButtonDialog(button) {
   buttonEditMode.value = true;
   Object.assign(buttonForm, {
     ...button,
@@ -510,6 +510,7 @@ function openEditButtonDialog(button) {
   });
   updateClickTextTip(button.click);
   addButtonDialogVisible.value = true;
+  await clickParam.restoreSelectionFromText(buttonForm, 'click', 'clickText', 'clickParamAssetId', 'clickParamAssetIds');
 }
 		const buttonForm = reactive({
 		  title: '',
@@ -576,7 +577,7 @@ function openEditButtonDialog(button) {
   }
 }
 
-function editButton(row) {
+async function editButton(row) {
   buttonEditMode.value = true;
   Object.assign(buttonForm, {
 	    ...row,
@@ -588,6 +589,7 @@ function editButton(row) {
 			  });
   updateClickTextTip(row.click);
   addButtonDialogVisible.value = true;
+  await clickParam.restoreSelectionFromText(buttonForm, 'click', 'clickText', 'clickParamAssetId', 'clickParamAssetIds');
 }
 
 
