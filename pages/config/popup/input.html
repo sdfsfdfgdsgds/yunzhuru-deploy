@@ -99,7 +99,7 @@
 
 
     <!-- 弹窗编辑表单 -->
-    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="760px">
+    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="760px" top="4vh">
       <el-form :model="form" label-width="100px">
         <el-form-item label="标题">
           <el-input v-model="form.title"></el-input>
@@ -168,6 +168,7 @@
       v-model="addButtonDialogVisible"
       :title="buttonEditMode ? '编辑按钮' : '添加按钮'"
       width="760px"
+      top="4vh"
     >
         <el-alert title="点击事件为提交输入内容的时候,要目标接口返回字符串'ok'才会执行关闭窗口" type="info" style="margin-bottom: 20px"></el-alert>
         <el-alert title="按钮事件设置为“提交输入内容”，事件参数填写为：【https://api.yunzhuru.com/kami/】   即可对接本平台的卡密，注意后面的斜线,别复制漏了" type="error" style="margin-bottom: 20px"></el-alert>

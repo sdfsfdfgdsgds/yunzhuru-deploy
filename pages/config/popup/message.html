@@ -89,7 +89,7 @@
         </el-pagination>
     </div>
     <!-- 添加/编辑弹窗 -->
-    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="760px">
+    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="760px" top="4vh">
       <el-form :model="form" label-width="100px">
         <el-form-item label="标题">
           <el-input v-model="form.title"></el-input>
@@ -161,7 +161,7 @@
       </el-table>
     </el-dialog>
     
-    <el-dialog v-model="addButtonDialogVisible" :title="buttonEditMode ? '编辑按钮' : '添加按钮'" width="760px">
+    <el-dialog v-model="addButtonDialogVisible" :title="buttonEditMode ? '编辑按钮' : '添加按钮'" width="760px" top="4vh">
   <el-form :model="buttonForm" label-width="100px">
     <el-form-item label="标题">
       <el-input v-model="buttonForm.title"></el-input>

@@ -149,7 +149,7 @@
 
 
     <!-- 添加弹窗对话框 -->
-    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="900px">
+    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="900px" top="4vh">
       <el-form :model="form" label-width="100px">
         <el-form-item label="类型">
           <el-select v-model="form.popup_type">
@@ -298,7 +298,7 @@
       </el-table>
     </el-dialog>
 
-    <el-dialog v-model="batchDialogVisible" title="批量修改弹窗" width="900px">
+    <el-dialog v-model="batchDialogVisible" title="批量修改弹窗" width="900px" top="4vh">
         
 
       <el-form :model="batchForm" label-width="100px">
