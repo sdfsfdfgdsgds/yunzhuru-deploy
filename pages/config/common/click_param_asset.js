@@ -140,6 +140,11 @@
     return ids.length > 0 ? ids[0] : 0;
   }
 
+  function idsOrFallback(ids, fallback) {
+    const normalized = toIdList(ids);
+    return normalized.length > 0 ? normalized : toIdList(fallback);
+  }
+
   function multipleLimit(actionType) {
     return toAction(actionType) === 1 ? 0 : 1;
   }
@@ -153,6 +158,7 @@
     const total = Vue.ref(0);
     const keyword = Vue.ref('');
     const loading = Vue.ref(false);
+    const knownList = Vue.ref([]);
     const dialogVisible = Vue.ref(false);
     const editVisible = Vue.ref(false);
     const editMode = Vue.ref(false);
@@ -165,13 +171,44 @@
       remark: ''
     });
 
+    function cacheRows(assets) {
+      const rows = Array.isArray(assets) ? assets : [assets];
+      const existed = new Map(knownList.value.map(item => [Number(item.id), item]));
+      let changed = false;
+      rows.forEach(item => {
+        if (item && item.id) {
+          existed.set(Number(item.id), item);
+          changed = true;
+        }
+      });
+      if (changed) {
+        knownList.value = Array.from(existed.values());
+      }
+    }
+
+    function allKnownRows() {
+      const existed = new Map();
+      knownList.value.forEach(item => {
+        if (item && item.id) {
+          existed.set(Number(item.id), item);
+        }
+      });
+      list.value.forEach(item => {
+        if (item && item.id) {
+          existed.set(Number(item.id), item);
+        }
+      });
+      return Array.from(existed.values());
+    }
+
     function options(actionType) {
       const type = toAction(actionType);
-      return list.value.filter(item => Number(item.action_type) === type);
+      return allKnownRows().filter(item => Number(item.action_type) === type);
     }
 
     function merge(assets) {
       const rows = Array.isArray(assets) ? assets : [assets];
+      cacheRows(rows);
       const existed = new Set(list.value.map(item => Number(item.id)));
       rows.forEach(item => {
         if (item && item.id && !existed.has(Number(item.id))) {
@@ -186,8 +223,9 @@
       if (ids.length === 0) {
         return [];
       }
+      const rows = allKnownRows();
       return ids
-        .map(id => list.value.find(item => Number(item.id) === id))
+        .map(id => rows.find(item => Number(item.id) === id))
         .filter(Boolean);
     }
 
@@ -215,6 +253,7 @@
         const json = await res.json();
         if (json.code === 200) {
           list.value = json.data.list || [];
+          cacheRows(list.value);
           total.value = json.data.total || 0;
         } else {
           ElementPlus.ElMessage.error(json.message || '事件参数资源加载失败');
@@ -340,6 +379,7 @@
       selected,
       toIdList,
       firstId,
+      idsOrFallback,
       multipleLimit,
       load,
       onSelectVisible,

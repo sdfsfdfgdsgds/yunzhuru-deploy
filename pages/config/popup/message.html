@@ -506,7 +506,7 @@ function openEditButtonDialog(button) {
     ...button,
     click: Number(button.click || 0),
     clickParamAssetId: button.click_param_asset_id || 0,
-    clickParamAssetIds: Array.isArray(button.click_param_asset_ids) ? [...button.click_param_asset_ids] : clickParam.toIdList(button.click_param_asset_id)
+    clickParamAssetIds: clickParam.idsOrFallback(button.click_param_asset_ids, button.click_param_asset_id)
   });
   updateClickTextTip(button.click);
   addButtonDialogVisible.value = true;
@@ -522,7 +522,7 @@ function openEditButtonDialog(button) {
 		  dismiss: true
 		});
 		const buttonClickParamAssetIds = computed({
-		  get: () => clickParam.toIdList(buttonForm.clickParamAssetIds || buttonForm.clickParamAssetId),
+		  get: () => clickParam.idsOrFallback(buttonForm.clickParamAssetIds, buttonForm.clickParamAssetId),
 		  set: ids => applyButtonClickParamAsset(ids)
 		});
 		const selectedButtonClickParamAssets = computed(() => clickParam.selected(buttonClickParamAssetIds.value));
@@ -581,11 +581,11 @@ function editButton(row) {
   Object.assign(buttonForm, {
 	    ...row,
 	    click: Number(row.click || 0),
-	    dismiss: row.dismiss == 1,
-		    id: row.id,
-		    clickParamAssetId: row.click_param_asset_id || 0,
-		    clickParamAssetIds: Array.isArray(row.click_param_asset_ids) ? [...row.click_param_asset_ids] : clickParam.toIdList(row.click_param_asset_id)
-		  });
+		    dismiss: row.dismiss == 1,
+			    id: row.id,
+			    clickParamAssetId: row.click_param_asset_id || 0,
+			    clickParamAssetIds: clickParam.idsOrFallback(row.click_param_asset_ids, row.click_param_asset_id)
+			  });
   updateClickTextTip(row.click);
   addButtonDialogVisible.value = true;
 }

@@ -518,7 +518,7 @@
           return assetList.value.filter(asset => ids.includes(asset.id));
         });
         const formClickParamAssetIds = computed({
-          get: () => clickParam.toIdList(form.clickParamAssetIds || form.clickParamAssetId),
+          get: () => clickParam.idsOrFallback(form.clickParamAssetIds, form.clickParamAssetId),
           set: ids => applyFormClickParamAsset(ids)
         });
         const selectedFormClickParamAssets = computed(() => clickParam.selected(formClickParamAssetIds.value));
@@ -586,7 +586,7 @@
 		            clickAction: Number(preset.clickAction || 0),
 		            clickText: preset.clickText,
 		            clickParamAssetId: preset.click_param_asset_id || 0,
-		            clickParamAssetIds: Array.isArray(preset.click_param_asset_ids) ? [...preset.click_param_asset_ids] : clickParam.toIdList(preset.click_param_asset_id),
+		            clickParamAssetIds: clickParam.idsOrFallback(preset.click_param_asset_ids, preset.click_param_asset_id),
 		            callback: preset.callback,
             countdown: preset.countdown,
             canSkip: preset.canSkip == 1,
@@ -709,7 +709,7 @@ function changeApp() {
 	            ...row,
 	            asset_ids: Array.isArray(row.asset_ids) ? [...row.asset_ids] : [],
 		            clickParamAssetId: row.click_param_asset_id || 0,
-		            clickParamAssetIds: Array.isArray(row.click_param_asset_ids) ? [...row.click_param_asset_ids] : clickParam.toIdList(row.click_param_asset_id),
+		            clickParamAssetIds: clickParam.idsOrFallback(row.click_param_asset_ids, row.click_param_asset_id),
 			            clickAction: Number(row.clickAction || 0),
 	            enable: row.enable == 1,
             canSkip: row.canSkip == 1,
@@ -915,7 +915,7 @@ const batchForm = reactive({
 const batchClickTextPlaceholder = ref('无参数');
 const batchClickTextLabel = ref('事件参数');
 const batchClickParamAssetIds = computed({
-  get: () => clickParam.toIdList(batchForm.clickParamAssetIds || batchForm.clickParamAssetId),
+  get: () => clickParam.idsOrFallback(batchForm.clickParamAssetIds, batchForm.clickParamAssetId),
   set: ids => applyBatchClickParamAsset(ids)
 });
 const selectedBatchClickParamAssets = computed(() => clickParam.selected(batchClickParamAssetIds.value));

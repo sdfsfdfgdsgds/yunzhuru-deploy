@@ -472,7 +472,7 @@ const clickParamLabel = ClickParamAsset.paramLabel
 const clickParamPlaceholder = ClickParamAsset.paramPlaceholder
 const clickTextInputType = ClickParamAsset.paramInputType
 const buttonClickParamAssetIds = computed({
-  get: () => clickParam.toIdList(buttonForm.clickParamAssetIds || buttonForm.clickParamAssetId),
+  get: () => clickParam.idsOrFallback(buttonForm.clickParamAssetIds, buttonForm.clickParamAssetId),
   set: ids => applyButtonClickParamAsset(ids)
 })
 const selectedButtonClickParamAssets = computed(() => clickParam.selected(buttonClickParamAssetIds.value))
@@ -534,7 +534,7 @@ function editButton(row) {
 	    click: Number(row.click || 0),
 		    dismiss: row.dismiss == 1,
 	    clickParamAssetId: row.click_param_asset_id || 0,
-	    clickParamAssetIds: Array.isArray(row.click_param_asset_ids) ? [...row.click_param_asset_ids] : clickParam.toIdList(row.click_param_asset_id)
+	    clickParamAssetIds: clickParam.idsOrFallback(row.click_param_asset_ids, row.click_param_asset_id)
 		  });
   updateClickTextTip(row.click);
   addButtonDialogVisible.value = true;
