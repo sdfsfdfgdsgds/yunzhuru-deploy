@@ -37,7 +37,7 @@ function getList(PDO $pdo, array $input)
     $total = (int)$countStmt->fetchColumn();
 
     $stmt = $pdo->prepare("
-        SELECT id, user_id, name, action_type, param_text, remark, created_at, updated_at
+        SELECT id, user_id, name, action_type, param_text, enabled, remark, created_at, updated_at
         FROM cainiao_click_param_asset
         WHERE $whereSql
         ORDER BY id DESC
@@ -50,6 +50,7 @@ function getList(PDO $pdo, array $input)
         $row['id'] = (int)$row['id'];
         $row['user_id'] = (int)$row['user_id'];
         $row['action_type'] = (int)$row['action_type'];
+        $row['enabled'] = (int)$row['enabled'];
         $row['action_label'] = $labels[$row['action_type']] ?? '未知事件';
     }
     unset($row);
@@ -77,20 +78,22 @@ function addAsset(PDO $pdo, array $input)
     $paramText = clickParamAssetNormalizeText($actionType, (string)($input['param_text'] ?? ''));
     $name = trim((string)($input['name'] ?? ''));
     $remark = trim((string)($input['remark'] ?? ''));
+    $enabled = isset($input['enabled']) ? (!empty($input['enabled']) ? 1 : 0) : 1;
     if ($name === '') {
         $labels = clickParamAssetActionLabels();
         $name = ($labels[$actionType] ?? '事件参数') . '资源';
     }
 
     $stmt = $pdo->prepare("
-        INSERT INTO cainiao_click_param_asset (user_id, name, action_type, param_text, remark, created_at, updated_at)
-        VALUES (:uid, :name, :action_type, :param_text, :remark, NOW(), NOW())
+        INSERT INTO cainiao_click_param_asset (user_id, name, action_type, param_text, enabled, remark, created_at, updated_at)
+        VALUES (:uid, :name, :action_type, :param_text, :enabled, :remark, NOW(), NOW())
     ");
     $stmt->execute([
         ':uid' => $userId,
         ':name' => $name,
         ':action_type' => $actionType,
         ':param_text' => $paramText,
+        ':enabled' => $enabled,
         ':remark' => $remark,
     ]);
 
@@ -119,6 +122,7 @@ function editAsset(PDO $pdo, array $input)
     $paramText = clickParamAssetNormalizeText($actionType, (string)($input['param_text'] ?? ''));
     $name = trim((string)($input['name'] ?? ''));
     $remark = trim((string)($input['remark'] ?? ''));
+    $enabled = isset($input['enabled']) ? (!empty($input['enabled']) ? 1 : 0) : 1;
     if ($name === '') {
         $labels = clickParamAssetActionLabels();
         $name = ($labels[$actionType] ?? '事件参数') . '资源';
@@ -142,13 +146,14 @@ function editAsset(PDO $pdo, array $input)
     }
     $stmt = $pdo->prepare("
         UPDATE cainiao_click_param_asset
-        SET name = :name, action_type = :action_type, param_text = :param_text, remark = :remark, updated_at = NOW()
+        SET name = :name, action_type = :action_type, param_text = :param_text, enabled = :enabled, remark = :remark, updated_at = NOW()
         WHERE id = :id
     ");
     $stmt->execute([
         ':name' => $name,
         ':action_type' => $actionType,
         ':param_text' => $paramText,
+        ':enabled' => $enabled,
         ':remark' => $remark,
         ':id' => $id,
     ]);
@@ -158,6 +163,44 @@ function editAsset(PDO $pdo, array $input)
     }
 
     return ['message' => '更新成功'];
+}
+
+/**
+ * 设置事件参数资源启用状态。
+ */
+function setEnabled(PDO $pdo, array $input)
+{
+    clickParamAssetEnsureTables($pdo);
+    $user = Auth::check($pdo);
+    $userId = (int)$user['id'];
+    $isAdmin = ($user['role'] ?? '') === 'admin';
+
+    $id = (int)($input['id'] ?? 0);
+    if ($id <= 0) {
+        throw new Exception('缺少资源ID');
+    }
+    $enabled = !empty($input['enabled']) ? 1 : 0;
+
+    if ($isAdmin) {
+        $check = $pdo->prepare("SELECT id FROM cainiao_click_param_asset WHERE id = :id");
+        $check->execute([':id' => $id]);
+    } else {
+        $check = $pdo->prepare("SELECT id FROM cainiao_click_param_asset WHERE id = :id AND user_id = :uid");
+        $check->execute([':id' => $id, ':uid' => $userId]);
+    }
+    if (!$check->fetch()) {
+        throw new Exception('事件参数资源不存在或无权操作');
+    }
+
+    $affectedAppIds = clickParamAssetGetAffectedAppIds($pdo, $id);
+    $stmt = $pdo->prepare("UPDATE cainiao_click_param_asset SET enabled = :enabled, updated_at = NOW() WHERE id = :id");
+    $stmt->execute([':enabled' => $enabled, ':id' => $id]);
+
+    foreach ($affectedAppIds as $appId) {
+        Auth::afterConfigChange($pdo, $appId);
+    }
+
+    return ['message' => $enabled === 1 ? '已启用' : '已停用'];
 }
 
 /**

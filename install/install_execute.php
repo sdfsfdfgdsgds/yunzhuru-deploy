@@ -940,6 +940,7 @@ function installDatabase(PDO $pdo)
             'user_id'    => "INT NOT NULL COMMENT '所属用户ID'",
             'name'       => "VARCHAR(100) NOT NULL DEFAULT '' COMMENT '图片名称'",
             'url'        => "TEXT NOT NULL COMMENT '图片链接'",
+            'enabled'    => "TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用'",
             'remark'     => "VARCHAR(255) NOT NULL DEFAULT '' COMMENT '备注'",
             'created_at' => "DATETIME NOT NULL COMMENT '创建时间'",
             'updated_at' => "DATETIME NOT NULL COMMENT '更新时间'"
@@ -985,6 +986,7 @@ function installDatabase(PDO $pdo)
             'name'        => "VARCHAR(100) NOT NULL DEFAULT '' COMMENT '参数资源名称'",
             'action_type' => "TINYINT NOT NULL DEFAULT 1 COMMENT '事件类型'",
             'param_text'  => "TEXT NOT NULL COMMENT '事件参数内容'",
+            'enabled'     => "TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用'",
             'remark'      => "VARCHAR(255) NOT NULL DEFAULT '' COMMENT '备注'",
             'created_at'  => "DATETIME NOT NULL COMMENT '创建时间'",
             'updated_at'  => "DATETIME NOT NULL COMMENT '更新时间'"

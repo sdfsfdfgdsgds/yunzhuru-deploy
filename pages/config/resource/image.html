@@ -62,6 +62,13 @@
         </template>
       </el-table-column>
       <el-table-column label="图片名" prop="name" width="180"></el-table-column>
+      <el-table-column label="状态" width="100" align="center">
+        <template #default="scope">
+          <el-switch
+            :model-value="scope.row.enabled === 1"
+            @change="toggleAssetStatus(scope.row)"></el-switch>
+        </template>
+      </el-table-column>
       <el-table-column label="图片链接" prop="url" show-overflow-tooltip></el-table-column>
       <el-table-column label="备注" prop="remark" width="180" show-overflow-tooltip></el-table-column>
       <el-table-column label="更新时间" prop="updated_at" width="170"></el-table-column>
@@ -90,6 +97,9 @@
         </el-form-item>
         <el-form-item label="图片链接">
           <el-input v-model="form.url"></el-input>
+        </el-form-item>
+        <el-form-item label="启用">
+          <el-switch v-model="form.enabled"></el-switch>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="form.remark"></el-input>
@@ -122,6 +132,7 @@
           id: null,
           name: '',
           url: '',
+          enabled: true,
           remark: ''
         });
 
@@ -160,6 +171,7 @@
               id: row.id,
               name: row.name || '',
               url: row.url || '',
+              enabled: Number(row.enabled ?? 1) === 1,
               remark: row.remark || ''
             });
           } else {
@@ -168,6 +180,7 @@
               id: null,
               name: '',
               url: '',
+              enabled: true,
               remark: ''
             });
           }
@@ -192,6 +205,24 @@
             await loadAssets(page.value);
           } else {
             ElementPlus.ElMessage.error(json.message || '保存失败');
+          }
+        }
+
+        async function toggleAssetStatus(row) {
+          const nextEnabled = Number(row.enabled || 0) === 1 ? 0 : 1;
+          const oldEnabled = Number(row.enabled || 0);
+          row.enabled = nextEnabled;
+          const res = await fetch('/api/index.php?module=popup_image_asset&method=setEnabled', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: row.id, enabled: nextEnabled })
+          });
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success(json.message || (nextEnabled === 1 ? '已启用' : '已停用'));
+          } else {
+            row.enabled = oldEnabled;
+            ElementPlus.ElMessage.error(json.message || '状态更新失败');
           }
         }
 
@@ -228,6 +259,7 @@
           loadAssets,
           openEditDialog,
           submitAsset,
+          toggleAssetStatus,
           deleteAsset
         };
       }

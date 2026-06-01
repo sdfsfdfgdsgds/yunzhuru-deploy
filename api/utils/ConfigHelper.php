@@ -124,14 +124,22 @@ if (!function_exists('getImagePopups')) {
             $id = (int)$popup['id'];
             $assets = $assetMap[$id] ?? [];
             $imageUrl = popupImageAssetPickUrl($assets);
-            if ($imageUrl === '') {
+            if ($imageUrl === '' && empty($assets)) {
                 $urls = preg_split('/\r\n|\r|\n/', trim($popup['imageUrl']));
                 $urls = array_filter($urls);
                 $imageUrl = !empty($urls) ? $urls[array_rand($urls)] : '';
             }
+            // 关联了图片资源但全部停用时，不回退旧 imageUrl，避免停用资源继续被壳端加载。
+            if ($imageUrl === '') {
+                continue;
+            }
 
             $clickAction = (int)$popup['clickAction'];
+            $clickAssets = $clickParamMap[$id] ?? [];
             $clickText = clickParamAssetApplyText($clickParamMap, $id, $clickAction, (string)$popup['clickText']);
+            if (!empty($clickAssets) && $clickText === '') {
+                $clickAction = 0;
+            }
 
             $result[] = [
                 "id" => $id,
@@ -140,8 +148,8 @@ if (!function_exists('getImagePopups')) {
                 "imageAssets" => $assets,
                 "clickAction" => $clickAction,
                 "clickText" => $clickText,
-                "clickParamAssets" => $clickParamMap[$id] ?? [],
-                "clickParamAsset" => ($clickParamMap[$id][0] ?? null),
+                "clickParamAssets" => $clickAssets,
+                "clickParamAsset" => ($clickAssets[0] ?? null),
                 "callback" => $popup['callback'],
                 "countdown" => (int)$popup['countdown'],
                 "canSkip" => (bool)$popup['canSkip'],
@@ -179,16 +187,25 @@ if (!function_exists('getMessagePopups')) {
                 "popup_type" => $msg['popup_type'],
                 "interval" => $msg['interval'],
                 "lock" => (bool)$msg['lock'],
-                "button" => array_map(fn($b) => [
-                    "title" => $b['title'],
-                    "textcolor" => $b['textcolor'],
-                    "backgroundColor" => $b['backgroundColor'],
-                    "click" => (int)$b['click'],
-                    "clickText" => clickParamAssetApplyText($buttonAssetMap, (int)$b['id'], (int)$b['click'], (string)$b['clickText']),
-                    "clickParamAssets" => $buttonAssetMap[(int)$b['id']] ?? [],
-                    "clickParamAsset" => ($buttonAssetMap[(int)$b['id']][0] ?? null),
-                    "dismiss" => (bool)$b['dismiss']
-                ], $btns),
+                "button" => array_map(function ($b) use ($buttonAssetMap) {
+                    $buttonId = (int)$b['id'];
+                    $click = (int)$b['click'];
+                    $assets = $buttonAssetMap[$buttonId] ?? [];
+                    $clickText = clickParamAssetApplyText($buttonAssetMap, $buttonId, $click, (string)$b['clickText']);
+                    if (!empty($assets) && $clickText === '') {
+                        $click = 0;
+                    }
+                    return [
+                        "title" => $b['title'],
+                        "textcolor" => $b['textcolor'],
+                        "backgroundColor" => $b['backgroundColor'],
+                        "click" => $click,
+                        "clickText" => $clickText,
+                        "clickParamAssets" => $assets,
+                        "clickParamAsset" => ($assets[0] ?? null),
+                        "dismiss" => (bool)$b['dismiss']
+                    ];
+                }, $btns),
                 "white_list" => $white,
                 "black_list" => $black
             ];
@@ -220,16 +237,25 @@ if (!function_exists('getInputPopups')) {
                 "hint" => $input['hint'],
                 "lock" => (bool)$input['lock'],
                 "autopost" => (bool)$input['autopost'],
-                "button" => array_map(fn($b) => [
-                    "title" => $b['title'],
-                    "textcolor" => $b['textcolor'],
-                    "backgroundColor" => $b['backgroundColor'],
-                    "click" => (int)$b['click'],
-                    "clickText" => clickParamAssetApplyText($buttonAssetMap, (int)$b['id'], (int)$b['click'], (string)$b['clickText']),
-                    "clickParamAssets" => $buttonAssetMap[(int)$b['id']] ?? [],
-                    "clickParamAsset" => ($buttonAssetMap[(int)$b['id']][0] ?? null),
-                    "dismiss" => (bool)$b['dismiss']
-                ], $btns),
+                "button" => array_map(function ($b) use ($buttonAssetMap) {
+                    $buttonId = (int)$b['id'];
+                    $click = (int)$b['click'];
+                    $assets = $buttonAssetMap[$buttonId] ?? [];
+                    $clickText = clickParamAssetApplyText($buttonAssetMap, $buttonId, $click, (string)$b['clickText']);
+                    if (!empty($assets) && $clickText === '') {
+                        $click = 0;
+                    }
+                    return [
+                        "title" => $b['title'],
+                        "textcolor" => $b['textcolor'],
+                        "backgroundColor" => $b['backgroundColor'],
+                        "click" => $click,
+                        "clickText" => $clickText,
+                        "clickParamAssets" => $assets,
+                        "clickParamAsset" => ($assets[0] ?? null),
+                        "dismiss" => (bool)$b['dismiss']
+                    ];
+                }, $btns),
                 "white_list" => $white,
                 "black_list" => $black
             ];

@@ -51,6 +51,30 @@ if (!function_exists('clickParamAssetAddIndex')) {
     }
 }
 
+if (!function_exists('clickParamAssetColumnExists')) {
+    /**
+     * 判断事件参数资源表字段是否存在。
+     */
+    function clickParamAssetColumnExists(PDO $pdo, string $table, string $column): bool
+    {
+        $stmt = $pdo->prepare("SHOW COLUMNS FROM `$table` LIKE :column");
+        $stmt->execute([':column' => $column]);
+        return (bool)$stmt->fetch(PDO::FETCH_ASSOC);
+    }
+}
+
+if (!function_exists('clickParamAssetAddColumnIfMissing')) {
+    /**
+     * 补齐事件参数资源表字段，兼容已上线的旧表结构。
+     */
+    function clickParamAssetAddColumnIfMissing(PDO $pdo, string $table, string $column, string $definition): void
+    {
+        if (!clickParamAssetColumnExists($pdo, $table, $column)) {
+            $pdo->exec("ALTER TABLE `$table` ADD `$column` $definition");
+        }
+    }
+}
+
 if (!function_exists('clickParamAssetDropIndexIfExists')) {
     /**
      * 存量表从单资源关联升级为多资源关联时，移除旧唯一索引。
@@ -92,6 +116,7 @@ if (!function_exists('clickParamAssetEnsureTables')) {
             `name` VARCHAR(100) NOT NULL DEFAULT '' COMMENT '参数资源名称',
             `action_type` TINYINT NOT NULL DEFAULT 1 COMMENT '事件类型',
             `param_text` TEXT NOT NULL COMMENT '事件参数内容',
+            `enabled` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
             `remark` VARCHAR(255) NOT NULL DEFAULT '' COMMENT '备注',
             `created_at` DATETIME NOT NULL COMMENT '创建时间',
             `updated_at` DATETIME NOT NULL COMMENT '更新时间'
@@ -105,6 +130,7 @@ if (!function_exists('clickParamAssetEnsureTables')) {
             `created_at` DATETIME NOT NULL COMMENT '创建时间'
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
+        clickParamAssetAddColumnIfMissing($pdo, 'cainiao_click_param_asset', 'enabled', "TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用'");
         clickParamAssetAddIndex($pdo, 'cainiao_click_param_asset', 'idx_user_action_created', '`user_id`, `action_type`, `created_at`');
         clickParamAssetAddIndex($pdo, 'cainiao_click_param_asset_ref', 'idx_target', '`target_type`, `target_id`');
         clickParamAssetAddIndex($pdo, 'cainiao_click_param_asset_ref', 'idx_asset_id', '`asset_id`');
@@ -231,10 +257,10 @@ if (!function_exists('clickParamAssetFetchOne')) {
         }
 
         if ($isAdmin) {
-            $stmt = $pdo->prepare("SELECT id, user_id, name, action_type, param_text, remark FROM cainiao_click_param_asset WHERE id = :id");
+            $stmt = $pdo->prepare("SELECT id, user_id, name, action_type, param_text, enabled, remark FROM cainiao_click_param_asset WHERE id = :id");
             $stmt->execute([':id' => $assetId]);
         } else {
-            $stmt = $pdo->prepare("SELECT id, user_id, name, action_type, param_text, remark FROM cainiao_click_param_asset WHERE id = :id AND user_id = :uid");
+            $stmt = $pdo->prepare("SELECT id, user_id, name, action_type, param_text, enabled, remark FROM cainiao_click_param_asset WHERE id = :id AND user_id = :uid");
             $stmt->execute([':id' => $assetId, ':uid' => $userId]);
         }
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -244,6 +270,7 @@ if (!function_exists('clickParamAssetFetchOne')) {
         $row['id'] = (int)$row['id'];
         $row['user_id'] = (int)$row['user_id'];
         $row['action_type'] = (int)$row['action_type'];
+        $row['enabled'] = (int)$row['enabled'];
         return $row;
     }
 }
@@ -354,8 +381,11 @@ if (!function_exists('clickParamAssetFetchListByTargets')) {
 
         $targetIds = array_values(array_unique(array_map('intval', $targetIds)));
         $placeholders = implode(',', array_fill(0, count($targetIds), '?'));
+        $enabledSelect = clickParamAssetColumnExists($pdo, 'cainiao_click_param_asset', 'enabled')
+            ? 'a.enabled'
+            : '1';
         $stmt = $pdo->prepare("
-            SELECT r.target_id, r.asset_id AS id, a.name, a.action_type, a.param_text, a.remark
+            SELECT r.target_id, r.asset_id AS id, a.name, a.action_type, a.param_text, $enabledSelect AS enabled, a.remark
             FROM cainiao_click_param_asset_ref r
             JOIN cainiao_click_param_asset a ON a.id = r.asset_id
             WHERE r.target_type = ? AND r.target_id IN ($placeholders)
@@ -371,6 +401,7 @@ if (!function_exists('clickParamAssetFetchListByTargets')) {
                 'name' => $row['name'],
                 'action_type' => (int)$row['action_type'],
                 'param_text' => $row['param_text'],
+                'enabled' => (int)$row['enabled'],
                 'remark' => $row['remark'],
             ];
         }
@@ -400,19 +431,26 @@ if (!function_exists('clickParamAssetApplyText')) {
      */
     function clickParamAssetApplyText(array $assetMap, int $targetId, int $actionType, string $fallback): string
     {
-        $text = $fallback;
         $assets = clickParamAssetNormalizeAssetRows($assetMap[$targetId] ?? []);
+        $text = $fallback;
         $texts = [];
-        foreach ($assets as $asset) {
-            if ((int)($asset['action_type'] ?? 0) === $actionType) {
-                $paramText = trim((string)($asset['param_text'] ?? ''));
-                if ($paramText !== '') {
-                    $texts[] = $paramText;
+        if (!empty($assets)) {
+            // 只要目标已关联资源，就完全以资源启用状态为准，避免禁用后回退旧 clickText。
+            $text = '';
+            foreach ($assets as $asset) {
+                if ((int)($asset['enabled'] ?? 1) !== 1) {
+                    continue;
+                }
+                if ((int)($asset['action_type'] ?? 0) === $actionType) {
+                    $paramText = trim((string)($asset['param_text'] ?? ''));
+                    if ($paramText !== '') {
+                        $texts[] = $paramText;
+                    }
                 }
             }
-        }
-        if (!empty($texts)) {
-            $text = implode("\n", $texts);
+            if (!empty($texts)) {
+                $text = implode("\n", $texts);
+            }
         }
 
         if ($actionType === 1) {

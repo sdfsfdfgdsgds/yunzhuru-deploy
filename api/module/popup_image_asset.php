@@ -32,7 +32,7 @@ function getList(PDO $pdo, array $input)
     $total = (int)$countStmt->fetchColumn();
 
     $stmt = $pdo->prepare("
-        SELECT id, user_id, name, url, remark, created_at, updated_at
+        SELECT id, user_id, name, url, enabled, remark, created_at, updated_at
         FROM cainiao_popup_image_asset
         WHERE $whereSql
         ORDER BY id DESC
@@ -43,6 +43,7 @@ function getList(PDO $pdo, array $input)
     foreach ($list as &$row) {
         $row['id'] = (int)$row['id'];
         $row['user_id'] = (int)$row['user_id'];
+        $row['enabled'] = (int)$row['enabled'];
     }
     unset($row);
 
@@ -67,18 +68,20 @@ function addAsset(PDO $pdo, array $input)
     $name = trim((string)($input['name'] ?? ''));
     $url = popupImageAssetNormalizeUrl((string)($input['url'] ?? ''));
     $remark = trim((string)($input['remark'] ?? ''));
+    $enabled = isset($input['enabled']) ? (!empty($input['enabled']) ? 1 : 0) : 1;
     if ($name === '') {
         $name = '未命名图片';
     }
 
     $stmt = $pdo->prepare("
-        INSERT INTO cainiao_popup_image_asset (user_id, name, url, remark, created_at, updated_at)
-        VALUES (:uid, :name, :url, :remark, NOW(), NOW())
+        INSERT INTO cainiao_popup_image_asset (user_id, name, url, enabled, remark, created_at, updated_at)
+        VALUES (:uid, :name, :url, :enabled, :remark, NOW(), NOW())
     ");
     $stmt->execute([
         ':uid' => $userId,
         ':name' => $name,
         ':url' => $url,
+        ':enabled' => $enabled,
         ':remark' => $remark,
     ]);
 
@@ -106,6 +109,7 @@ function editAsset(PDO $pdo, array $input)
     $name = trim((string)($input['name'] ?? ''));
     $url = popupImageAssetNormalizeUrl((string)($input['url'] ?? ''));
     $remark = trim((string)($input['remark'] ?? ''));
+    $enabled = isset($input['enabled']) ? (!empty($input['enabled']) ? 1 : 0) : 1;
     if ($name === '') {
         $name = '未命名图片';
     }
@@ -124,12 +128,13 @@ function editAsset(PDO $pdo, array $input)
     $affectedAppIds = popupImageAssetGetAffectedAppIds($pdo, $id);
     $stmt = $pdo->prepare("
         UPDATE cainiao_popup_image_asset
-        SET name = :name, url = :url, remark = :remark, updated_at = NOW()
+        SET name = :name, url = :url, enabled = :enabled, remark = :remark, updated_at = NOW()
         WHERE id = :id
     ");
     $stmt->execute([
         ':name' => $name,
         ':url' => $url,
+        ':enabled' => $enabled,
         ':remark' => $remark,
         ':id' => $id,
     ]);
@@ -139,6 +144,44 @@ function editAsset(PDO $pdo, array $input)
     }
 
     return ['message' => '更新成功'];
+}
+
+/**
+ * 设置图片素材启用状态。
+ */
+function setEnabled(PDO $pdo, array $input)
+{
+    popupImageAssetEnsureTables($pdo);
+    $user = Auth::check($pdo);
+    $userId = (int)$user['id'];
+    $isAdmin = ($user['role'] ?? '') === 'admin';
+
+    $id = (int)($input['id'] ?? 0);
+    if ($id <= 0) {
+        throw new Exception('缺少素材ID');
+    }
+    $enabled = !empty($input['enabled']) ? 1 : 0;
+
+    if ($isAdmin) {
+        $check = $pdo->prepare("SELECT id FROM cainiao_popup_image_asset WHERE id = :id");
+        $check->execute([':id' => $id]);
+    } else {
+        $check = $pdo->prepare("SELECT id FROM cainiao_popup_image_asset WHERE id = :id AND user_id = :uid");
+        $check->execute([':id' => $id, ':uid' => $userId]);
+    }
+    if (!$check->fetch()) {
+        throw new Exception('图片素材不存在或无权操作');
+    }
+
+    $affectedAppIds = popupImageAssetGetAffectedAppIds($pdo, $id);
+    $stmt = $pdo->prepare("UPDATE cainiao_popup_image_asset SET enabled = :enabled, updated_at = NOW() WHERE id = :id");
+    $stmt->execute([':enabled' => $enabled, ':id' => $id]);
+
+    foreach ($affectedAppIds as $appId) {
+        Auth::afterConfigChange($pdo, $appId);
+    }
+
+    return ['message' => $enabled === 1 ? '已启用' : '已停用'];
 }
 
 /**

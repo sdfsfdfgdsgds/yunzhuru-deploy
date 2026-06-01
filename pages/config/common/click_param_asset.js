@@ -181,6 +181,7 @@
       name: '',
       action_type: 1,
       param_text: '',
+      enabled: true,
       remark: ''
     });
 
@@ -320,6 +321,7 @@
           name: row.name || '',
           action_type: Number(row.action_type || 1),
           param_text: row.param_text || '',
+          enabled: Number(row.enabled ?? 1) === 1,
           remark: row.remark || ''
         });
       } else {
@@ -329,6 +331,7 @@
           name: '',
           action_type: hasParam(actionType) ? toAction(actionType) : 1,
           param_text: '',
+          enabled: true,
           remark: ''
         });
       }
@@ -351,6 +354,26 @@
       }
       ElementPlus.ElMessage.error(json.message || '保存失败');
       return null;
+    }
+
+    async function toggleEnabled(row) {
+      const nextEnabled = Number(row.enabled || 0) === 1 ? 0 : 1;
+      const oldEnabled = Number(row.enabled || 0);
+      row.enabled = nextEnabled;
+      const res = await fetch('/api/index.php?module=click_param_asset&method=setEnabled', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: row.id, enabled: nextEnabled })
+      });
+      const json = await res.json();
+      if (json.code === 200) {
+        ElementPlus.ElMessage.success(json.message || (nextEnabled === 1 ? '已启用' : '已停用'));
+        cacheRows(row);
+        return true;
+      }
+      row.enabled = oldEnabled;
+      ElementPlus.ElMessage.error(json.message || '状态更新失败');
+      return false;
     }
 
     async function remove(row) {
@@ -461,6 +484,7 @@
       openDialog,
       openEdit,
       submit,
+      toggleEnabled,
       remove,
       applyTo,
       applySelection,

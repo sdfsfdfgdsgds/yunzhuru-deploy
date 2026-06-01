@@ -52,6 +52,13 @@
       <el-table-column label="事件分类" width="130">
         <template #default="scope">{{ clickActionLabel(scope.row.action_type) }}</template>
       </el-table-column>
+      <el-table-column label="状态" width="100" align="center">
+        <template #default="scope">
+          <el-switch
+            :model-value="scope.row.enabled === 1"
+            @change="toggleParamStatus(scope.row)"></el-switch>
+        </template>
+      </el-table-column>
       <el-table-column label="事件参数" prop="param_text" show-overflow-tooltip></el-table-column>
       <el-table-column label="备注" prop="remark" width="180" show-overflow-tooltip></el-table-column>
       <el-table-column label="更新时间" prop="updated_at" width="170"></el-table-column>
@@ -89,6 +96,9 @@
             v-model="form.param_text"
             :rows="4"
             :placeholder="clickParamPlaceholder(form.action_type)"></el-input>
+        </el-form-item>
+        <el-form-item label="启用">
+          <el-switch v-model="form.enabled"></el-switch>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="form.remark"></el-input>
@@ -143,6 +153,10 @@
           return clickParamStore.remove(row);
         }
 
+        function toggleParamStatus(row) {
+          return clickParamStore.toggleEnabled(row);
+        }
+
         onMounted(() => {
           editVisible.value = false;
           loadParams(null, 1);
@@ -167,7 +181,8 @@
           loadParams,
           openEditDialog,
           submitParam,
-          removeParam
+          removeParam,
+          toggleParamStatus
         };
       }
     }).use(ElementPlus).mount('#app');

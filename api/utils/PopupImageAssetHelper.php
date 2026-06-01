@@ -51,6 +51,30 @@ if (!function_exists('popupImageAssetAddIndex')) {
     }
 }
 
+if (!function_exists('popupImageAssetColumnExists')) {
+    /**
+     * 判断图片素材表字段是否存在。
+     */
+    function popupImageAssetColumnExists(PDO $pdo, string $table, string $column): bool
+    {
+        $stmt = $pdo->prepare("SHOW COLUMNS FROM `$table` LIKE :column");
+        $stmt->execute([':column' => $column]);
+        return (bool)$stmt->fetch(PDO::FETCH_ASSOC);
+    }
+}
+
+if (!function_exists('popupImageAssetAddColumnIfMissing')) {
+    /**
+     * 补齐图片素材表字段，兼容已上线的旧表结构。
+     */
+    function popupImageAssetAddColumnIfMissing(PDO $pdo, string $table, string $column, string $definition): void
+    {
+        if (!popupImageAssetColumnExists($pdo, $table, $column)) {
+            $pdo->exec("ALTER TABLE `$table` ADD `$column` $definition");
+        }
+    }
+}
+
 if (!function_exists('popupImageAssetEnsureTables')) {
     /**
      * 确保图片素材库表存在。后台管理接口调用，远程配置请求只读不建表。
@@ -67,6 +91,7 @@ if (!function_exists('popupImageAssetEnsureTables')) {
             `user_id` INT NOT NULL COMMENT '所属用户ID',
             `name` VARCHAR(100) NOT NULL DEFAULT '' COMMENT '图片名称',
             `url` TEXT NOT NULL COMMENT '图片链接',
+            `enabled` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
             `remark` VARCHAR(255) NOT NULL DEFAULT '' COMMENT '备注',
             `created_at` DATETIME NOT NULL COMMENT '创建时间',
             `updated_at` DATETIME NOT NULL COMMENT '更新时间'
@@ -81,6 +106,7 @@ if (!function_exists('popupImageAssetEnsureTables')) {
             `created_at` DATETIME NOT NULL COMMENT '创建时间'
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
+        popupImageAssetAddColumnIfMissing($pdo, 'cainiao_popup_image_asset', 'enabled', "TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用'");
         popupImageAssetAddIndex($pdo, 'cainiao_popup_image_asset', 'idx_user_created', '`user_id`, `created_at`');
         popupImageAssetAddIndex($pdo, 'cainiao_popup_image_asset_ref', 'idx_popup_sort', '`popup_id`, `sort`, `id`');
         popupImageAssetAddIndex($pdo, 'cainiao_popup_image_asset_ref', 'idx_asset_id', '`asset_id`');
@@ -211,8 +237,11 @@ if (!function_exists('popupImageAssetFetchByPopupIds')) {
 
         $popupIds = array_values(array_unique(array_map('intval', $popupIds)));
         $placeholders = implode(',', array_fill(0, count($popupIds), '?'));
+        $enabledSelect = popupImageAssetColumnExists($pdo, 'cainiao_popup_image_asset', 'enabled')
+            ? 'a.enabled'
+            : '1';
         $stmt = $pdo->prepare("
-            SELECT r.popup_id, r.asset_id AS id, a.name, a.url, a.remark, r.sort, r.weight
+            SELECT r.popup_id, r.asset_id AS id, a.name, a.url, $enabledSelect AS enabled, a.remark, r.sort, r.weight
             FROM cainiao_popup_image_asset_ref r
             JOIN cainiao_popup_image_asset a ON a.id = r.asset_id
             WHERE r.popup_id IN ($placeholders)
@@ -227,6 +256,7 @@ if (!function_exists('popupImageAssetFetchByPopupIds')) {
                 'id' => (int)$row['id'],
                 'name' => $row['name'],
                 'url' => $row['url'],
+                'enabled' => (int)$row['enabled'],
                 'remark' => $row['remark'],
                 'sort' => (int)$row['sort'],
                 'weight' => max(1, (int)$row['weight']),
@@ -242,24 +272,25 @@ if (!function_exists('popupImageAssetPickUrl')) {
      */
     function popupImageAssetPickUrl(array $assets): string
     {
-        if (empty($assets)) {
+        $enabledAssets = array_values(array_filter($assets, fn($asset) => (int)($asset['enabled'] ?? 1) === 1));
+        if (empty($enabledAssets)) {
             return '';
         }
 
         $total = 0;
-        foreach ($assets as $asset) {
+        foreach ($enabledAssets as $asset) {
             $total += max(1, (int)($asset['weight'] ?? 1));
         }
 
         $rand = random_int(1, max(1, $total));
-        foreach ($assets as $asset) {
+        foreach ($enabledAssets as $asset) {
             $rand -= max(1, (int)($asset['weight'] ?? 1));
             if ($rand <= 0) {
                 return (string)($asset['url'] ?? '');
             }
         }
 
-        return (string)($assets[0]['url'] ?? '');
+        return (string)($enabledAssets[0]['url'] ?? '');
     }
 }
 
