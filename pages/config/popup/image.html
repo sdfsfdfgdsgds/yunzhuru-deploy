@@ -43,7 +43,7 @@
       margin-top: 8px;
     }
     .asset-preview-item {
-      width: 132px;
+      width: 92px;
       border: 1px solid #ebeef5;
       border-radius: 6px;
       padding: 6px;
@@ -54,8 +54,8 @@
       background: #f5f7fa;
     }
     .asset-preview-item img {
-      width: 120px;
-      height: 70px;
+      width: 80px;
+      height: 56px;
       object-fit: cover;
       border-radius: 4px;
       display: block;
@@ -70,6 +70,12 @@
     }
     .asset-preview-status {
       margin-top: 4px;
+    }
+    .asset-preview-status .el-tag {
+      max-width: 100%;
+      height: auto;
+      line-height: 16px;
+      white-space: normal;
     }
     .param-option {
       display: flex;
@@ -163,7 +169,7 @@
 
 
     <!-- 添加弹窗对话框 -->
-    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="900px" top="4vh">
+    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="1100px" top="4vh">
       <el-form :model="form" label-width="100px">
         <el-form-item label="类型">
           <el-select v-model="form.popup_type">
@@ -323,7 +329,7 @@
       </el-table>
     </el-dialog>
 
-    <el-dialog v-model="batchDialogVisible" title="批量修改弹窗" width="900px" top="4vh">
+    <el-dialog v-model="batchDialogVisible" title="批量修改弹窗" width="1100px" top="4vh">
         
 
       <el-form :model="batchForm" label-width="100px">
