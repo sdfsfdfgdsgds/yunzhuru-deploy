@@ -68,8 +68,15 @@
       .param-option {
         display: flex;
         justify-content: space-between;
+        align-items: center;
         gap: 12px;
         width: 100%;
+      }
+      .param-option-name {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
       }
       .param-option-text {
         color: #909399;
@@ -99,12 +106,22 @@
         padding: 8px;
         background: #fafafa;
       }
+      .param-preview-item.is-disabled {
+        border-color: #dcdfe6;
+        background: #f5f7fa;
+      }
       .param-preview-head {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 8px;
         margin-bottom: 6px;
+      }
+      .param-preview-tags {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
       }
       .param-preview-name {
         color: #303133;
@@ -126,6 +143,18 @@
       }
     `;
     document.head.appendChild(style);
+  }
+
+  function isEnabled(asset) {
+    return Number(asset && asset.enabled !== undefined ? asset.enabled : 1) === 1;
+  }
+
+  function optionLabel(asset) {
+    if (!asset) {
+      return '';
+    }
+    const name = asset.name || '';
+    return isEnabled(asset) ? name : `${name}（已停用）`;
   }
 
   function toIdList(value) {
@@ -491,6 +520,8 @@
       options,
       merge,
       selected,
+      isEnabled,
+      optionLabel,
       toIdList,
       firstId,
       idsOrFallback,
@@ -517,6 +548,8 @@
     paramPlaceholder,
     paramInputType,
     multipleLimit,
+    isEnabled,
+    optionLabel,
     createStore
   };
 })();
