@@ -630,7 +630,7 @@
           launcher: true,
           killsign: false,
           kill_Inject: false,
-          network: true,
+          network: false,
         });
 
         async function checkAdmin() {
@@ -707,7 +707,7 @@
         const signDialogVisible = ref(false);
         const signList = ref([]);
         const allowHttp = ref(false);  // 是否启用 HTTP 请求，默认 false
-        const network = ref(true);  // 是否启用 无网络检查，默认 true
+        const network = ref(false);  // 是否启用无网络检查，默认关闭，只有用户主动勾选才启用
         const jiagu = ref(false);  // 是否启用 加固，默认 true
         const fake = ref(false);  // 是否启用 伪加密，默认 true
         const vpncheck = ref(false); //是否开启VPN检测
