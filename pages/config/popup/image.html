@@ -249,7 +249,7 @@
             v-model="form.clickText"
             :rows="3"
             :disabled="formClickParamAssetIds.length > 0"
-            :placeholder="clickTextPlaceholder"></el-input>
+            :placeholder="formClickParamAssetIds.length > 0 ? '已选择事件参数资源，备用参数不参与下发' : clickTextPlaceholder"></el-input>
         </el-form-item>
         <el-form-item label="回调地址">
           <el-tooltip content="点击广告后广告信息会提交到该接口，用于统计点击次数" placement="top">
@@ -407,7 +407,7 @@
             v-model="batchForm.clickText"
             :rows="3"
             :disabled="batchClickParamAssetIds.length > 0"
-            :placeholder="batchClickTextPlaceholder"></el-input>
+            :placeholder="batchClickParamAssetIds.length > 0 ? '已选择事件参数资源，备用参数不参与下发' : batchClickTextPlaceholder"></el-input>
         </el-form-item>
         <el-form-item label="回调地址">
           <el-input v-model="batchForm.callback"></el-input>

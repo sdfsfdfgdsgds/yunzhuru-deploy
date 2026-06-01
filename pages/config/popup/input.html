@@ -244,7 +244,7 @@
             v-model="buttonForm.clickText"
             :rows="3"
             :disabled="buttonClickParamAssetIds.length > 0"
-            :placeholder="clickTextTip"></el-input>
+            :placeholder="buttonClickParamAssetIds.length > 0 ? '已选择事件参数资源，备用参数不参与下发' : clickTextTip"></el-input>
         </el-form-item>
     
         <el-form-item label="点击后关闭">

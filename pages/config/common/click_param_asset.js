@@ -415,10 +415,8 @@
       }
       if (assets.length > 0) {
         target[actionField] = Number(assets[0].action_type);
-        target[textField] = assets
-          .map(asset => asset.param_text || '')
-          .filter(Boolean)
-          .join('\n');
+        // 资源参数由关联表接管，备用参数只保留手动填写内容，避免资源内容被误显示成备用参数。
+        target[textField] = '';
       } else {
         target[textField] = '';
       }
@@ -428,7 +426,11 @@
       const currentIds = idsOrFallback(target[assetIdsField], target[assetIdField]);
       const actionType = toAction(target[actionField]);
       const text = target[textField];
-      if (currentIds.length > 0 || !hasParam(actionType) || !normalizeParamText(text)) {
+      if (currentIds.length > 0) {
+        target[textField] = '';
+        return currentIds;
+      }
+      if (!hasParam(actionType) || !normalizeParamText(text)) {
         return [];
       }
 
@@ -436,6 +438,7 @@
       if (cachedIds.length > 0) {
         target[assetIdField] = cachedIds[0];
         target[assetIdsField] = multipleLimit(actionType) === 1 ? [cachedIds[0]] : cachedIds;
+        target[textField] = '';
         return target[assetIdsField];
       }
 
@@ -456,6 +459,7 @@
       if (loadedIds.length > 0) {
         target[assetIdField] = loadedIds[0];
         target[assetIdsField] = multipleLimit(actionType) === 1 ? [loadedIds[0]] : loadedIds;
+        target[textField] = '';
         return target[assetIdsField];
       }
       return [];
