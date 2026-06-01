@@ -741,7 +741,11 @@ function changeApp() {
 	            ElementPlus.ElMessage.warning('请填写备用参数或选择事件参数资源');
 	            return;
 	          }
-	          const data = { ...form, apk_id: selectedAppId.value };
+	          const data = {
+	            ...form,
+	            ...clickParam.submitFields(formClickParamAssetIds.value),
+	            apk_id: selectedAppId.value
+	          };
           const method = editMode.value ? 'editPopup' : 'addPopup';
           const res = await fetch(`/api/index.php?module=popup_image&method=${method}`, {
             method: 'POST',
@@ -1001,7 +1005,12 @@ async function confirmBatchUpdate() {
 	    return;
 	  }
 	  const ids = selectedPopups.value.map(item => item.id);
-  const payload = { ...batchForm, ids, apk_id: selectedAppId.value };
+  const payload = {
+    ...batchForm,
+    ...clickParam.submitFields(batchClickParamAssetIds.value),
+    ids,
+    apk_id: selectedAppId.value
+  };
 
   const res = await fetch('/api/index.php?module=popup_image&method=batchUpdate', {
     method: 'POST',

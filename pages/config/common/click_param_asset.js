@@ -145,6 +145,18 @@
     return normalized.length > 0 ? normalized : toIdList(fallback);
   }
 
+  function submitFields(assetIds) {
+    const ids = toIdList(assetIds);
+    const first = ids.length > 0 ? ids[0] : null;
+    return {
+      // 保存时同时覆盖新旧字段，避免编辑弹窗里残留的后端旧字段覆盖当前多选值。
+      clickParamAssetId: first,
+      clickParamAssetIds: ids,
+      click_param_asset_id: first || 0,
+      click_param_asset_ids: ids
+    };
+  }
+
   function normalizeParamText(value) {
     return String(value || '')
       .split(/\r\n|\r|\n/)
@@ -482,6 +494,7 @@
       toIdList,
       firstId,
       idsOrFallback,
+      submitFields,
       multipleLimit,
       load,
       onSelectVisible,

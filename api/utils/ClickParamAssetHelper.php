@@ -205,17 +205,17 @@ if (!function_exists('clickParamAssetReadIdsFromInput')) {
      */
     function clickParamAssetReadIdsFromInput(array $input): array
     {
-        if (array_key_exists('click_param_asset_ids', $input)) {
-            return clickParamAssetNormalizeIdList($input['click_param_asset_ids']);
-        }
-        if (array_key_exists('clickParamAssetIds', $input)) {
-            return clickParamAssetNormalizeIdList($input['clickParamAssetIds']);
-        }
-        if (array_key_exists('click_param_asset_id', $input)) {
-            return clickParamAssetNormalizeIdList($input['click_param_asset_id']);
-        }
-        if (array_key_exists('clickParamAssetId', $input)) {
-            return clickParamAssetNormalizeIdList($input['clickParamAssetId']);
+        $fields = [
+            'clickParamAssetIds',
+            'click_param_asset_ids',
+            'clickParamAssetId',
+            'click_param_asset_id',
+        ];
+        foreach ($fields as $field) {
+            if (array_key_exists($field, $input)) {
+                // 管理页当前编辑态使用 camelCase；优先读它，避免旧回显字段覆盖刚选择的多资源列表。
+                return clickParamAssetNormalizeIdList($input[$field]);
+            }
         }
         return [];
     }
