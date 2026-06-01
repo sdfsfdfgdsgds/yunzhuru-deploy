@@ -198,7 +198,7 @@
                 <div class="asset-option">
                   <span class="asset-option-name">
                     <span>{{ asset.name }}</span>
-                    <el-tag v-if="!isImageAssetEnabled(asset)" size="small" type="info">已停用</el-tag>
+                    <el-tag v-if="!isImageAssetEnabled(asset)" size="small" type="info">停用</el-tag>
                   </span>
                   <span class="asset-option-url">{{ asset.url }}</span>
                 </div>
@@ -212,7 +212,7 @@
                 <img :src="asset.url" alt="preview">
                 <div class="asset-preview-name">{{ asset.name }}</div>
                 <div class="asset-preview-status" v-if="!isImageAssetEnabled(asset)">
-                  <el-tag size="small" type="info">已停用，不下发</el-tag>
+                  <el-tag size="small" type="info">停用</el-tag>
                 </div>
               </div>
             </div>
@@ -252,7 +252,7 @@
                 <div class="param-option">
                   <span class="param-option-name">
                     <span>{{ item.name }}</span>
-                    <el-tag v-if="!clickParam.isEnabled(item)" size="small" type="info">已停用</el-tag>
+                    <el-tag v-if="!clickParam.isEnabled(item)" size="small" type="info">停用</el-tag>
                   </span>
                   <span class="param-option-text">{{ item.param_text }}</span>
                 </div>
@@ -266,7 +266,7 @@
                 <div class="param-preview-head">
                   <span class="param-preview-name">{{ item.name }}</span>
                   <span class="param-preview-tags">
-                    <el-tag v-if="!clickParam.isEnabled(item)" size="small" type="info">已停用，不下发</el-tag>
+                    <el-tag v-if="!clickParam.isEnabled(item)" size="small" type="info">停用</el-tag>
                     <el-tag size="small">{{ clickActionLabel(item.action_type) }}</el-tag>
                   </span>
                 </div>
@@ -374,7 +374,7 @@
                 <div class="asset-option">
                   <span class="asset-option-name">
                     <span>{{ asset.name }}</span>
-                    <el-tag v-if="!isImageAssetEnabled(asset)" size="small" type="info">已停用</el-tag>
+                    <el-tag v-if="!isImageAssetEnabled(asset)" size="small" type="info">停用</el-tag>
                   </span>
                   <span class="asset-option-url">{{ asset.url }}</span>
                 </div>
@@ -388,7 +388,7 @@
                 <img :src="asset.url" alt="preview">
                 <div class="asset-preview-name">{{ asset.name }}</div>
                 <div class="asset-preview-status" v-if="!isImageAssetEnabled(asset)">
-                  <el-tag size="small" type="info">已停用，不下发</el-tag>
+                  <el-tag size="small" type="info">停用</el-tag>
                 </div>
               </div>
             </div>
@@ -427,7 +427,7 @@
                 <div class="param-option">
                   <span class="param-option-name">
                     <span>{{ item.name }}</span>
-                    <el-tag v-if="!clickParam.isEnabled(item)" size="small" type="info">已停用</el-tag>
+                    <el-tag v-if="!clickParam.isEnabled(item)" size="small" type="info">停用</el-tag>
                   </span>
                   <span class="param-option-text">{{ item.param_text }}</span>
                 </div>
@@ -441,7 +441,7 @@
                 <div class="param-preview-head">
                   <span class="param-preview-name">{{ item.name }}</span>
                   <span class="param-preview-tags">
-                    <el-tag v-if="!clickParam.isEnabled(item)" size="small" type="info">已停用，不下发</el-tag>
+                    <el-tag v-if="!clickParam.isEnabled(item)" size="small" type="info">停用</el-tag>
                     <el-tag size="small">{{ clickActionLabel(item.action_type) }}</el-tag>
                   </span>
                 </div>
@@ -584,7 +584,7 @@
             return '';
           }
           const name = asset.name || '';
-          return isImageAssetEnabled(asset) ? name : `${name}（已停用）`;
+          return isImageAssetEnabled(asset) ? name : `${name}（停用）`;
         }
 
         function mergeAssets(assets) {

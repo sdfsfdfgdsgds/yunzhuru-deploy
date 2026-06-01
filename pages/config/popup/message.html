@@ -212,7 +212,7 @@
             <div class="param-option">
               <span class="param-option-name">
                 <span>{{ item.name }}</span>
-                <el-tag v-if="!clickParam.isEnabled(item)" size="small" type="info">已停用</el-tag>
+                <el-tag v-if="!clickParam.isEnabled(item)" size="small" type="info">停用</el-tag>
               </span>
               <span class="param-option-text">{{ item.param_text }}</span>
             </div>
@@ -226,7 +226,7 @@
             <div class="param-preview-head">
               <span class="param-preview-name">{{ item.name }}</span>
               <span class="param-preview-tags">
-                <el-tag v-if="!clickParam.isEnabled(item)" size="small" type="info">已停用，不下发</el-tag>
+                <el-tag v-if="!clickParam.isEnabled(item)" size="small" type="info">停用</el-tag>
                 <el-tag size="small">{{ clickActionLabel(item.action_type) }}</el-tag>
               </span>
             </div>

@@ -154,7 +154,7 @@
       return '';
     }
     const name = asset.name || '';
-    return isEnabled(asset) ? name : `${name}（已停用）`;
+    return isEnabled(asset) ? name : `${name}（停用）`;
   }
 
   function toIdList(value) {
