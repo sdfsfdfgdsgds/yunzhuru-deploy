@@ -8,6 +8,68 @@
 $uri = $_SERVER['REQUEST_URI'] ?? '/';
 $path = parse_url($uri, PHP_URL_PATH);
 
+/**
+ * 为后台核心静态资源返回预压缩 gzip 文件。
+ *
+ * Railway 当前由 PHP 内置服务器直接分发静态文件，默认没有 gzip。
+ * Element Plus 这类前端资源接近 1MB，弱网下容易表现成后台白屏或长时间加载。
+ */
+function servePrecompressedStatic(string $path): bool
+{
+    $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+    if ($method !== 'GET' && $method !== 'HEAD') {
+        return false;
+    }
+
+    if (!preg_match('/\.(css|js|svg)$/i', $path)) {
+        return false;
+    }
+
+    $acceptEncoding = $_SERVER['HTTP_ACCEPT_ENCODING'] ?? '';
+    if (stripos($acceptEncoding, 'gzip') === false) {
+        return false;
+    }
+
+    if (strpos($path, "\0") !== false || strpos($path, '..') !== false) {
+        http_response_code(403);
+        return true;
+    }
+
+    $root = realpath($_SERVER['DOCUMENT_ROOT'] ?? __DIR__);
+    if ($root === false) {
+        return false;
+    }
+
+    $file = realpath($root . $path);
+    if ($file === false || strpos($file, $root . DIRECTORY_SEPARATOR) !== 0) {
+        return false;
+    }
+
+    $gzFile = $file . '.gz';
+    if (!is_file($gzFile)) {
+        return false;
+    }
+
+    $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+    $mimeMap = [
+        'css' => 'text/css; charset=UTF-8',
+        'js' => 'application/javascript; charset=UTF-8',
+        'svg' => 'image/svg+xml',
+    ];
+
+    header('Content-Type: ' . ($mimeMap[$ext] ?? 'application/octet-stream'));
+    header('Content-Encoding: gzip');
+    header('Vary: Accept-Encoding');
+    header('Cache-Control: public, max-age=604800');
+    header('Content-Length: ' . filesize($gzFile));
+
+    if ($method !== 'HEAD') {
+        readfile($gzFile);
+    }
+
+    return true;
+}
+
 // 诊断端点：确认 router.php 在运行
 if ($path === '/router-status') {
     header('Content-Type: application/json');
@@ -36,6 +98,10 @@ if (strpos($path, '/.') !== false) {
 }
 
 // ========== 白名单路径（放行） ==========
+
+if (servePrecompressedStatic($path)) {
+    return true;
+}
 
 // 静态资源
 if (preg_match('/\.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|apk|jar|keystore|html|map)$/i', $path)) {
