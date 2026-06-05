@@ -24,13 +24,49 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .param-toolbar {
-      display: flex;
-      gap: 8px;
-      margin-top: 8px;
-      flex-wrap: wrap;
-    }
-  </style>
+	    .param-toolbar {
+	      display: flex;
+	      gap: 8px;
+	      margin-top: 8px;
+	      flex-wrap: wrap;
+	    }
+	    .stats-summary {
+	      display: grid;
+	      grid-template-columns: repeat(3, minmax(0, 1fr));
+	      gap: 12px;
+	      margin-bottom: 16px;
+	    }
+	    .stats-item {
+	      border: 1px solid #ebeef5;
+	      border-radius: 6px;
+	      padding: 14px 16px;
+	      background: #fafafa;
+	    }
+	    .stats-label {
+	      color: #909399;
+	      font-size: 13px;
+	      margin-bottom: 8px;
+	    }
+	    .stats-value {
+	      color: #303133;
+	      font-size: 24px;
+	      font-weight: 600;
+	      line-height: 1;
+	    }
+	    .stats-click-text {
+	      display: inline-block;
+	      max-width: 320px;
+	      overflow: hidden;
+	      text-overflow: ellipsis;
+	      white-space: nowrap;
+	      vertical-align: middle;
+	    }
+	    @media (max-width: 720px) {
+	      .stats-summary {
+	        grid-template-columns: 1fr;
+	      }
+	    }
+	  </style>
 </head>
 <body>
   <div id="app" style="padding: 20px">
@@ -68,14 +104,15 @@
             <el-button size="small" type="info" @click="openBlacklist(scope.row.id)">黑名单</el-button>
           </template>
         </el-table-column>
-      <el-table-column label="操作">
-        <template v-slot="scope">
-          <el-button size="small" type="primary" @click="editPopup(scope.row)">编辑</el-button>
-          <el-button size="small" type="warning" @click="manageButtons(scope.row.id)">按钮配置</el-button>
-          <el-button size="small" type="danger" @click="deletePopup(scope.row)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+	      <el-table-column label="操作">
+	        <template v-slot="scope">
+	          <el-button size="small" type="primary" @click="editPopup(scope.row)">编辑</el-button>
+	          <el-button size="small" type="warning" @click="manageButtons(scope.row.id)">按钮配置</el-button>
+	          <el-button size="small" type="success" @click="openStatsDialog(scope.row)">统计</el-button>
+	          <el-button size="small" type="danger" @click="deletePopup(scope.row)">删除</el-button>
+	        </template>
+	      </el-table-column>
+	    </el-table>
     <div style="margin-top: 15px; text-align: right;">
         <!-- 分页控件 -->
         <el-pagination
@@ -86,10 +123,40 @@
           layout="total,prev, pager, next"
           @current-change="loadPopups"
           style="margin-top: 20px">
-        </el-pagination>
-    </div>
-    <!-- 添加/编辑弹窗 -->
-    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="760px" top="4vh">
+	        </el-pagination>
+	    </div>
+	    <el-dialog v-model="statsDialogVisible" :title="statsDialogTitle" width="760px" top="6vh">
+	      <div v-loading="statsLoading">
+	        <div class="stats-summary">
+	          <div class="stats-item">
+	            <div class="stats-label">展示次数</div>
+	            <div class="stats-value">{{ statsData.show_count }}</div>
+	          </div>
+	          <div class="stats-item">
+	            <div class="stats-label">点击次数</div>
+	            <div class="stats-value">{{ statsData.click_count }}</div>
+	          </div>
+	          <div class="stats-item">
+	            <div class="stats-label">点击率</div>
+	            <div class="stats-value">{{ statsData.ctr }}</div>
+	          </div>
+	        </div>
+	        <el-table :data="statsData.details" border empty-text="暂无点击明细">
+	          <el-table-column label="按钮" width="110">
+	            <template #default="scope">{{ statsTargetLabel(scope.row) }}</template>
+	          </el-table-column>
+	          <el-table-column label="点击动作" prop="click_type_name" width="120"></el-table-column>
+	          <el-table-column label="目标内容">
+	            <template #default="scope">
+	              <span class="stats-click-text" :title="scope.row.click_text || ''">{{ scope.row.click_text || '-' }}</span>
+	            </template>
+	          </el-table-column>
+	          <el-table-column label="次数" prop="count" width="90"></el-table-column>
+	        </el-table>
+	      </div>
+	    </el-dialog>
+	    <!-- 添加/编辑弹窗 -->
+	    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="760px" top="4vh">
       <el-form :model="form" label-width="100px">
         <el-form-item label="标题">
           <el-input v-model="form.title"></el-input>
@@ -342,11 +409,15 @@
         const form = reactive({
           id: null, title: '', message: '', remark: '', backgroundColor: '#FAFAFA', enable: false, exitpopus: false, lock: false, popup_type: 0
         });
-        const page = ref(1);
-        const limit = ref(20);
-        const total = ref(0);
-        const editButtonMode = ref(false);
-        const buttonEditMode = ref(false); // true为编辑，false为添加
+	        const page = ref(1);
+	        const limit = ref(20);
+	        const total = ref(0);
+	        const statsDialogVisible = ref(false);
+	        const statsLoading = ref(false);
+	        const statsDialogTitle = ref('点击统计');
+	        const statsData = ref(createEmptyStats());
+	        const editButtonMode = ref(false);
+	        const buttonEditMode = ref(false); // true为编辑，false为添加
 	        const showMaskTip = ref(false);
 	        const clickTextTip = ref('无参数');
 	        const clickTextLabel = ref('事件参数');
@@ -437,12 +508,68 @@
 	            clickParam.load(val, 1);
 	          }
 	        }
-		        function applyButtonClickParamAsset(assetId) {
-		          clickParam.applySelection(buttonForm, 'click', 'clickText', 'clickParamAssetId', assetId, 'clickParamAssetIds');
-		          updateClickTextTip(buttonForm.click);
-		        }
-        async function submitForm() {
-          const payload = { ...form, apk_id: selectedAppId.value };
+			        function applyButtonClickParamAsset(assetId) {
+			          clickParam.applySelection(buttonForm, 'click', 'clickText', 'clickParamAssetId', assetId, 'clickParamAssetIds');
+			          updateClickTextTip(buttonForm.click);
+			        }
+
+	        function createEmptyStats() {
+	          return {
+	            show_count: 0,
+	            click_count: 0,
+	            ctr: '0.0%',
+	            details: []
+	          };
+	        }
+
+	        function normalizeStats(data) {
+	          const showCount = Number(data && data.show_count ? data.show_count : 0);
+	          const clickCount = Number(data && data.click_count ? data.click_count : 0);
+	          const details = Array.isArray(data && data.details) ? data.details : [];
+	          return {
+	            show_count: showCount,
+	            click_count: clickCount,
+	            ctr: showCount > 0 ? `${(clickCount * 100 / showCount).toFixed(1)}%` : '0.0%',
+	            details: details.map(item => ({
+	              ...item,
+	              button_index: Number(item.button_index),
+	              click_type: Number(item.click_type),
+	              count: Number(item.count || 0)
+	            }))
+	          };
+	        }
+
+	        function statsTargetLabel(row) {
+	          const index = Number(row && row.button_index);
+	          return index >= 0 ? `按钮 ${index + 1}` : '未标记';
+	        }
+
+	        async function openStatsDialog(row) {
+	          statsDialogTitle.value = `点击统计 - ${row.remark || row.title || `ID ${row.id}`}`;
+	          statsDialogVisible.value = true;
+	          statsLoading.value = true;
+	          statsData.value = createEmptyStats();
+	          try {
+	            const res = await fetch('/api/index.php?module=popup_message&method=getStats', {
+	              method: 'POST',
+	              headers: { 'Content-Type': 'application/json' },
+	              body: JSON.stringify({ popup_id: row.id })
+	            });
+	            const json = await res.json();
+	            if (json.code === 200) {
+	              statsData.value = normalizeStats(json.data || {});
+	            } else {
+	              ElementPlus.ElMessage.error(json.message || '统计加载失败');
+	            }
+	          } catch (e) {
+	            ElementPlus.ElMessage.error('统计请求失败');
+	          } finally {
+	            statsLoading.value = false;
+	          }
+	        }
+
+	        async function submitForm() {
+	          const payload = { ...form, apk_id: selectedAppId.value };
           const method = editMode.value ? 'editPopup' : 'addPopup';
           const res = await fetch(`/api/index.php?module=popup_message&method=${method}`, {
             method: 'POST',
@@ -735,9 +862,15 @@ onMounted(() => {
 });
 
         return {
-          appList, selectedAppId, popupList, dialogVisible, form, editMode,
-          openAddDialog, editPopup, deletePopup, submitForm, loadApps, loadPopups,
-          buttonDialogVisible, buttonList, manageButtons, deleteButton,
+	          appList, selectedAppId, popupList, dialogVisible, form, editMode,
+	          openAddDialog, editPopup, deletePopup, submitForm, loadApps, loadPopups,
+	          statsDialogVisible,
+	          statsLoading,
+	          statsDialogTitle,
+	          statsData,
+	          openStatsDialog,
+	          statsTargetLabel,
+	          buttonDialogVisible, buttonList, manageButtons, deleteButton,
   buttonForm,
   openAddButtonDialog,
   submitAddButton,addButtonDialogVisible,editButtonMode,
