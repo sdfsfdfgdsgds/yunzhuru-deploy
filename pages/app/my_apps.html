@@ -992,6 +992,8 @@ async function confirmInject() {
 
 
 async function postAppDelete(method, row, successMessage) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20000);
   const loading = ElementPlus.ElLoading.service({
     lock: true,
     text: '正在删除...',
@@ -1002,7 +1004,8 @@ async function postAppDelete(method, row, successMessage) {
     const res = await fetch(`/api/index.php?module=app&method=${method}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: row.id })
+      body: JSON.stringify({ id: row.id }),
+      signal: controller.signal
     });
     const text = await res.text();
     let json;
@@ -1022,8 +1025,13 @@ async function postAppDelete(method, row, successMessage) {
     }
   } catch (e) {
     console.error('删除请求异常', e);
-    ElementPlus.ElMessage.error('删除失败：请求异常');
+    if (e && e.name === 'AbortError') {
+      ElementPlus.ElMessage.error('删除请求超时，请刷新列表确认结果');
+    } else {
+      ElementPlus.ElMessage.error('删除失败：请求异常');
+    }
   } finally {
+    clearTimeout(timeoutId);
     loading.close();
   }
 }

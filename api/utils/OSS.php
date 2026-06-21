@@ -300,6 +300,8 @@ class OSS {
     public function deleteFile($ossFilePath) {
         try {
             $ossClient = new OssClient($this->accessKeyId, $this->accessKeySecret, $this->endpoint);
+            $ossClient->setConnectTimeout(2);
+            $ossClient->setTimeout(5);
 
             // 删除文件
             $ossClient->deleteObject($this->bucket, $ossFilePath);
