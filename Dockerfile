@@ -1,11 +1,14 @@
 FROM php:7.4-cli-bullseye
 
 # 系统依赖（含 Android 注入工具链）
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Railway 构建机偶发 Debian 源连接重置，apt 增加重试和缺失包修复，避免临时网络抖动导致发布失败。
+RUN apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --fix-missing --no-install-recommends \
     libfreetype6-dev libjpeg62-turbo-dev libpng-dev libwebp-dev libzip-dev \
     supervisor \
     aapt zipalign default-jre-headless \
     curl \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # PHP 扩展
