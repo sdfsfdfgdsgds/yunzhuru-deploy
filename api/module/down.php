@@ -1,4 +1,6 @@
 <?php
+require_once __DIR__ . '/../utils/DeletedApp.php';
+
 function getTemplates(PDO $pdo, array $input) {
     if (empty($input['apk_id'])) throw new Exception('缺少应用ID');
     if (empty($input['templates_id'])) throw new Exception('缺少模板ID');
@@ -9,11 +11,27 @@ function getTemplates(PDO $pdo, array $input) {
     $isAdmin = (($user['role'] ?? '') === 'admin');
 
     // 第一步：查询 cainiao_apk 表
+    ensureApkDeleteMarkerTable($pdo);
     if ($isAdmin) {
-        $stmt = $pdo->prepare('SELECT * FROM cainiao_apk WHERE id = :apk_id LIMIT 1');
+        $stmt = $pdo->prepare('
+            SELECT a.*
+            FROM cainiao_apk a
+            LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
+            WHERE a.id = :apk_id
+              AND d.apk_id IS NULL
+            LIMIT 1
+        ');
         $stmt->execute([':apk_id' => $input['apk_id']]);
     } else {
-        $stmt = $pdo->prepare('SELECT * FROM cainiao_apk WHERE id = :apk_id AND user_id = :user_id LIMIT 1');
+        $stmt = $pdo->prepare('
+            SELECT a.*
+            FROM cainiao_apk a
+            LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
+            WHERE a.id = :apk_id
+              AND a.user_id = :user_id
+              AND d.apk_id IS NULL
+            LIMIT 1
+        ');
         $stmt->execute([':apk_id' => $input['apk_id'], ':user_id' => $userId]);
     }
     $apk = $stmt->fetch(PDO::FETCH_ASSOC);

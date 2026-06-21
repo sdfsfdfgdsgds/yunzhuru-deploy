@@ -72,7 +72,15 @@ $filePath = realpath($uploadDir . $filename);
 
 if($down_type == 'uploads'){
     //对于下载底包的时候，要先检查文件位置是否在oss中
-    $stmtApp = $pdo->prepare("SELECT * FROM `cainiao_apk` WHERE path = :path LIMIT 1");
+    ensureApkDeleteMarkerTable($pdo);
+    $stmtApp = $pdo->prepare("
+        SELECT a.*
+        FROM `cainiao_apk` a
+        LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+        WHERE a.path = :path
+          AND d.apk_id IS NULL
+        LIMIT 1
+    ");
     $stmtApp->execute([':path' => $filename]);
     $app = $stmtApp->fetch(PDO::FETCH_ASSOC);
     if(!$app){

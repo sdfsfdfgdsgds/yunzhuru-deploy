@@ -116,13 +116,20 @@ if (!$pdo || !($pdo instanceof PDO)) {
     echo json_encode(['code' => 500, 'message' => '数据库连接失败']);
     exit;
 }
+ensureApkDeleteMarkerTable($pdo);
 //===============================================================链接redis缓存
 $redis = getRedisConnection(0);
 
 
 
 $redis->select(2);//选择数据库2，作为远程配置临时缓存库
-$exists = $redis->get($appid);
+$exists = false;
+if (isApkDeleted($pdo, (int)$appid)) {
+    // 已删除应用不能继续吃旧 Redis 缓存，否则壳端仍可能拿到旧配置。
+    $redis->del($appid);
+} else {
+    $exists = $redis->get($appid);
+}
 if($exists !== false){
     //本次请求的appid有缓存，走缓存
     header('X-Data-Source-apk: redis');
@@ -134,7 +141,15 @@ if($exists !== false){
     /*$stmt = $pdo->prepare("SELECT * FROM cainiao_apk WHERE package = :package AND id = :id AND user_id = :user_id LIMIT 1");
     $stmt->execute([':package' => $package, ':id' => $appid, ':user_id' => $appkey]);*/
     //不验证包名
-    $stmt = $pdo->prepare("SELECT * FROM cainiao_apk WHERE id = :id AND user_id = :user_id LIMIT 1");
+    $stmt = $pdo->prepare("
+        SELECT a.*
+        FROM cainiao_apk a
+        LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
+        WHERE a.id = :id
+          AND a.user_id = :user_id
+          AND d.apk_id IS NULL
+        LIMIT 1
+    ");
     $stmt->execute([':id' => $appid, ':user_id' => $appkey]);
     $apk = $stmt->fetch(PDO::FETCH_ASSOC);
     $redirect = false;//应用重定向标记
@@ -160,7 +175,14 @@ if($exists !== false){
         }
         //检查兜底配置id是否存在
         // 查当前 APK 是否存在 ,不受包名和用户id的限制
-        $stmt = $pdo->prepare("SELECT * FROM cainiao_apk WHERE id = :id LIMIT 1");
+        $stmt = $pdo->prepare("
+            SELECT a.*
+            FROM cainiao_apk a
+            LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
+            WHERE a.id = :id
+              AND d.apk_id IS NULL
+            LIMIT 1
+        ");
         $stmt->execute([':id' => $shell_id]);
         $apk = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$apk) {
@@ -176,8 +198,14 @@ if($exists !== false){
         $redirect = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($redirect && !empty($redirect['apk_id2'])) {
             // 如果 redirect 中存在映射，则用 apk_id2 作为本次应用id
-            $apk['id'] = $redirect['apk_id2'];
-            $redirect = true;
+            $redirectTargetId = (int)$redirect['apk_id2'];
+            if (!isApkDeleted($pdo, $redirectTargetId)) {
+                // 仅在目标应用未删除时沿用映射，避免删除后继续下发旧配置。
+                $apk['id'] = $redirectTargetId;
+                $redirect = true;
+            } else {
+                $redirect = false;
+            }
         }
     }
     $apk['redirect'] = $redirect;
@@ -247,7 +275,13 @@ if ($configMode === 1) {
         echo json_encode(['code' => 402, 'message' => '复用配置无效，不能复用自己或为空']);
         exit;
     }
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM cainiao_apk WHERE id = :id");
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*)
+        FROM cainiao_apk a
+        LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
+        WHERE a.id = :id
+          AND d.apk_id IS NULL
+    ");
     $stmt->execute([':id' => $reuseApkId]);
     if ((int)$stmt->fetchColumn() === 0) {
         http_response_code(404);

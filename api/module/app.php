@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . '/../utils/DeletedApp.php';
+
 if (!defined('OSS_DOWNLOAD_KEEP_MINUTES')) {
     // 注入产物可能达到数百 MB 到数 GB，OSS 临时下载对象需要覆盖完整下载和断点续传窗口。
     define('OSS_DOWNLOAD_KEEP_MINUTES', (int)(getenv('OSS_DOWNLOAD_KEEP_MINUTES') ?: 720));
@@ -196,6 +198,7 @@ function getMyAppList(PDO $pdo, array $input)
 
     $table = 'cainiao_apk';
     ensureApkReusableColumn($pdo);
+    ensureApkDeleteMarkerTable($pdo);
 
     $page = isset($input['page']) && is_numeric($input['page']) ? max(1, (int)$input['page']) : 1;
     $limit = isset($input['limit']) && is_numeric($input['limit']) ? max(1, (int)$input['limit']) : 20;
@@ -205,7 +208,7 @@ function getMyAppList(PDO $pdo, array $input)
     //$params = [':user_id' => $userId];
     $params = [];
     
-    $where = "WHERE 1=1";
+    $where = "WHERE d.apk_id IS NULL";
 
     if($user['role'] !== 'admin'){
         $where .= " AND a.user_id = :user_id";
@@ -302,10 +305,21 @@ function getMyAppList(PDO $pdo, array $input)
     $totalBytes = $storageGB * 1024 * 1024 * 1024;
     // 计算已用容量（单位字节）
     if ($user['role'] === 'admin') {
-        $stmt = $pdo->query("SELECT SUM(size) FROM `$table`");
+        $stmt = $pdo->query("
+            SELECT SUM(a.size)
+            FROM `$table` a
+            LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+            WHERE d.apk_id IS NULL
+        ");
         $usedBytes = (int)$stmt->fetchColumn();
     } else {
-        $stmt = $pdo->prepare("SELECT SUM(size) FROM `$table` WHERE user_id = :uid");
+        $stmt = $pdo->prepare("
+            SELECT SUM(a.size)
+            FROM `$table` a
+            LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+            WHERE a.user_id = :uid
+              AND d.apk_id IS NULL
+        ");
         $stmt->execute([':uid' => $userId]);
         $usedBytes = (int)$stmt->fetchColumn();
     }
@@ -315,7 +329,12 @@ function getMyAppList(PDO $pdo, array $input)
     
     // 获取总数
     
-    $countStmt = $pdo->prepare("SELECT COUNT(*) FROM `$table` a $where");
+    $countStmt = $pdo->prepare("
+        SELECT COUNT(*)
+        FROM `$table` a
+        LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+        $where
+    ");
     $countStmt->execute($params);
     $total = (int)$countStmt->fetchColumn();
     $pages = (int)ceil($total / $limit);
@@ -329,6 +348,7 @@ function getMyAppList(PDO $pdo, array $input)
         FROM `$table` a
         LEFT JOIN `cainiao_user` u ON a.user_id = u.id
         LEFT JOIN `cainiao_redirect` r ON r.apk_id1 = a.id
+        LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
         $where
         ORDER BY a.id DESC
         LIMIT :offset, :limit
@@ -377,7 +397,13 @@ function getMyAppList(PDO $pdo, array $input)
     if (!empty($reuseIds)) {
         $reuseIds = array_unique($reuseIds);
         $placeholders = implode(',', array_fill(0, count($reuseIds), '?'));
-        $reuseStmt = $pdo->prepare("SELECT id, name, package FROM `$table` WHERE id IN ($placeholders)");
+        $reuseStmt = $pdo->prepare("
+            SELECT a.id, a.name, a.package
+            FROM `$table` a
+            LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+            WHERE a.id IN ($placeholders)
+              AND d.apk_id IS NULL
+        ");
         $reuseStmt->execute(array_values($reuseIds));
         foreach ($reuseStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
             $reuseMap[$row['id']] = $row;
@@ -433,6 +459,7 @@ function getMyReuseAppList(PDO $pdo, array $input)
 
     $table = 'cainiao_apk';
     ensureApkReusableColumn($pdo);
+    ensureApkDeleteMarkerTable($pdo);
 
     $page = isset($input['page']) && is_numeric($input['page']) ? max(1, (int)$input['page']) : 1;
     $limit = isset($input['limit']) && is_numeric($input['limit']) ? max(1, (int)$input['limit']) : 20;
@@ -443,7 +470,7 @@ function getMyReuseAppList(PDO $pdo, array $input)
     //$params = [':user_id' => $userId];
     $params = [];
     
-    $where = "WHERE 1=1";
+    $where = "WHERE d.apk_id IS NULL";
 
     if($user['role'] !== 'admin'){
         //非管理员,只能查自己uid下的应用
@@ -455,7 +482,14 @@ function getMyReuseAppList(PDO $pdo, array $input)
             // 先根据传入的appid查找该应用对应的user_id
             $targetUserId = null;
             
-            $findStmt = $pdo->prepare("SELECT user_id FROM {$table} WHERE id = :appid LIMIT 1");
+            $findStmt = $pdo->prepare("
+                SELECT a.user_id
+                FROM {$table} a
+                LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+                WHERE a.id = :appid
+                  AND d.apk_id IS NULL
+                LIMIT 1
+            ");
             $findStmt->execute([':appid' => $input['appid']]);
             $appInfo = $findStmt->fetch(PDO::FETCH_ASSOC);
             
@@ -485,7 +519,12 @@ function getMyReuseAppList(PDO $pdo, array $input)
         $params[':name_pkg'] = '%' . $input['name'] . '%';
     }
 
-    $countStmt = $pdo->prepare("SELECT COUNT(*) FROM `$table` a $where");
+    $countStmt = $pdo->prepare("
+        SELECT COUNT(*)
+        FROM `$table` a
+        LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+        $where
+    ");
     $countStmt->execute($params);
     $total = (int)$countStmt->fetchColumn();
     $pages = (int)ceil($total / $limit);
@@ -496,6 +535,7 @@ function getMyReuseAppList(PDO $pdo, array $input)
             a.id, a.package, a.name, a.is_reusable
         FROM `$table` a
         LEFT JOIN `cainiao_user` u ON a.user_id = u.id
+        LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
         $where
         ORDER BY a.id DESC
         LIMIT :offset, :limit
@@ -691,6 +731,7 @@ function autoClearExpiredAppFile($pdo, $uploadday)
 {
     $apkTable  = 'cainiao_apk';
     $userTable = 'cainiao_user';
+    ensureApkDeleteMarkerTable($pdo);
 
     // 计算截止时间
     $expireTime = date('Y-m-d H:i:s', strtotime("-{$uploadday} days"));
@@ -699,9 +740,11 @@ function autoClearExpiredAppFile($pdo, $uploadday)
         SELECT a.id, a.name, a.upload_time, a.path, a.osspath
         FROM `$apkTable` a
         LEFT JOIN `$userTable` u ON u.id = a.user_id
+        LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
         WHERE a.path <> '' 
           AND a.size > 0
           AND a.upload_time < :expireTime
+          AND d.apk_id IS NULL
           AND u.vip_expire_time <= NOW()
     ";
     
@@ -710,9 +753,11 @@ function autoClearExpiredAppFile($pdo, $uploadday)
         SELECT a.id, a.name, a.upload_time, a.path, a.osspath
         FROM `$apkTable` a
         LEFT JOIN `$userTable` u ON u.id = a.user_id
+        LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
         WHERE a.path <> '' 
           AND a.size > 0
           AND a.upload_time < :expireTime
+          AND d.apk_id IS NULL
           AND (
                 u.vip_expire_time IS NULL
                 OR u.vip_expire_time <= DATE_SUB(NOW(), INTERVAL 3 DAY)
@@ -990,15 +1035,13 @@ function getDeleteDebugLog(PDO $pdo, array $input)
         ];
     }
 
-    $content = (string)@file_get_contents($file);
-    $rows = preg_split('/\R/', trim($content));
-    if (!is_array($rows)) {
-        $rows = [];
-    }
-    $rows = array_slice(array_filter($rows, fn($row) => trim($row) !== ''), -$lines);
+    $rows = [];
+    @exec('tail -n ' . (int)$lines . ' ' . escapeshellarg($file), $rows);
+    $rows = array_filter($rows, fn($row) => trim((string)$row) !== '');
     return [
         'message' => '读取成功',
         'file' => $file,
+        'size' => filesize($file),
         'lines' => array_values($rows),
     ];
 }
@@ -1073,39 +1116,32 @@ function deleteApp(PDO $pdo, array $input)
     appDeleteDebugLog($appId, 'select_jiagu_tasks_done', ['count' => count($jiaguTasks)]);
     $allTasks = array_merge($injectTasks, $jiaguTasks);
     $taskCount = count($allTasks);
-    appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', "已读取关联产物 {$taskCount} 个，准备删除数据库记录...", 18);
+    appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', "已读取关联产物 {$taskCount} 个，准备写入删除标记...", 18);
 
-    // 用户能看到的删除结果以数据库记录为准，先删数据库，文件/桶清理作为后置兜底。
-    appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在执行数据库删除 SQL（cainiao_apk）...', 20);
+    // 用户能看到的删除结果以删除标记为准，避免硬删 cainiao_apk 被外键/锁等待卡住。
+    appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在标记应用为已删除（跳过 cainiao_apk 硬删除）...', 20);
     try {
         @set_time_limit(120);
-        $pdo->exec("SET SESSION innodb_lock_wait_timeout = 10");
-        $deleteStart = microtime(true);
-        appDeleteDebugLog($appId, 'db_delete_execute_start', [
-            'table' => $apkTable,
+        $markStart = microtime(true);
+        appDeleteDebugLog($appId, 'db_soft_delete_start', [
+            'table' => 'cainiao_apk_deleted',
             'role' => $user['role'] ?? '',
         ]);
-        if($user['role']!=='admin'){
-            $delete = $pdo->prepare("DELETE FROM `$apkTable` WHERE id = :id AND user_id = :user_id");
-            $delete->execute([':id' => $appId, ':user_id' => $userId]);
-        }else{
-            $delete = $pdo->prepare("DELETE FROM `$apkTable` WHERE id = :id");
-            $delete->execute([':id' => $appId]);
-        }
-        appDeleteDebugLog($appId, 'db_delete_execute_done', [
-            'duration_ms' => (int)round((microtime(true) - $deleteStart) * 1000),
-            'affected_rows' => $delete->rowCount(),
+        $affectedRows = markApkDeleted($pdo, $appId, (int)$app['user_id'], $userId, 'deleteApp');
+        appDeleteDebugLog($appId, 'db_soft_delete_done', [
+            'duration_ms' => (int)round((microtime(true) - $markStart) * 1000),
+            'affected_rows' => $affectedRows,
         ]);
     } catch (\Throwable $e) {
-        appDeleteDebugLog($appId, 'db_delete_execute_failed', [
+        appDeleteDebugLog($appId, 'db_soft_delete_failed', [
             'message' => $e->getMessage(),
         ]);
-        appDeleteProgressUpdate($progressToken, $userId, $appId, 'failed', '数据库删除失败：' . $e->getMessage(), 100);
+        appDeleteProgressUpdate($progressToken, $userId, $appId, 'failed', '删除标记写入失败：' . $e->getMessage(), 100);
         throw $e;
     }
 
     if($user['role']==='admin'){
-        appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '数据库记录已删除，正在发送管理员删除提醒...', 22);
+        appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '应用已从列表隐藏，正在发送管理员删除提醒...', 22);
         appDeleteDebugLog($appId, 'send_delete_message_start');
         try {
             Auth::sendSystemMessage($pdo, $user['id'], $app['user_id'], '【应用删除提醒】您的应用“'.$app['name'].'”已被系统自动删除清理,该应用被系统识别到可能存在混淆/加固或违反相关规定等,若被误删或有疑问请联系管理员。QQ群：793107266。检测方式为云端自动多模式注入+自动实机测试');
@@ -1118,7 +1154,7 @@ function deleteApp(PDO $pdo, array $input)
         }
     }
     if($user['role']!=='admin'){
-        appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '数据库记录已删除，准备清理文件...', 22);
+        appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '应用已从列表隐藏，准备清理文件...', 22);
     }
 
     $releaseDir = rtrim(__DIR__ . '/../../release', '/');
@@ -1371,6 +1407,7 @@ function uploadApk(PDO $pdo, array $input)
     $user = Auth::check($pdo);
     $userId = (int)$user['id'];
     $apkTable = 'cainiao_apk';
+    ensureApkDeleteMarkerTable($pdo);
     if(!Auth::getSetting($pdo,"upload","1")){
         throw new Exception('文件上传功能已关闭');
     }
@@ -1400,7 +1437,13 @@ function uploadApk(PDO $pdo, array $input)
             throw new Exception("文件过大，最大支持 {$maxfile}MB");
         }
     }
-    $stmt = $pdo->prepare("SELECT SUM(size) FROM `$apkTable` WHERE user_id = :uid");
+    $stmt = $pdo->prepare("
+        SELECT SUM(a.size)
+        FROM `$apkTable` a
+        LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+        WHERE a.user_id = :uid
+          AND d.apk_id IS NULL
+    ");
     $stmt->execute([':uid' => $userId]);
     $totalSize = (int)$stmt->fetchColumn();
     
@@ -1424,9 +1467,10 @@ function uploadApk(PDO $pdo, array $input)
         $stmt = $pdo->prepare(
             "SELECT
                 u.app_count,
-                COUNT(DISTINCT a.package) AS used_count
+                COUNT(DISTINCT CASE WHEN d.apk_id IS NULL THEN a.package END) AS used_count
              FROM cainiao_user u
              LEFT JOIN cainiao_apk a ON a.user_id = u.id
+             LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
              WHERE u.id = :uid
              GROUP BY u.id
              LIMIT 1"
@@ -1459,8 +1503,16 @@ function uploadApk(PDO $pdo, array $input)
 
 
 
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM `$apkTable` 
-        WHERE user_id = :uid AND name = '正在解包' AND version = '正在解包' AND package = '正在解包'");
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*)
+        FROM `$apkTable` a
+        LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+        WHERE a.user_id = :uid
+          AND a.name = '正在解包'
+          AND a.version = '正在解包'
+          AND a.package = '正在解包'
+          AND d.apk_id IS NULL
+    ");
     $stmt->execute([':uid' => $userId]);
     if ((int)$stmt->fetchColumn() > 0) {
         throw new Exception('上一个应用正在解包中，请稍后再上传');
@@ -1492,7 +1544,14 @@ function uploadApk(PDO $pdo, array $input)
         mkdir($uploadDir, 0755, true);
     }
 
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM `$apkTable` WHERE user_id = :user_id AND path = :path");
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*)
+        FROM `$apkTable` a
+        LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+        WHERE a.user_id = :user_id
+          AND a.path = :path
+          AND d.apk_id IS NULL
+    ");
     $stmt->execute([':user_id' => $userId, ':path' => $fileName]);
 
     if ((int)$stmt->fetchColumn() === 0) {
@@ -1638,6 +1697,7 @@ function replaceApk(PDO $pdo, array $input)
     $user = Auth::check($pdo);
     $userId = (int)$user['id'];
     $apkTable = 'cainiao_apk';
+    ensureApkDeleteMarkerTable($pdo);
 
     if (empty($_POST['apk_id'])) {
         throw new Exception('缺少参数：id' . $_POST['apk_id']);
@@ -1646,7 +1706,13 @@ function replaceApk(PDO $pdo, array $input)
     $apkId = (int)$_POST['apk_id'];
 
     // 查询原应用信息
-    $stmt = $pdo->prepare("SELECT * FROM `$apkTable` WHERE id = :id");
+    $stmt = $pdo->prepare("
+        SELECT a.*
+        FROM `$apkTable` a
+        LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+        WHERE a.id = :id
+          AND d.apk_id IS NULL
+    ");
     $stmt->execute([':id' => $apkId]);
     $oldApk = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -1687,7 +1753,13 @@ function replaceApk(PDO $pdo, array $input)
         }
     }
     
-    $stmt = $pdo->prepare("SELECT SUM(size) FROM `$apkTable` WHERE user_id = :uid");
+    $stmt = $pdo->prepare("
+        SELECT SUM(a.size)
+        FROM `$apkTable` a
+        LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+        WHERE a.user_id = :uid
+          AND d.apk_id IS NULL
+    ");
     $stmt->execute([':uid' => $userId]);
     $totalSize = (int)$stmt->fetchColumn();
     $now = date('Y-m-d H:i:s');
@@ -1714,7 +1786,14 @@ function replaceApk(PDO $pdo, array $input)
     }
 
     // ✅ 检查该用户是否已上传相同 MD5 的文件
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM `$apkTable` WHERE user_id = :uid AND path LIKE :md5pattern");
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*)
+        FROM `$apkTable` a
+        LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+        WHERE a.user_id = :uid
+          AND a.path LIKE :md5pattern
+          AND d.apk_id IS NULL
+    ");
     $stmt->execute([
         ':uid' => $userId,
         ':md5pattern' => "%_{$newMd5}.apk"
@@ -2797,6 +2876,7 @@ function updateAppInfo(PDO $pdo, array $input)
     $userId = (int)$user['id'];
     $apkTable = 'cainiao_apk';
     ensureApkReusableColumn($pdo);
+    ensureApkDeleteMarkerTable($pdo);
 
     if (empty($input['id']) || !is_numeric($input['id'])) {
         throw new Exception('参数错误：缺少或非法的应用 ID');
@@ -2807,10 +2887,23 @@ function updateAppInfo(PDO $pdo, array $input)
 
     // 验证该应用是否属于当前用户
     if ($user['role'] !== 'admin') {
-        $stmt = $pdo->prepare("SELECT user_id FROM `$apkTable` WHERE id = :id AND user_id = :user_id");
+        $stmt = $pdo->prepare("
+            SELECT a.user_id
+            FROM `$apkTable` a
+            LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+            WHERE a.id = :id
+              AND a.user_id = :user_id
+              AND d.apk_id IS NULL
+        ");
         $stmt->execute([':id' => $appId, ':user_id' => $userId]);
     } else {
-        $stmt = $pdo->prepare("SELECT user_id FROM `$apkTable` WHERE id = :id");
+        $stmt = $pdo->prepare("
+            SELECT a.user_id
+            FROM `$apkTable` a
+            LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+            WHERE a.id = :id
+              AND d.apk_id IS NULL
+        ");
         $stmt->execute([':id' => $appId]);
     }
     
@@ -2879,7 +2972,15 @@ function updateAppInfo(PDO $pdo, array $input)
                 throw new Exception('不能复用自身的配置');
             }
 
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM `$apkTable` WHERE id = :id AND user_id = :user_id AND is_reusable = 1");
+            $stmt = $pdo->prepare("
+                SELECT COUNT(*)
+                FROM `$apkTable` a
+                LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
+                WHERE a.id = :id
+                  AND a.user_id = :user_id
+                  AND a.is_reusable = 1
+                  AND d.apk_id IS NULL
+            ");
             $stmt->execute([':id' => $reuseApkId, ':user_id' => $userId]);
             if ((int)$stmt->fetchColumn() === 0) {
                 throw new Exception('要复用的应用不存在、无权限或未开启可复用标记');

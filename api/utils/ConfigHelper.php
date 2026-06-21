@@ -6,6 +6,7 @@
 
 require_once __DIR__ . '/PopupImageAssetHelper.php';
 require_once __DIR__ . '/ClickParamAssetHelper.php';
+require_once __DIR__ . '/DeletedApp.php';
 
 if (!function_exists('fetchCol')) {
     // 通用函数：返回单列结果
@@ -47,11 +48,14 @@ if (!function_exists('isAppUserVip')) {
         if ($appid <= 0) {
             return false;
         }
+        ensureApkDeleteMarkerTable($pdo);
         $sql = "
             SELECT u.vip_expire_time
             FROM cainiao_apk a
             INNER JOIN cainiao_user u ON a.user_id = u.id
+            LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
             WHERE a.id = :appid
+              AND d.apk_id IS NULL
             LIMIT 1
         ";
         $stmt = $pdo->prepare($sql);
@@ -291,6 +295,10 @@ if (!function_exists('getHtmlPopups')) {
 if (!function_exists('getResponseData')) {
     // 获取配置数据（核心方法）
     function getResponseData(PDO $pdo, $apkId, $deviceId, $disable = false) {
+        if (isApkDeleted($pdo, (int)$apkId)) {
+            return null;
+        }
+
         $stmt = $pdo->prepare("SELECT * FROM cainiao_apk_config WHERE apk_id = :apk_id LIMIT 1");
         $stmt->execute([':apk_id' => $apkId]);
         $config = $stmt->fetch(PDO::FETCH_ASSOC);

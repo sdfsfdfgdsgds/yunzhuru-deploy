@@ -6,6 +6,7 @@
 
 require_once __DIR__ . '/S3Client.php';
 require_once __DIR__ . '/Auth.php';
+require_once __DIR__ . '/DeletedApp.php';
 
 /**
  * 推送单个应用的配置到所有启用的桶
@@ -16,6 +17,10 @@ require_once __DIR__ . '/Auth.php';
 function pushConfigToBuckets(PDO $pdo, int $appId): array {
     // 确保 ConfigHelper 中的函数可用（fetchCol/fetchMap 依赖 global $pdo）
     $GLOBALS['pdo'] = $pdo;
+    ensureApkDeleteMarkerTable($pdo);
+    if (isApkDeleted($pdo, $appId)) {
+        return ['code' => 410, 'message' => "应用 {$appId} 已删除，跳过推送"];
+    }
 
     // 加载配置生成函数（如果还没加载）
     $configHelperPath = __DIR__ . '/ConfigHelper.php';
@@ -64,7 +69,14 @@ function pushConfigToBuckets(PDO $pdo, int $appId): array {
     }
 
     // 4. 处理复用逻辑（config_mode=1 时合并被复用应用的配置）
-    $stmt = $pdo->prepare("SELECT config_mode, reuse_apk_id, reuse_options FROM cainiao_apk WHERE id = :id LIMIT 1");
+    $stmt = $pdo->prepare("
+        SELECT a.config_mode, a.reuse_apk_id, a.reuse_options
+        FROM cainiao_apk a
+        LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
+        WHERE a.id = :id
+          AND d.apk_id IS NULL
+        LIMIT 1
+    ");
     $stmt->execute([':id' => $appId]);
     $apkRow = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -157,7 +169,15 @@ function pushConfigWithDependents(PDO $pdo, int $appId): array {
     $result = pushConfigToBuckets($pdo, $appId);
 
     // 查找所有复用该应用的应用，级联推送
-    $stmt = $pdo->prepare("SELECT id FROM cainiao_apk WHERE config_mode = 1 AND reuse_apk_id = :id");
+    ensureApkDeleteMarkerTable($pdo);
+    $stmt = $pdo->prepare("
+        SELECT a.id
+        FROM cainiao_apk a
+        LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
+        WHERE a.config_mode = 1
+          AND a.reuse_apk_id = :id
+          AND d.apk_id IS NULL
+    ");
     $stmt->execute([':id' => $appId]);
     $dependents = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
@@ -178,10 +198,14 @@ function pushConfigWithDependents(PDO $pdo, int $appId): array {
  * @return array
  */
 function pushAllConfigsToBuckets(PDO $pdo): array {
+    ensureApkDeleteMarkerTable($pdo);
+
     // 只查有成功注入记录的应用（没注入过的无需推送配置）
     $appIds = $pdo->query("
         SELECT DISTINCT a.id FROM cainiao_apk a
         INNER JOIN cainiao_inject_task t ON t.apk_id = a.id AND t.status_text = '编译成功'
+        LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
+        WHERE d.apk_id IS NULL
     ")->fetchAll(PDO::FETCH_COLUMN);
     $results = [];
     $success = 0;
