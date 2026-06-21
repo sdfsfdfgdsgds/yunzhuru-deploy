@@ -993,18 +993,51 @@ async function confirmInject() {
 
 async function postAppDelete(method, row, successMessage) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 20000);
+  const timeoutId = setTimeout(() => controller.abort(), 120000);
+  const progressToken = `del_${row.id}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  let lastProgressText = '正在提交删除请求...';
   const loading = ElementPlus.ElLoading.service({
     lock: true,
-    text: '正在删除...',
+    text: lastProgressText,
     background: 'rgba(0, 0, 0, 0.45)'
   });
+  const setDeleteLoadingText = (text) => {
+    if (!text) return;
+    lastProgressText = text;
+    if (loading && typeof loading.setText === 'function') {
+      loading.setText(text);
+      return;
+    }
+    // 兼容旧版 Element Loading：没有 setText 时直接改当前 loading 文案。
+    const textEl = document.querySelector('.el-loading-mask .el-loading-text');
+    if (textEl) textEl.textContent = text;
+  };
+  const pollDeleteProgress = async () => {
+    try {
+      const progressRes = await fetch('/api/index.php?module=app&method=getDeleteProgress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ progress_token: progressToken })
+      });
+      const progressJson = await progressRes.json();
+      if (progressJson.code === 200 && progressJson.data) {
+        const data = progressJson.data;
+        const percent = typeof data.percent === 'number' ? ` ${data.percent}%` : '';
+        setDeleteLoadingText(`${data.message || '正在删除...'}${percent}`);
+      }
+    } catch (e) {
+      // 进度轮询失败不打断删除主请求，主请求结果仍然作为最终结果。
+      console.warn('删除进度读取失败', e);
+    }
+  };
+  const progressTimer = setInterval(pollDeleteProgress, 700);
+  pollDeleteProgress();
 
   try {
     const res = await fetch(`/api/index.php?module=app&method=${method}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: row.id }),
+      body: JSON.stringify({ id: row.id, progress_token: progressToken }),
       signal: controller.signal
     });
     const text = await res.text();
@@ -1026,12 +1059,14 @@ async function postAppDelete(method, row, successMessage) {
   } catch (e) {
     console.error('删除请求异常', e);
     if (e && e.name === 'AbortError') {
-      ElementPlus.ElMessage.error('删除请求超时，请刷新列表确认结果');
+      ElementPlus.ElMessage.error(`删除请求超时，后台可能仍在继续。最后进度：${lastProgressText}，请刷新列表确认结果`);
     } else {
       ElementPlus.ElMessage.error('删除失败：请求异常');
     }
   } finally {
     clearTimeout(timeoutId);
+    clearInterval(progressTimer);
+    await pollDeleteProgress();
     loading.close();
   }
 }
