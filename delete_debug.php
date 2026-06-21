@@ -30,12 +30,10 @@ if (!is_file($file)) {
     exit;
 }
 
-$content = (string)@file_get_contents($file);
-$rows = preg_split('/\R/', trim($content));
-if (!is_array($rows)) {
-    $rows = [];
-}
-
+// 日志可能较大，不能整文件读入内存；只取最后 N 行。
+$rows = [];
+$cmd = 'tail -n ' . (int)$lines . ' ' . escapeshellarg($file);
+@exec($cmd, $rows);
 $rows = array_values(array_filter($rows, function ($row) {
     return trim((string)$row) !== '';
 }));
@@ -44,5 +42,6 @@ echo json_encode([
     'code' => 200,
     'message' => '读取成功',
     'file' => $file,
-    'lines' => array_slice($rows, -$lines),
+    'size' => filesize($file),
+    'lines' => $rows,
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
