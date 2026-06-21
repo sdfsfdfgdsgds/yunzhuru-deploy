@@ -858,6 +858,33 @@ function appDeleteProgressFile(string $token): string
     return appDeleteProgressDir() . '/' . $token . '.json';
 }
 
+function appDeleteDebugKey(): string
+{
+    // 临时生产排障钥匙，排障完成后删除。
+    return 'deldbg_20260621_7f4b8c2a9d1e';
+}
+
+function appDeleteDebugLogFile(): string
+{
+    return appDeleteProgressDir() . '/delete_debug.log';
+}
+
+function appDeleteDebugLog(int $appId, string $event, array $context = []): void
+{
+    $payload = [
+        'ts' => date('Y-m-d H:i:s'),
+        'time' => microtime(true),
+        'app_id' => $appId,
+        'event' => $event,
+        'context' => $context,
+    ];
+    @file_put_contents(
+        appDeleteDebugLogFile(),
+        json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n",
+        FILE_APPEND | LOCK_EX
+    );
+}
+
 function appDeleteProgressCleanOld(): void
 {
     $dir = appDeleteProgressDir();
@@ -871,6 +898,11 @@ function appDeleteProgressCleanOld(): void
 function appDeleteProgressUpdate(string $token, int $userId, int $appId, string $status, string $message, int $percent, array $extra = []): void
 {
     if ($token === '') {
+        appDeleteDebugLog($appId, 'progress_without_token', [
+            'status' => $status,
+            'message' => $message,
+            'percent' => $percent,
+        ]);
         return;
     }
 
@@ -889,6 +921,12 @@ function appDeleteProgressUpdate(string $token, int $userId, int $appId, string 
     $tmp = $file . '.' . uniqid('tmp_', true);
     @file_put_contents($tmp, json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
     @rename($tmp, $file);
+    appDeleteDebugLog($appId, 'progress', [
+        'token' => $token,
+        'status' => $status,
+        'message' => $message,
+        'percent' => $payload['percent'],
+    ]);
 }
 
 function appDeleteProgressBucketLabel(array $bucket): string
@@ -934,6 +972,37 @@ function getDeleteProgress(PDO $pdo, array $input)
     return $data;
 }
 
+function getDeleteDebugLog(PDO $pdo, array $input)
+{
+    $key = trim((string)($input['debug_key'] ?? ''));
+    if (!hash_equals(appDeleteDebugKey(), $key)) {
+        throw new Exception('无权限读取删除调试日志');
+    }
+
+    $lines = (int)($input['lines'] ?? 120);
+    $lines = max(20, min(500, $lines));
+    $file = appDeleteDebugLogFile();
+    if (!is_file($file)) {
+        return [
+            'message' => '暂无删除调试日志',
+            'file' => $file,
+            'lines' => [],
+        ];
+    }
+
+    $content = (string)@file_get_contents($file);
+    $rows = preg_split('/\R/', trim($content));
+    if (!is_array($rows)) {
+        $rows = [];
+    }
+    $rows = array_slice(array_filter($rows, fn($row) => trim($row) !== ''), -$lines);
+    return [
+        'message' => '读取成功',
+        'file' => $file,
+        'lines' => array_values($rows),
+    ];
+}
+
 
 
 //删除应用+配置
@@ -952,6 +1021,12 @@ function deleteApp(PDO $pdo, array $input)
 
     $appId = (int)$input['id'];
     $userId = (int)$user['id'];
+    appDeleteDebugLog($appId, 'delete_start', [
+        'user_id' => $userId,
+        'role' => $user['role'] ?? '',
+        'progress_token' => $progressToken,
+        'client_ip' => Auth::getRealIp(),
+    ]);
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在校验应用和删除权限...', 5);
 
     $apkTable = 'cainiao_apk';
@@ -960,13 +1035,21 @@ function deleteApp(PDO $pdo, array $input)
     if($user['role']!=='admin'){
         // 查询应用记录
         $stmt = $pdo->prepare("SELECT * FROM `$apkTable` WHERE id = :id AND user_id = :user_id LIMIT 1");
+        appDeleteDebugLog($appId, 'select_app_start', ['scope' => 'owner']);
         $stmt->execute([':id' => $appId, ':user_id' => $userId]);
     }else{
         // 查询应用记录
         $stmt = $pdo->prepare("SELECT * FROM `$apkTable` WHERE id = :id LIMIT 1");
+        appDeleteDebugLog($appId, 'select_app_start', ['scope' => 'admin']);
         $stmt->execute([':id' => $appId]);
     }
         $app = $stmt->fetch(PDO::FETCH_ASSOC);
+        appDeleteDebugLog($appId, 'select_app_done', [
+            'found' => (bool)$app,
+            'path' => $app['path'] ?? '',
+            'osspath' => $app['osspath'] ?? '',
+            'icon' => $app['icon'] ?? '',
+        ]);
     
         if (!$app) {
             appDeleteProgressUpdate($progressToken, $userId, $appId, 'failed', '删除失败：未找到对应应用或无权限删除', 100);
@@ -977,31 +1060,60 @@ function deleteApp(PDO $pdo, array $input)
     
     // 先取出关联产物路径，后面即使应用记录先删掉，也能继续清理文件。
     $stmt = $pdo->prepare("SELECT injected_apk FROM `$taskTable` WHERE apk_id = :apk_id AND injected_apk IS NOT NULL AND injected_apk != ''");
+    appDeleteDebugLog($appId, 'select_inject_tasks_start');
     $stmt->execute([':apk_id' => $appId]);
     $injectTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    appDeleteDebugLog($appId, 'select_inject_tasks_done', ['count' => count($injectTasks)]);
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '已读取普通注入产物 ' . count($injectTasks) . ' 个，正在读取加固产物...', 14);
     
     $stmt = $pdo->prepare("SELECT injected_apk FROM `$JiagutaskTable` WHERE apk_id = :apk_id AND injected_apk IS NOT NULL AND injected_apk != ''");
+    appDeleteDebugLog($appId, 'select_jiagu_tasks_start');
     $stmt->execute([':apk_id' => $appId]);
     $jiaguTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    appDeleteDebugLog($appId, 'select_jiagu_tasks_done', ['count' => count($jiaguTasks)]);
     $allTasks = array_merge($injectTasks, $jiaguTasks);
     $taskCount = count($allTasks);
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', "已读取关联产物 {$taskCount} 个，准备删除数据库记录...", 18);
 
     // 用户能看到的删除结果以数据库记录为准，先删数据库，文件/桶清理作为后置兜底。
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在执行数据库删除 SQL（cainiao_apk）...', 20);
-    if($user['role']!=='admin'){
-        $delete = $pdo->prepare("DELETE FROM `$apkTable` WHERE id = :id AND user_id = :user_id");
-        $delete->execute([':id' => $appId, ':user_id' => $userId]);
-    }else{
-        $delete = $pdo->prepare("DELETE FROM `$apkTable` WHERE id = :id");
-        $delete->execute([':id' => $appId]);
+    try {
+        @set_time_limit(120);
+        $pdo->exec("SET SESSION innodb_lock_wait_timeout = 10");
+        $deleteStart = microtime(true);
+        appDeleteDebugLog($appId, 'db_delete_execute_start', [
+            'table' => $apkTable,
+            'role' => $user['role'] ?? '',
+        ]);
+        if($user['role']!=='admin'){
+            $delete = $pdo->prepare("DELETE FROM `$apkTable` WHERE id = :id AND user_id = :user_id");
+            $delete->execute([':id' => $appId, ':user_id' => $userId]);
+        }else{
+            $delete = $pdo->prepare("DELETE FROM `$apkTable` WHERE id = :id");
+            $delete->execute([':id' => $appId]);
+        }
+        appDeleteDebugLog($appId, 'db_delete_execute_done', [
+            'duration_ms' => (int)round((microtime(true) - $deleteStart) * 1000),
+            'affected_rows' => $delete->rowCount(),
+        ]);
+    } catch (\Throwable $e) {
+        appDeleteDebugLog($appId, 'db_delete_execute_failed', [
+            'message' => $e->getMessage(),
+        ]);
+        appDeleteProgressUpdate($progressToken, $userId, $appId, 'failed', '数据库删除失败：' . $e->getMessage(), 100);
+        throw $e;
+    }
+
+    if($user['role']==='admin'){
         appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '数据库记录已删除，正在发送管理员删除提醒...', 22);
+        appDeleteDebugLog($appId, 'send_delete_message_start');
         try {
             Auth::sendSystemMessage($pdo, $user['id'], $app['user_id'], '【应用删除提醒】您的应用“'.$app['name'].'”已被系统自动删除清理,该应用被系统识别到可能存在混淆/加固或违反相关规定等,若被误删或有疑问请联系管理员。QQ群：793107266。检测方式为云端自动多模式注入+自动实机测试');
+            appDeleteDebugLog($appId, 'send_delete_message_done');
             appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '管理员删除提醒已发送，准备清理文件...', 24);
         } catch (\Throwable $e) {
             error_log("[AppDelete] 发送删除提醒失败 appId={$appId}: " . $e->getMessage());
+            appDeleteDebugLog($appId, 'send_delete_message_failed', ['message' => $e->getMessage()]);
             appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '管理员删除提醒发送失败，继续清理文件...', 24);
         }
     }
@@ -1019,6 +1131,11 @@ function deleteApp(PDO $pdo, array $input)
         $relative = trim($task['injected_apk'], '/'); // 文件名
         $fullPath = $releaseDir . '/' . $relative;
         $current = $index + 1;
+        appDeleteDebugLog($appId, 'unlink_release_start', [
+            'current' => $current,
+            'total' => $taskCount,
+            'file' => basename($relative),
+        ]);
         appDeleteProgressUpdate(
             $progressToken,
             $userId,
@@ -1032,15 +1149,23 @@ function deleteApp(PDO $pdo, array $input)
         if (is_file($fullPath) && strpos(realpath($fullPath), realpath($releaseDir)) === 0) {
             @unlink($fullPath);
         }
+        appDeleteDebugLog($appId, 'unlink_release_done', [
+            'current' => $current,
+            'total' => $taskCount,
+            'file' => basename($relative),
+            'exists_after' => is_file($fullPath),
+        ]);
     }
 
 
     // 删除原始 APK 文件
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在删除原始安装包文件...', 42);
     $filePath = __DIR__ . '/../../uploads/' . $app['path'];
+    appDeleteDebugLog($appId, 'unlink_upload_start', ['file' => basename($filePath), 'exists_before' => is_file($filePath)]);
     if (is_file($filePath)) {
         @unlink($filePath);
     }
+    appDeleteDebugLog($appId, 'unlink_upload_done', ['file' => basename($filePath), 'exists_after' => is_file($filePath)]);
     // 删除应用图标 文件
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在删除应用图标...', 48);
     if($app['icon'] !== 'android.png'){
@@ -1049,17 +1174,21 @@ function deleteApp(PDO $pdo, array $input)
             @unlink($iconPath);
         }
     }
+    appDeleteDebugLog($appId, 'unlink_icon_done', ['icon' => $app['icon'] ?? '', 'skipped_default' => ($app['icon'] ?? '') === 'android.png']);
     
     
     //删除oss端储存的旧文件
     try {
         appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在删除 OSS 安装包文件...', 54);
+        appDeleteDebugLog($appId, 'oss_delete_start', ['osspath' => $app['osspath'] ?? '']);
         $oss = new OSS();
         if(!empty($app['osspath'])){
             $oss->deleteFile($app['osspath']);
         }
+        appDeleteDebugLog($appId, 'oss_delete_done', ['osspath' => $app['osspath'] ?? '']);
     } catch (\Throwable $e) {
         error_log("[AppDelete] 删除 OSS 文件失败 appId={$appId}: " . $e->getMessage());
+        appDeleteDebugLog($appId, 'oss_delete_failed', ['message' => $e->getMessage()]);
     }
     
     // 删除桶中的配置文件（让壳回退 API 走重定向/兜底）
@@ -1068,9 +1197,16 @@ function deleteApp(PDO $pdo, array $input)
         $bucketRows = $pdo->query("SELECT * FROM cainiao_s3_bucket WHERE enabled = 1")->fetchAll(PDO::FETCH_ASSOC);
         $bucketCount = count($bucketRows);
         $objectKey = "config/{$appId}.enc";
+        appDeleteDebugLog($appId, 'bucket_delete_list_done', ['count' => $bucketCount, 'object_key' => $objectKey]);
         foreach ($bucketRows as $index => $b) {
             $current = $index + 1;
             $bucketLabel = appDeleteProgressBucketLabel($b);
+            appDeleteDebugLog($appId, 'bucket_delete_start', [
+                'current' => $current,
+                'total' => $bucketCount,
+                'bucket' => $bucketLabel,
+                'object_key' => $objectKey,
+            ]);
             appDeleteProgressUpdate(
                 $progressToken,
                 $userId,
@@ -1083,25 +1219,44 @@ function deleteApp(PDO $pdo, array $input)
             try {
                 $client = new S3Client($b['access_key'], $b['secret_key'], $b['endpoint'], $b['bucket'], $b['region'] ?: 'auto');
                 $client->deleteObject($objectKey);
-            } catch (\Throwable $e) {}
+                appDeleteDebugLog($appId, 'bucket_delete_done', [
+                    'current' => $current,
+                    'total' => $bucketCount,
+                    'bucket' => $bucketLabel,
+                    'object_key' => $objectKey,
+                ]);
+            } catch (\Throwable $e) {
+                appDeleteDebugLog($appId, 'bucket_delete_failed', [
+                    'current' => $current,
+                    'total' => $bucketCount,
+                    'bucket' => $bucketLabel,
+                    'object_key' => $objectKey,
+                    'message' => $e->getMessage(),
+                ]);
+            }
         }
     } catch (\Throwable $e) {
         error_log("[BucketClean] 删除桶配置失败 appId={$appId}: " . $e->getMessage());
+        appDeleteDebugLog($appId, 'bucket_delete_outer_failed', ['message' => $e->getMessage()]);
     }
 
     //删除redis缓存
     try {
         appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在删除 Redis 缓存...', 90);
+        appDeleteDebugLog($appId, 'redis_delete_start');
         $redis = getRedisConnection(0);
         $redis->del($appId);
         $redis->select(2);//2号库，apk映射关系
         $redis->del($appId);
         $redis->close();
+        appDeleteDebugLog($appId, 'redis_delete_done');
     } catch (\Throwable $e) {
         error_log("[AppDelete] 删除 Redis 缓存失败 appId={$appId}: " . $e->getMessage());
+        appDeleteDebugLog($appId, 'redis_delete_failed', ['message' => $e->getMessage()]);
     }
 
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'completed', '删除完成', 100);
+    appDeleteDebugLog($appId, 'delete_completed');
     
     return ['message' => '删除成功'];
 }
