@@ -945,7 +945,7 @@ function deleteApp(PDO $pdo, array $input)
     $redis->del($appId);
     $redis->close();
     
-    return ['message' => '删除成功'.$mes];
+    return ['message' => '删除成功'];
 }
 
 //删除应用但不删除配置

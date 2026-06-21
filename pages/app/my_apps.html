@@ -991,6 +991,43 @@ async function confirmInject() {
 }
 
 
+async function postAppDelete(method, row, successMessage) {
+  const loading = ElementPlus.ElLoading.service({
+    lock: true,
+    text: '正在删除...',
+    background: 'rgba(0, 0, 0, 0.45)'
+  });
+
+  try {
+    const res = await fetch(`/api/index.php?module=app&method=${method}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: row.id })
+    });
+    const text = await res.text();
+    let json;
+    try {
+      json = text ? JSON.parse(text) : {};
+    } catch (e) {
+      console.error('删除接口返回无法解析', text);
+      ElementPlus.ElMessage.error('删除失败：接口返回异常');
+      return;
+    }
+
+    if (json.code === 200) {
+      ElementPlus.ElMessage.success(json.data?.message || json.message || successMessage);
+      loadData();
+    } else {
+      ElementPlus.ElMessage.error(json.message || '删除失败');
+    }
+  } catch (e) {
+    console.error('删除请求异常', e);
+    ElementPlus.ElMessage.error('删除失败：请求异常');
+  } finally {
+    loading.close();
+  }
+}
+
 function handleDelete(row) {
   ElementPlus.ElMessageBox({
     title: '提示',
@@ -1012,18 +1049,7 @@ function handleDelete(row) {
         '请确认',
         { type: 'warning' }
       ).then(async () => {
-        const res = await fetch(`/api/index.php?module=app&method=deleteApp`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: row.id })
-        });
-        const json = await res.json();
-        if (json.code === 200) {
-          ElementPlus.ElMessage.success('删除成功');
-          loadData();
-        } else {
-          ElementPlus.ElMessage.error(json.message || '删除失败');
-        }
+        await postAppDelete('deleteApp', row, '删除成功');
       }).catch(() => {});
     }
   }).catch(() => {});
@@ -1036,25 +1062,21 @@ function handleDelete(row) {
       btn.className = 'el-button el-button--danger only-delete-btn'; // 红色按钮
       btn.innerHTML = '<span>仅删除文件(推荐)</span>';
       btn.onclick = () => {
-        ElementPlus.ElMessageBox.confirm(
-          '删除后不影响远程配置，注入时需要重传安装包，是否继续？',
-          '请确认',
-          { type: 'warning' }
-        ).then(async () => {
-          const res = await fetch(`/api/index.php?module=app&method=clearAppFile`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: row.id })
-          });
-          const json = await res.json();
-          if (json.code === 200) {
-            ElementPlus.ElMessage.success('已删除安装包');
-            loadData();
-          } else {
-            ElementPlus.ElMessage.error(json.message || '删除失败');
-          }
-          document.querySelector('.el-message-box__headerbtn')?.click(); // 关闭弹窗
-        }).catch(() => {});
+        // 先关闭第一层选择框，再打开确认框，避免两个 MessageBox 叠在一起导致点击无反馈。
+        document.querySelector('.el-message-box__headerbtn')?.click();
+        setTimeout(() => {
+          ElementPlus.ElMessageBox.confirm(
+            '删除后不影响远程配置，注入时需要重传安装包，是否继续？',
+            '请确认',
+            {
+              type: 'warning',
+              confirmButtonText: '仅删除文件(推荐)',
+              cancelButtonText: '取消'
+            }
+          ).then(async () => {
+            await postAppDelete('clearAppFile', row, '已删除安装包');
+          }).catch(() => {});
+        }, 80);
       };
       box.insertBefore(btn, box.children[1]); // 插入到“取消”前
     }
