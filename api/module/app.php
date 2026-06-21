@@ -832,6 +832,9 @@ function checkVipExpireNotify(PDO $pdo)
 //删除应用+配置
 function deleteApp(PDO $pdo, array $input)
 {
+    ignore_user_abort(true);
+    set_time_limit(120);
+
     $user = Auth::check($pdo);
 
     if (empty($input['id']) || !is_numeric($input['id'])) {
@@ -858,31 +861,32 @@ function deleteApp(PDO $pdo, array $input)
             throw new Exception('未找到对应应用或无权限删除');
         }
     
-    // 删除关联的 injected_apk 文件（如果存在）
+    // 先取出关联产物路径，后面即使应用记录先删掉，也能继续清理文件。
     $stmt = $pdo->prepare("SELECT injected_apk FROM `$taskTable` WHERE apk_id = :apk_id AND injected_apk IS NOT NULL AND injected_apk != ''");
     $stmt->execute([':apk_id' => $appId]);
-    $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    $releaseDir = rtrim(__DIR__ . '/../../release', '/');
-
-    foreach ($tasks as $task) {
-        $relative = trim($task['injected_apk'], '/'); // 文件名
-        $fullPath = $releaseDir . '/' . $relative;
+    $injectTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-        // 检查路径是否位于 release 目录下
-        if (is_file($fullPath) && strpos(realpath($fullPath), realpath($releaseDir)) === 0) {
-            @unlink($fullPath);
-        }
-    }
-    
-    // 删除关联的 injected_apk 文件（如果存在）
     $stmt = $pdo->prepare("SELECT injected_apk FROM `$JiagutaskTable` WHERE apk_id = :apk_id AND injected_apk IS NOT NULL AND injected_apk != ''");
     $stmt->execute([':apk_id' => $appId]);
-    $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $jiaguTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // 用户能看到的删除结果以数据库记录为准，先删数据库，文件/桶清理作为后置兜底。
+    if($user['role']!=='admin'){
+        $delete = $pdo->prepare("DELETE FROM `$apkTable` WHERE id = :id AND user_id = :user_id");
+        $delete->execute([':id' => $appId, ':user_id' => $userId]);
+    }else{
+        $delete = $pdo->prepare("DELETE FROM `$apkTable` WHERE id = :id");
+        $delete->execute([':id' => $appId]);
+        try {
+            Auth::sendSystemMessage($pdo, $user['id'], $app['user_id'], '【应用删除提醒】您的应用“'.$app['name'].'”已被系统自动删除清理,该应用被系统识别到可能存在混淆/加固或违反相关规定等,若被误删或有疑问请联系管理员。QQ群：793107266。检测方式为云端自动多模式注入+自动实机测试');
+        } catch (\Throwable $e) {
+            error_log("[AppDelete] 发送删除提醒失败 appId={$appId}: " . $e->getMessage());
+        }
+    }
 
     $releaseDir = rtrim(__DIR__ . '/../../release', '/');
 
-    foreach ($tasks as $task) {
+    foreach (array_merge($injectTasks, $jiaguTasks) as $task) {
         $relative = trim($task['injected_apk'], '/'); // 文件名
         $fullPath = $releaseDir . '/' . $relative;
     
@@ -908,19 +912,13 @@ function deleteApp(PDO $pdo, array $input)
     
     
     //删除oss端储存的旧文件
-    $oss = new OSS();
-    if(!empty($app['osspath'])){
-        $oss->deleteFile($app['osspath']);
-    }
-
-    // 删除数据库记录
-    if($user['role']!=='admin'){
-        $delete = $pdo->prepare("DELETE FROM `$apkTable` WHERE id = :id AND user_id = :user_id");
-        $delete->execute([':id' => $appId, ':user_id' => $userId]);
-    }else{
-        $delete = $pdo->prepare("DELETE FROM `$apkTable` WHERE id = :id");
-        $delete->execute([':id' => $appId]);
-        Auth::sendSystemMessage($pdo, $user['id'], $app['user_id'], '【应用删除提醒】您的应用“'.$app['name'].'”已被系统自动删除清理,该应用被系统识别到可能存在混淆/加固或违反相关规定等,若被误删或有疑问请联系管理员。QQ群：793107266。检测方式为云端自动多模式注入+自动实机测试');
+    try {
+        $oss = new OSS();
+        if(!empty($app['osspath'])){
+            $oss->deleteFile($app['osspath']);
+        }
+    } catch (\Throwable $e) {
+        error_log("[AppDelete] 删除 OSS 文件失败 appId={$appId}: " . $e->getMessage());
     }
     
     // 删除桶中的配置文件（让壳回退 API 走重定向/兜底）
@@ -939,11 +937,15 @@ function deleteApp(PDO $pdo, array $input)
     }
 
     //删除redis缓存
-    $redis = getRedisConnection(0);
-    $redis->del($appId);
-    $redis->select(2);//2号库，apk映射关系
-    $redis->del($appId);
-    $redis->close();
+    try {
+        $redis = getRedisConnection(0);
+        $redis->del($appId);
+        $redis->select(2);//2号库，apk映射关系
+        $redis->del($appId);
+        $redis->close();
+    } catch (\Throwable $e) {
+        error_log("[AppDelete] 删除 Redis 缓存失败 appId={$appId}: " . $e->getMessage());
+    }
     
     return ['message' => '删除成功'];
 }
@@ -951,6 +953,9 @@ function deleteApp(PDO $pdo, array $input)
 //删除应用但不删除配置
 function clearAppFile(PDO $pdo, array $input)
 {
+    ignore_user_abort(true);
+    set_time_limit(120);
+
     $user = Auth::check($pdo);
     if (empty($input['id']) || !is_numeric($input['id'])) {
         throw new Exception('参数错误：缺少应用 ID');
@@ -1001,19 +1006,27 @@ function clearAppFile(PDO $pdo, array $input)
     }
     
     
+    $storedPath = $app['path'] ?? '';
+    $storedOssPath = $app['osspath'] ?? '';
+
+    // 先清数据库字段，避免客户端超时或远程存储卡顿后留下“文件已删但后台还显示”的半成功状态。
+    $update = $pdo->prepare("UPDATE `$apkTable` SET `path` = '', `osspath` = NULL, `size` = 0 WHERE `id` = :id");
+    $update->execute([':id' => $appId]);
+
     // 删除原始 APK 文件
-    $filePath = __DIR__ . '/../../uploads/' . $app['path'];
-    if ($app['path'] && is_file($filePath)) {
+    $filePath = __DIR__ . '/../../uploads/' . $storedPath;
+    if ($storedPath && is_file($filePath)) {
         @unlink($filePath);
     }
     //删除oss端储存的旧文件
-    $oss = new OSS();
-    if(!empty($app['osspath'])){
-        $oss->deleteFile($app['osspath']);
+    try {
+        $oss = new OSS();
+        if(!empty($storedOssPath)){
+            $oss->deleteFile($storedOssPath);
+        }
+    } catch (\Throwable $e) {
+        error_log("[AppClearFile] 删除 OSS 文件失败 appId={$appId}: " . $e->getMessage());
     }
-    // 清空 path 字段
-    $update = $pdo->prepare("UPDATE `$apkTable` SET path = '', osspath = NULL, size = 0 WHERE id = :id");
-    $update->execute([':id' => $appId]);
 
     return ['message' => '安装包文件已删除，路径已清空'];
 }
