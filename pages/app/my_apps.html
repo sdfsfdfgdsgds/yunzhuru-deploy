@@ -1033,6 +1033,16 @@ async function postAppDelete(method, row, successMessage) {
     const textEl = document.querySelector('.delete-loading-mask .el-loading-text, .el-loading-mask .el-loading-text');
     if (textEl) textEl.textContent = text;
   };
+  const buildDeleteProgressText = (data) => {
+    const percent = typeof data.percent === 'number' ? ` ${data.percent}%` : '';
+    const updatedTs = Number(data.updated_ts || 0);
+    const staleSeconds = updatedTs > 0 ? Math.max(0, Math.floor(Date.now() / 1000 - updatedTs)) : null;
+    const staleText = staleSeconds === null ? '' : `｜最后更新 ${staleSeconds} 秒前`;
+    const staleWarn = data.status === 'running' && staleSeconds !== null && staleSeconds >= 8
+      ? '｜持续不变说明卡在当前步骤'
+      : '';
+    return `${data.message || '正在删除...'}${percent}${staleText}${staleWarn}`;
+  };
   const pollDeleteProgress = async () => {
     try {
       const progressRes = await fetch('/api/index.php?module=app&method=getDeleteProgress', {
@@ -1043,8 +1053,7 @@ async function postAppDelete(method, row, successMessage) {
       const progressJson = await progressRes.json();
       if (progressJson.code === 200 && progressJson.data) {
         const data = progressJson.data;
-        const percent = typeof data.percent === 'number' ? ` ${data.percent}%` : '';
-        setDeleteLoadingText(`${data.message || '正在删除...'}${percent}`);
+        setDeleteLoadingText(buildDeleteProgressText(data));
       }
     } catch (e) {
       // 进度轮询失败不打断删除主请求，主请求结果仍然作为最终结果。

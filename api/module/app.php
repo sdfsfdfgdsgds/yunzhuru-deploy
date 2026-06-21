@@ -979,29 +979,41 @@ function deleteApp(PDO $pdo, array $input)
     $stmt = $pdo->prepare("SELECT injected_apk FROM `$taskTable` WHERE apk_id = :apk_id AND injected_apk IS NOT NULL AND injected_apk != ''");
     $stmt->execute([':apk_id' => $appId]);
     $injectTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '已读取普通注入产物 ' . count($injectTasks) . ' 个，正在读取加固产物...', 14);
     
     $stmt = $pdo->prepare("SELECT injected_apk FROM `$JiagutaskTable` WHERE apk_id = :apk_id AND injected_apk IS NOT NULL AND injected_apk != ''");
     $stmt->execute([':apk_id' => $appId]);
     $jiaguTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $allTasks = array_merge($injectTasks, $jiaguTasks);
+    $taskCount = count($allTasks);
+    appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', "已读取关联产物 {$taskCount} 个，准备删除数据库记录...", 18);
 
     // 用户能看到的删除结果以数据库记录为准，先删数据库，文件/桶清理作为后置兜底。
-    appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在删除后台应用记录...', 20);
+    appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在执行数据库删除 SQL（cainiao_apk）...', 20);
     if($user['role']!=='admin'){
         $delete = $pdo->prepare("DELETE FROM `$apkTable` WHERE id = :id AND user_id = :user_id");
         $delete->execute([':id' => $appId, ':user_id' => $userId]);
     }else{
         $delete = $pdo->prepare("DELETE FROM `$apkTable` WHERE id = :id");
         $delete->execute([':id' => $appId]);
+        appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '数据库记录已删除，正在发送管理员删除提醒...', 22);
         try {
             Auth::sendSystemMessage($pdo, $user['id'], $app['user_id'], '【应用删除提醒】您的应用“'.$app['name'].'”已被系统自动删除清理,该应用被系统识别到可能存在混淆/加固或违反相关规定等,若被误删或有疑问请联系管理员。QQ群：793107266。检测方式为云端自动多模式注入+自动实机测试');
+            appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '管理员删除提醒已发送，准备清理文件...', 24);
         } catch (\Throwable $e) {
             error_log("[AppDelete] 发送删除提醒失败 appId={$appId}: " . $e->getMessage());
+            appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '管理员删除提醒发送失败，继续清理文件...', 24);
         }
+    }
+    if($user['role']!=='admin'){
+        appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '数据库记录已删除，准备清理文件...', 22);
     }
 
     $releaseDir = rtrim(__DIR__ . '/../../release', '/');
-    $allTasks = array_merge($injectTasks, $jiaguTasks);
-    $taskCount = count($allTasks);
+    appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', "正在准备清理注入产物，共 {$taskCount} 个...", 25);
+    if ($taskCount === 0) {
+        appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '没有关联注入产物，跳过产物清理...', 38);
+    }
 
     foreach ($allTasks as $index => $task) {
         $relative = trim($task['injected_apk'], '/'); // 文件名
