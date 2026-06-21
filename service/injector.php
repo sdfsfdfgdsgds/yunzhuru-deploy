@@ -15,21 +15,21 @@ function handleInjectionTasks(PDO $pdo, $oss)
 
     // 查询等待处理任务（按创建时间优先）
     $stmt = $pdo->prepare("
-        SELECT 
-            t.*, 
-            a.path AS apk_path, 
-            a.osspath AS apk_osspath, 
+        SELECT
+            t.*,
+            a.path AS apk_path,
+            a.osspath AS apk_osspath,
             a.size AS apk_size,
-            a.domain_mode, 
-            a.name, 
-            a.package, 
-            a.sign, 
+            a.domain_mode,
+            a.name,
+            a.package,
+            a.sign,
             a.user_id AS apk_user_id,
-            a.custom_domains, 
-            s.path AS sign_path, 
-            s.alias, 
-            s.password AS storepass, 
-            s.cert_password AS keypass, 
+            a.custom_domains,
+            s.path AS sign_path,
+            s.alias,
+            s.password AS storepass,
+            s.cert_password AS keypass,
             tmp.path AS shell_path,
             tmp.className,
             u.vip_expire_time
@@ -44,14 +44,15 @@ function handleInjectionTasks(PDO $pdo, $oss)
     ");
     $stmt->execute();
     $task = $stmt->fetch(PDO::FETCH_ASSOC);// AND t.user_id = 1
-    
+
     if (!$task) {
         return;
     }
-    
+
 
     // 检查必要文件路径
-    $aapt =  __DIR__ . '/../bin/aapt';//aapt
+    $aapt = resolve_tool_path(__DIR__ . '/../bin/aapt', 'aapt');//aapt
+    $aapt2 = resolve_tool_path(__DIR__ . '/../bin/aapt2', 'aapt2');//aapt2 fallback，兼容异常 AXML
     $ApkDataMultiplexing = __DIR__ . '/../bin/ApkDataMultiplexing.jar';//数据复用优化并签名
     $apksigner_jar = __DIR__ . '/../bin/apksigner.jar';//签名工具
     $apktool_jar = __DIR__ . '/../bin/apktool_2.11.1.jar';//apktool
@@ -61,7 +62,7 @@ function handleInjectionTasks(PDO $pdo, $oss)
     $Editor = __DIR__ . '/../bin/ManifestEditor-2.0.jar';//xml修改器
     $smali =  __DIR__ . '/../bin/smali-2.5.2-dev-fat.jar';//smali转dex
     //$dexedit =   __DIR__ . '/../bin/DexEdit1.1.1.jar';//dex编辑库 DexEdit-2.5.2-dev.jar
-    $dexedit =   __DIR__ . '/../bin/DexEdit-2.5.2-dev.jar';//dex编辑库 
+    $dexedit =   __DIR__ . '/../bin/DexEdit-2.5.2-dev.jar';//dex编辑库
     $jiagujar =  __DIR__ . '/../bin/executable/dpt.jar';//luoyesiqiu加固库
     $xml2axml = __DIR__ . '/../bin/xml2axml-2.0.1.jar';//xml和axml互相转换的库
     echo "=====================================================================\n";
@@ -87,16 +88,16 @@ function handleInjectionTasks(PDO $pdo, $oss)
         }
         // 最终本地缓存路径
         $localSavePath = $appTmpDir . DIRECTORY_SEPARATOR . $fileName;
-        
+
         // 拉取文件
         $ossResult = $oss->downloadToLocal($ossPath, $localSavePath);
-        
+
         echo "拉取状态码：" . $ossResult['code'] . "\n";
         echo "拉取结果：" . $ossResult['message'] . "\n";
         echo "拉取存放路径：" . ($ossResult['local_path'] ?? '') . "\n";
-        
+
     }
-    
+
     //转换为真实路径，在这之前，要检查原始文件储存位置，如果在oss端，要先拉取到缓存目录中
     if($ossResult['code'] == 200 && file_exists($localSavePath)){
         $apk_file = [
@@ -111,8 +112,8 @@ function handleInjectionTasks(PDO $pdo, $oss)
         ];
         $oss_temp = false;//代表是在本地的
     }
-    
-    
+
+
     $keystore = realpath(__DIR__ . '/../signfile/' . $task['sign_path']);
     $alias     = $task['alias'];
     $storepass = $task['storepass'];
@@ -145,7 +146,7 @@ function handleInjectionTasks(PDO $pdo, $oss)
         $isVip = false;
     }
     echo "=================================注入前文件预检测====================================\n";
-    
+
     if(empty($task['apk_path'])){
         echo "原始APK包不存在\n";
         updateTaskStatus($pdo, $task['id'], '任务失败');
@@ -184,7 +185,7 @@ function handleInjectionTasks(PDO $pdo, $oss)
     echo "storepass: {$storepass}\n";
     echo "keypass: {$keypass}\n";
     $link = $task['inject_to_top'];//true=壳作为最终父链，false=壳继承父链
-    
+
     if (preg_match('/[\x{4e00}-\x{9fa5}]/u', $task['alias'])) {
         echo "证书别名包含中文字符\n";
         updateTaskStatus($pdo, $task['id'], '任务失败');
@@ -210,18 +211,18 @@ function handleInjectionTasks(PDO $pdo, $oss)
         del_osstemp($oss_temp, $localSavePath);
         return;
     }
-    
+
     if($result['count'] > 5){
         $task['dexmerge'] = 0;//当dex数量大于5的时候，强制关闭dex合并
     }
-    
+
     echo "==================================加固混淆检测\n";
     updateTaskInfo($pdo, $task['id'], '正在检测加固情况');
     $result = isApkObfuscated($apk_file[1], $pdo);
     updateencry($pdo, $task['id'], $result['message']);
-    
+
     echo "==================================开始反编译\n";
-    
+
     updateTaskInfo($pdo, $task['id'], '正在反编译');
     $temp_dir = create_unique_temp_subdir(realpath(__DIR__ . '/../temp/'));//为每次任务创建一个子目录
     $decompile = decompile_apks($apktool_jar, $apk_file, $temp_dir);//反编译,此时是不反编译res资源和dex的，包括AndroidManifest
@@ -245,10 +246,10 @@ function handleInjectionTasks(PDO $pdo, $oss)
         del_osstemp($oss_temp, $localSavePath);
         return;
     }
-    
+
     $de_apk1 = $decompile[0][2];//反编译后的壳目录
     $de_apk2 = $decompile[1][2];//反编译后的应用目录
-    
+
     /*echo "==================================开始注入so库,复制lib目录dex\n";
     $result = overwriteLib($de_apk2, $de_apk1);
     if(!$result){
@@ -259,8 +260,8 @@ function handleInjectionTasks(PDO $pdo, $oss)
         return;
     }
     echo "so库注入成功\n";*/
-    
-    
+
+
     echo "==================================检查是否注入过本壳\n";
     updateTaskInfo($pdo, $task['id'], '正在检测注入情况');
     /*$found = find_class_in_dex($de_apk2, $shellClassName);//
@@ -282,8 +283,8 @@ function handleInjectionTasks(PDO $pdo, $oss)
             del_osstemp($oss_temp, $localSavePath);
             return;
         }
-            
-        
+
+
         echo "该APP已经被本平台注入过\n";
         updateTaskStatus($pdo, $task['id'], '任务失败');
         updateTaskInfo($pdo, $task['id'], '该APP已经被注入过,请重新上传未注入过的底包');
@@ -299,31 +300,31 @@ function handleInjectionTasks(PDO $pdo, $oss)
     $GLOBALS['MainActivity']             = 'MainActivity';
     $GLOBALS['ShellAppComponentFactory'] = 'ShellAppComponentFactory';
     $GLOBALS['Config']                   = 'Config';
-    
+
     echo "==================================开始混淆类名\n";
 //if($task['user_id'] == 1){
     $parts = explode('.', $shellClassName);
     array_pop($parts); // 去掉类名
     $final_package = implode('.', $parts);
     $dexFile = rtrim($de_apk1, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'classes.dex';
-    
-    
-    
+
+
+
     //生成新的类名
     $GLOBALS['App']                      = generateRandomString(10,20);
     $GLOBALS['MainActivity']             = generateRandomString(10,20);
     $GLOBALS['ShellAppComponentFactory'] = generateRandomString(10,20);
     $GLOBALS['Config']                   = generateRandomString(10,20);
-    
+
     echo "类名混淆结果：" .  dexedit_rc($dexedit, $xmx, $dexFile, $final_package.'.App',                      $final_package. "." .$GLOBALS['App'], $dexFile) . "\n";
     echo "类名混淆结果：" .  dexedit_rc($dexedit, $xmx, $dexFile, $final_package.'.MainActivity',             $final_package. "." .$GLOBALS['MainActivity'], $dexFile) . "\n";
     echo "类名混淆结果：" .  dexedit_rc($dexedit, $xmx, $dexFile, $final_package.'.ShellAppComponentFactory', $final_package. "." .$GLOBALS['ShellAppComponentFactory'], $dexFile) . "\n";
     echo "类名混淆结果：" .  dexedit_rc($dexedit, $xmx, $dexFile, $final_package.'.Config',                   $final_package. "." .$GLOBALS['Config'], $dexFile) . "\n";
     $shellClassName = $final_package.'.'.$GLOBALS['App'];//更换入口类名为混淆后的类名
-    
+
 //}
-    
-    
+
+
     echo "==================================开始修改入口包名\n";
     updateTaskInfo($pdo, $task['id'], '正在混淆包名');
         echo "开始修改入口包名\n";
@@ -337,11 +338,11 @@ function handleInjectionTasks(PDO $pdo, $oss)
                 // 小写字母 a-z
                 'a','b','c','d','e','f','g','h','i','j','k','l','m',
                 'n','o','p','q','r','s','t','u','v','w','x','y','z',
-        
+
                 // 大写字母 A-Z
                 'A','B','C','D','E','F','G','H','I','J','K','L','M',
                 'N','O','P','Q','R','S','T','U','V','W','X','Y','Z',
-        
+
                 // 数字 0-9
                 '0','1','2','3','4','5','6','7','8','9',
             ],
@@ -350,24 +351,24 @@ function handleInjectionTasks(PDO $pdo, $oss)
                 // 品牌 / 项目相关
                 'yun','zhu','ru',
                 'dev','demo','sample','test',
-            
+
                 // 通用应用层
                 'app','apps','application','client',
                 'core','base','common','shared',
                 'cloud','platform','engine','framework',
-            
+
                 // 安卓 / 系统
                 'android','mobile','system','sys','os',
                 'service','services','provider','receiver',
                 'activity','fragment','view','widget',
-            
+
                 // 架构 / 模块
                 'ui','ux','kit','sdk',
                 'api','apis','net','network',
                 'data','db','database','storage',
                 'repo','repository','model','entity',
                 'vm','viewmodel','mvvm','mvp','mvc',
-            
+
                 // 功能方向
                 'auth','login','account','user','profile',
                 'pay','payment','order','trade',
@@ -375,26 +376,26 @@ function handleInjectionTasks(PDO $pdo, $oss)
                 'map','location','gps',
                 'media','video','audio','player',
                 'image','camera','gallery',
-            
+
                 // 工具 / 支撑
                 'util','utils','helper','tools',
                 'log','logger','debug','trace',
                 'config','setting','prefs','cache',
                 'security','secure','safe','crypto',
-            
+
                 // 版本 / 形态
                 'plus','pro','max','lite','mini',
                 'free','vip','premium',
-            
+
                 // 第三方 / 扩展常见
                 'third','thirdparty','plugin','extension',
                 'bridge','channel','adapter'
             ]
 
         ];
-        $segmentCount = rand(2,5); 
+        $segmentCount = rand(2,5);
         $segmentLength = rand(2,5);
-        //$segmentCount = 1; 
+        //$segmentCount = 1;
         //$segmentLength = 1;
         //$newPackage = '看你妈逼.臭傻逼.滚';//新包名
         $newPackage = generateRandomPackageName($charPool, $segmentCount, $segmentLength);//生成随机包名
@@ -403,19 +404,19 @@ function handleInjectionTasks(PDO $pdo, $oss)
 
         $oldClassName = $shellClassName;// 原完整类名，例如 com.dev.demo.shell.MyApplication
         $className = substr($oldClassName, strrpos($oldClassName, '.') + 1);//拆出类名MyApplication
-        
+
         // 生成新的完整类名
         $newClassName = $newPackage . '.' . $className;
 
         //如有未开启加强去签的，才能混淆包名，否则so库会因为找不到包名方法而闪退
         $rpk = dexedit_rpk($dexedit, $xmx, $dexFile, $shellClassName, $newPackage, $dexFile);//先修改入口所在的类
-        
+
         //再修改固定包名，由于该方法会自动删掉类名，所以这里传入要带类名
         $rpk = dexedit_rpk($dexedit, $xmx, $dexFile, 'com.example.shell.App', generateRandomPackageName($charPool, $segmentCount, $segmentLength), $dexFile);
         $rpk = dexedit_rpk($dexedit, $xmx, $dexFile, 'org.lsposed.hiddenapibypass.HiddenApiBypass', generateRandomPackageName($charPool, $segmentCount, $segmentLength), $dexFile);
 
         echo $rpk . "\n";
-        
+
         if($rpk == "true\n"){
             $shellClassName = $newClassName;
             $final_package = $newPackage;//最终包名
@@ -432,14 +433,14 @@ function handleInjectionTasks(PDO $pdo, $oss)
             }
             $final_package = $oldPackage;
         }
-    
-    
-    
-    
-    
-    
-    
-    
+
+
+
+
+
+
+
+
     echo "==================================开始反编译壳dex\n";
     updateTaskInfo($pdo, $task['id'], '反编译壳');
     $result = dexToSmali($baksmali, $de_apk1);
@@ -458,7 +459,7 @@ function handleInjectionTasks(PDO $pdo, $oss)
     }else{
         $setupLauncher = setupLauncherByMetaDataWithXml2Axml($xml2axml,$de_apk2);
     }
-    
+
     echo "==================================插入xml\n";
     if ($task['launcher']) {
         updateTaskInfo($pdo, $task['id'], '注入开屏窗口');
@@ -467,7 +468,7 @@ function handleInjectionTasks(PDO $pdo, $oss)
             $xml2axml,
             $de_apk2
         );
-    
+
         if ($removedActivity === false) {
             echo "删除原 LAUNCHER 失败\n";
             updateTaskStatus($pdo, $task['id'], '注入失败');
@@ -476,9 +477,9 @@ function handleInjectionTasks(PDO $pdo, $oss)
             del_osstemp($oss_temp, $localSavePath);
             return;
         }
-        
+
         echo "已删除原 LAUNCHER Activity：{$removedActivity}\n";
-    
+
         // ② 注入新的 LAUNCHER Activity
         $activityXml = '<activity
             android:name="' . $final_package . '.' .$GLOBALS['MainActivity'] .'"
@@ -488,13 +489,13 @@ function handleInjectionTasks(PDO $pdo, $oss)
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>';
-    
+
         $result = injectActivityWithXml2Axml(
             $xml2axml,
             $de_apk2,
             $activityXml
         );
-    
+
         if ($result) {
             echo "注入新 LAUNCHER 成功\n";
         } else {
@@ -505,7 +506,7 @@ function handleInjectionTasks(PDO $pdo, $oss)
             del_osstemp($oss_temp, $localSavePath);
             return;
         }
-        
+
         replace_config_LAUNCHER($de_apk1, encrypt_text($removedActivity));//将原始启动窗口加密存放到壳配置中
     }
     echo "==================================基础检查完成,开始壳配置修改\n";
@@ -576,14 +577,14 @@ function handleInjectionTasks(PDO $pdo, $oss)
         replace_config_VPNCHECK($de_apk1, md5(time()));//将时间戳加密后写入这个值，其实为任意值均代表禁用VPN
         echo "已禁用VPN环境\n";
     }
-    
+
     echo "==================================进程隔离\n";
     if(!$task['isMainProcess']){
         replace_config_ISMMAINPROCESS($de_apk1, md5(time()));//将时间戳加密后写入这个值，其实为任意值均代表不隔离进程
         echo "已改成不隔离进程\n";
     }
-    
-    
+
+
     echo "==================================去除签名校验,免写出文件\n";
     if(!file_exists(rtrim($de_apk2, '/\\') . '/assets/SignatureKiller/origin.apk')){
         if($task['killsign']){
@@ -606,7 +607,7 @@ function handleInjectionTasks(PDO $pdo, $oss)
             }else{
                 echo "未使用加强模式去除签名\n";
             }
-            
+
         }else{
             echo "未开启去除签名校验\n";
         }
@@ -618,7 +619,12 @@ function handleInjectionTasks(PDO $pdo, $oss)
     //$appName = readApplicationName($AXMLPrinter2, $de_apk2);//反编译读取
     $appName = readApplicationName($xml2axml, $de_apk2);//用xml2axml反编译读取，这个库是被我修复过的
     echo "反编译得到的入口{$appName}\n";
-    $AAPT_className = getApplicationClassName($aapt, $apk_file[1]);//AAPT读取
+    $manifestEditable = canManifestEditorProcess($Editor, $de_apk2);
+    if (!$manifestEditable) {
+        echo "ManifestEditor 不支持当前 Manifest，后续将尽量走非 Manifest 修改链路\n";
+    }
+
+    $AAPT_className = getApplicationClassName($aapt, $apk_file[1], $aapt2);//AAPT/AAPT2读取
     if($appName !== $AAPT_className){
         echo "两种模式得到的入口类名不一致\n";
         if (!empty($AAPT_className) && preg_match('/[^a-zA-Z0-9.]/', $AAPT_className)) {
@@ -639,7 +645,7 @@ function handleInjectionTasks(PDO $pdo, $oss)
     }else{
         echo "使用反编译得到的入口类：{$appName}\n";
     }
-    
+
     echo "入口类{$appName}\n";
     if (strpos($appName, '.') === 0) {
         // 如果是相对类名（以.开头），去掉第一个点并补全包名
@@ -656,7 +662,7 @@ $applicationlin=[];
     if(!$task['kill_Inject']){
         echo "该任务未选择去除云注入\n";
     }else{
-        
+
         //去除普通云注入
         updateTaskInfo($pdo, $task['id'], '查找云注入dex');
         echo "该任务选择了去除云注入,开始查找云注入dex\n";
@@ -674,7 +680,7 @@ $applicationlin=[];
                 echo "父类是：" . $CloudInject . PHP_EOL;
             }
             echo "==================================开始去除云注入\n";
-            
+
             updateTaskInfo($pdo, $task['id'], '开始去除云注入');
             if($appName == 'com.sadfxg.fasg.App'){
                 echo "入口类就是云注入类,直接将入口类改成云注入的父类" . PHP_EOL;
@@ -706,12 +712,12 @@ $applicationlin=[];
                     }
                 }
             }
-            
-            
+
+
         }
-        
-        
-        
+
+
+
         //去除雀云注入
         updateTaskInfo($pdo, $task['id'], '查找雀云注入dex');
         echo "该任务选择了去除云注入,开始查找雀云注入dex\n";
@@ -729,7 +735,7 @@ $applicationlin=[];
                 echo "父类是：" . $CloudInject . PHP_EOL;
             }
             echo "==================================开始去除云注入\n";
-            
+
             updateTaskInfo($pdo, $task['id'], '开始去除雀云注入');
             if($appName == 'com.lark.injector.InjectorApplication'){
                 echo "入口类就是雀云注入类,直接将入口类改成雀云注入的父类" . PHP_EOL;
@@ -761,12 +767,12 @@ $applicationlin=[];
                     }
                 }
             }
-            
-            
+
+
         }
-    
-        
-        
+
+
+
     }
     echo "==================================开始修复可能存在的desugar问题\n";
     echo "检测目标应用底包的desugar库是否缺失hashCode方法，如果缺了，则从本平台的库中移植这个方法进去确保兼容，只移植这一个方法即可,不然可能出现其他不可预知的问题\n";
@@ -776,7 +782,7 @@ $applicationlin=[];
     }else{
         echo "该应用存在desugar库，需要检修\n";
         $result = dexedit_mergedex($dexedit, $xmx, $de_apk2."/".$found, $de_apk1."/classes2.dex", $de_apk2."/".$found);
-        
+
         if ($result) {
             echo "desugar库融合修复 成功\n";
         } else {
@@ -823,15 +829,15 @@ $applicationlin=[];
                     return;
                 }else{
                     echo "保存原始入口成功\n";
-                    
-                    
-                    
+
+
+
                 }
             }
         }else{
             echo "无原始入口，不修改壳父类，不保存入口\n";
         }
-        
+
     }else if($mode == 1){
         if(empty($appName) || $appName == 'android.app.Application'){
             echo "该应用无入口类或者已经是application，模式不适用，切换到入口注入模式\n";
@@ -853,15 +859,15 @@ $applicationlin=[];
                 }else{
                     echo "APP小于3M，不加桩\n";
                 }*/
-                
-                
+
+
             }else{
                 //未找到链路和dex则找入口dex文件，如果勾选了进程隔离，则只注入到上1层，因为沙盒类应用可能存在复杂的继承关系，会导致分身启动失败
                 $found = dexedit_ac($dexedit, $xmx, $apk_file[1], $appName);//找目标应用的入口dex
             }
-            
+
             $found = dexedit_ac($dexedit, $xmx, $apk_file[1], $appName);//找目标应用的入口dex
-            
+
             if(!$found){
                 updateTaskStatus($pdo, $task['id'], '注入失败');
                 updateTaskInfo($pdo, $task['id'], '未找到入口dex文件,请更换注入模式');
@@ -900,16 +906,16 @@ $applicationlin=[];
             }
 
         }
-        
-        
-        
-        
-        
-        
-        
+
+
+
+
+
+
+
     }else if($mode == 2){
-        
-        $appComponentFactoryClassName = getappComponentFactoryClassName($aapt, $apk_file[1]);
+
+        $appComponentFactoryClassName = getappComponentFactoryClassName($aapt, $apk_file[1], $aapt2);
         echo "注入模式2,appComponentFactory 注入,注入工厂{$appComponentFactoryClassName}\n";
         echo "此模式原理,读取原始工厂，将壳类注入到工厂入口，然后由壳appComponentFactory劫持原入口，调用壳入口，然后壳反射调用原工厂\n";
         if(!empty($appComponentFactoryClassName)){
@@ -941,9 +947,9 @@ $applicationlin=[];
     }else if($mode == 3){
         echo "注入模式3,入口注入.反射,保存入口{$appName}\n";
         echo "此模式原理,将原始入口保存，将壳类注入到application入口，然后由壳反射调用原入口\n";//通过反射调用，似乎在部分应用中存在问题，需要改成壳继承父入口类
-        
+
         /*$result = writeYunzhuru($de_apk2, $appName);//写出入口到assets中，138版本以下的旧版本壳需要写出此特征
-        
+
         if(!$result){
             echo "保存原始入口失败\n";
             updateTaskStatus($pdo, $task['id'], '注入失败');
@@ -972,21 +978,28 @@ $applicationlin=[];
         return;
     }
     echo "编译壳完成\n";
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
+
+
+
+
+
+
+
+
+
     echo "==================================开始复制剩余dex文件\n";
     $result = mergeDexFiles($de_apk2, $de_apk1);
     print_r($result);
     echo "==================================开始修改AndroidManifest入口\n";
     if($mode == 0 || $mode == 3){
+        if (!$manifestEditable) {
+            updateTaskStatus($pdo, $task['id'], '注入失败');
+            updateTaskInfo($pdo, $task['id'], 'Manifest受保护，无法修改入口，请改用链路注入模式');
+            safeDeleteDirectory($temp_dir);
+            del_osstemp($oss_temp, $localSavePath);
+            return;
+        }
         $result = updateManifest($Editor, $de_apk2, $shellClassName);
         if(!$result){
             updateTaskStatus($pdo, $task['id'], '注入失败');
@@ -999,67 +1012,78 @@ $applicationlin=[];
     }else{
         echo "此模式无需修改入口\n";
     }
-    echo "==================================开始注入权限\n";
-    /*$permissions = $task['permissions'];//表里的permissions字段
-    $perms = [
-        'android.permission.INTERNET',//网络权限
-        'android.permission.SYSTEM_ALERT_WINDOW'//悬浮窗权限
-    ];*/
-    // 解析表里的权限，确保是数组
-    $permissions = json_decode($task['permissions'], true);
-    if (!is_array($permissions)) {
-        $permissions = [];
-    }
-    
-    // 要合并的新权限数组
-    $perms = [
-        'android.permission.INTERNET',//网络
-        'android.permission.SYSTEM_ALERT_WINDOW',//悬浮窗
-        'android.permission.ACCESS_NETWORK_STATE',//网络检查
-        'android.permission.QUERY_ALL_PACKAGES'//包名检测权限
-    ];
-    
-    // 合并数组并去重
-    $mergedPermissions = array_values(array_unique(array_merge($permissions, $perms)));
-    $result = addPermissions($Editor, $de_apk2, $mergedPermissions);
-    if(!$result){
-        updateTaskStatus($pdo, $task['id'], '注入失败');
-        updateTaskInfo($pdo, $task['id'], '添加权限失败');
-        safeDeleteDirectory($temp_dir);
-        del_osstemp($oss_temp, $localSavePath);
-        return;
-    }
-    echo "权限注入完成\n";
-    echo "==================================开始注入debug模式\n";
-    if($task['debug']){
-        $result = debuggable($Editor, $de_apk2, $task['debug']);
-        if(!$result){
-            updateTaskInfo($pdo, $task['id'], '启用debug模式失败');
-            echo "debug注入失败\n";
-        }else{
-            echo "debug注入完成\n";
+    if ($manifestEditable) {
+        echo "==================================开始注入权限\n";
+        /*$permissions = $task['permissions'];//表里的permissions字段
+        $perms = [
+            'android.permission.INTERNET',//网络权限
+            'android.permission.SYSTEM_ALERT_WINDOW'//悬浮窗权限
+        ];*/
+        // 解析表里的权限，确保是数组
+        $permissions = json_decode($task['permissions'], true);
+        if (!is_array($permissions)) {
+            $permissions = [];
         }
-    }else{
-         echo "未启用debug注入\n";
-    }
-    echo "==================================HTTP限制解除\n";
-    $task['allowHttp'] = 1;//必须解除HTTP限制,防止特殊情况域名失效可以用ip
-    if($task['allowHttp']){
-        $result = fix_android_http_limit($Editor, $de_apk2, "android-usesCleartextTraffic:true");
+
+        // 要合并的新权限数组
+        $perms = [
+            'android.permission.INTERNET',//网络
+            'android.permission.SYSTEM_ALERT_WINDOW',//悬浮窗
+            'android.permission.ACCESS_NETWORK_STATE',//网络检查
+            'android.permission.QUERY_ALL_PACKAGES'//包名检测权限
+        ];
+
+        // 合并数组并去重
+        $mergedPermissions = array_values(array_unique(array_merge($permissions, $perms)));
+        $result = addPermissions($Editor, $de_apk2, $mergedPermissions);
         if(!$result){
             updateTaskStatus($pdo, $task['id'], '注入失败');
-            updateTaskInfo($pdo, $task['id'], '解除HTTP限制失败');
+            updateTaskInfo($pdo, $task['id'], '添加权限失败');
             safeDeleteDirectory($temp_dir);
             del_osstemp($oss_temp, $localSavePath);
             return;
         }
-        echo "已解除HTTP限制\n";
-    }else{
-        echo "未使用解除http限制\n";
+        echo "权限注入完成\n";
+        echo "==================================开始注入debug模式\n";
+        if($task['debug']){
+            $result = debuggable($Editor, $de_apk2, $task['debug']);
+            if(!$result){
+                updateTaskInfo($pdo, $task['id'], '启用debug模式失败');
+                echo "debug注入失败\n";
+            }else{
+                echo "debug注入完成\n";
+            }
+        }else{
+             echo "未启用debug注入\n";
+        }
+        echo "==================================HTTP限制解除\n";
+        $task['allowHttp'] = 1;//必须解除HTTP限制,防止特殊情况域名失效可以用ip
+        if($task['allowHttp']){
+            $result = fix_android_http_limit($Editor, $de_apk2, "android-usesCleartextTraffic:true");
+            if(!$result){
+                updateTaskStatus($pdo, $task['id'], '注入失败');
+                updateTaskInfo($pdo, $task['id'], '解除HTTP限制失败');
+                safeDeleteDirectory($temp_dir);
+                del_osstemp($oss_temp, $localSavePath);
+                return;
+            }
+            echo "已解除HTTP限制\n";
+        }else{
+            echo "未使用解除http限制\n";
+        }
+        // 强制将 extractNativeLibs 设为 true，兼容 Android 16 安装（二进制 manifest 用 ManifestEditor 修改）
+        fix_android_http_limit($Editor, $de_apk2, "android-extractNativeLibs:true");
+        echo "已处理extractNativeLibs\n";
+    } else {
+        if ($task['debug']) {
+            updateTaskStatus($pdo, $task['id'], '注入失败');
+            updateTaskInfo($pdo, $task['id'], 'Manifest受保护，无法启用debug模式');
+            safeDeleteDirectory($temp_dir);
+            del_osstemp($oss_temp, $localSavePath);
+            return;
+        }
+        echo "Manifest受保护，跳过权限/debug/HTTP/extractNativeLibs修改，保留原Manifest\n";
     }
-    // 强制将 extractNativeLibs 设为 true，兼容 Android 16 安装（二进制 manifest 用 ManifestEditor 修改）
-    fix_android_http_limit($Editor, $de_apk2, "android-extractNativeLibs:true");
-    echo "已处理extractNativeLibs\n";
     echo "==================================去除签名校验\n";
     if(!file_exists(rtrim($de_apk2, '/\\') . '/assets/SignatureKiller/origin.apk')){
         if($task['killsign']){
@@ -1087,7 +1111,7 @@ $applicationlin=[];
             }else{
                 echo "未使用加强模式去除签名\n";
             }
-            
+
         }else{
             echo "未开启去除签名校验\n";
         }
@@ -1117,11 +1141,11 @@ $applicationlin=[];
         //writecharacteristic($de_apk2, 'libjiagu_vip_a64.so', generate_fake_so(1024*360));//特征随机内容
         //writecharacteristic($de_apk2, 'libjiagu_mips.a', generate_fake_so(1024*3));//特征随机内容
     }
-    
-    
-    
-    
-        
+
+
+
+
+
     //$task['confuse'] = 0;//直接停用此功能
     if($task['confuse']){
          echo "==================================合并APK模式\n";
@@ -1138,7 +1162,7 @@ $applicationlin=[];
         updateTaskInfo($pdo, $task['id'], "APK合并功能暂不可用");
         safeDeleteDirectory($temp_dir);
         return;*/
-        
+
     }else{
         echo "==================================回编译模式\n";
         updateTaskStatus($pdo, $task['id'], '正在编译');
@@ -1155,12 +1179,12 @@ $applicationlin=[];
             return;
         }
         $output_apk = $result[2];//拿到回编译之后的apk路径
-        
+
     }
-    
+
     echo "==================================清理解包目录\n";
     updateTaskInfo($pdo, $task['id'], '清理文件');
-    
+
     //回编译成功之后,可以删除解包内容了
     //safeDeleteDirectory($de_apk1);
     //safeDeleteDirectory($de_apk2);
@@ -1174,13 +1198,13 @@ $applicationlin=[];
     }else{
         echo "该任务未开启dex重新分配\n";
     }
-    
-    
+
+
     echo "==================================zipalign_apk\n";
     updateTaskInfo($pdo, $task['id'], 'ZIP对齐');
     echo "正在zip对齐：{$output_apk}\n";
     $zipalign = zipalign_apk($output_apk);
-    
+
     print_r($zipalign);
     if(!$zipalign[0]){
         updateTaskStatus($pdo, $task['id'], '编译失败');
@@ -1212,7 +1236,7 @@ $applicationlin=[];
             }
         }
     }
-    
+
     echo "==================================AndroidManifest伪加密\n";
     //统一加密Androidmanifest
     if($task['fake']){
@@ -1226,9 +1250,9 @@ $applicationlin=[];
     }else{
         echo "该任务未开启加固\n";
     }
-    
-    
-    
+
+
+
     echo "==================================数据复用优化\n";
         $Multiplexing = true;
         if(file_exists(rtrim($de_apk2, '/\\') . '/assets/SignatureKiller/origin.apk')){
@@ -1253,7 +1277,7 @@ $applicationlin=[];
                 mkdir(__DIR__ . '/../release', 0755, true);
                 $release_dir = realpath(__DIR__ . '/../release');
             }
-            
+
             $filename = $task['package'] . '_' . date('Ymd_His') . '.signed.apk';
             $signed_apk = $release_dir . DIRECTORY_SEPARATOR . $filename;
             $result = optimizeApk(
@@ -1266,7 +1290,7 @@ $applicationlin=[];
                 $alias, // alias
                 $keypass  // keypass
             );
-            
+
             if ($result == false) {
                 echo "优化失败，走正常签名路线\n";
             } else {
@@ -1305,10 +1329,10 @@ $applicationlin=[];
         mkdir(__DIR__ . '/../release', 0755, true);
         $release_dir = realpath(__DIR__ . '/../release');
     }
-    
+
     $filename = $task['package'] . '_' . date('Ymd_His') . '.signed.apk';
     $signed_apk = $release_dir . DIRECTORY_SEPARATOR . $filename;
-    
+
     $result = sign_apk($keystore, $alias, $storepass, $keypass, $output_apk, $signed_apk, null, $apksigner_jar);//集成签名环境
     //$result = sign_apk($keystore, $alias, $storepass, $keypass, $output_apk, $signed_apk, null);//系统签名环境
     echo "==================================签名结果\n";
@@ -1336,8 +1360,8 @@ $applicationlin=[];
     }
 
     echo "==================================收尾清理\n";
-    
-    
+
+
     updateInjectedApkPath($pdo, $task['id'], $filename);//更新签名后的文件到数据库
     updateTaskStatus($pdo, $task['id'], '编译成功');
     updateTaskInfo($pdo, $task['id'], $depth.'编译成功');
@@ -1362,22 +1386,22 @@ $applicationlin=[];
 function del_osstemp($oss_temp, $localSavePath){
     if ($oss_temp) {
         echo "底包是从OSS拉取的，正在执行缓存底包删除\n";
-    
+
         if (file_exists($localSavePath)) {
-    
+
             // 尝试删除文件
             if (unlink($localSavePath)) {
                 echo "缓存底包删除成功\n";
             } else {
                 echo "缓存底包删除失败\n";
-    
+
                 // 可选：输出错误原因
                 $error = error_get_last();
                 if ($error) {
                     echo "错误信息：" . $error['message'] . "\n";
                 }
             }
-    
+
         } else {
             echo "缓存底包不存在\n";
         }
@@ -2591,7 +2615,7 @@ function editApkManifestHeaderAndOffset($apkPath) {
     }else{
         return true;
     }
-    
+
 }*/
 //20260301修复
 function jiagu($jiagu, $xmx, $inputApk, $outputApk){
@@ -3044,7 +3068,7 @@ function processDexDirectory($dir, $keyString) {
  * 解密一个通过 simpleEncrypt 加密的文件，返回原始二进制内容。
  *
  * 调用示例：
- * 
+ *
  * try {
  *     $encFile = '/path/to/encrypted.apk';       // 加密后的APK路径
  *     $keyFile = '/path/to/secret.key';           // 对应的密钥文件路径
@@ -3487,7 +3511,7 @@ function updateSmaliSuperClass($baseDir, $oldClass, $newSuperClass) {
         echo "错误：非法的新父类类名：不能以点号开头：$newSuperClass\n";
         return false;
     }
-    
+
     // 转换类名为路径
     $relativePath = 'smali/' . str_replace('.', '/', $oldClass) . '.smali';
     $filePath = rtrim($baseDir, '/\\') . '/' . $relativePath;
@@ -3767,74 +3791,57 @@ function extractApkSignatureBase64($apkPath) {
 }
 
 
-//通过AAPT获取APP入口
-function getApplicationClassName($aaptPath, $apkPath) {
-    $aaptPath = escapeshellarg($aaptPath);
-    $apkPath = escapeshellarg($apkPath);
+//通过AAPT/AAPT2获取APP入口
+function getApplicationClassName($aaptPath, $apkPath, $aapt2Path = 'aapt2') {
+    return getApplicationAttributeFromManifestTools($aaptPath, $aapt2Path, $apkPath, 'android:name', 'Application 的 android:name');
+}
 
-    $cmd = "$aaptPath dump xmltree $apkPath AndroidManifest.xml";
-    echo "执行命令：$cmd\n";
+//通过AAPT/AAPT2获取工厂入口
+function getappComponentFactoryClassName($aaptPath, $apkPath, $aapt2Path = 'aapt2') {
+    return getApplicationAttributeFromManifestTools($aaptPath, $aapt2Path, $apkPath, 'android:appComponentFactory', 'Application 的 android:appComponentFactory');
+}
 
-    $output = shell_exec($cmd);
-    if (!$output) {
-        echo "执行失败或未返回任何内容\n";
-        return false;
+/**
+ * 从 aapt / aapt2 的 xmltree 输出读取 application 属性。
+ *
+ * aapt 遇到异常 AXML 时经常直接失败；aapt2 对部分带异常 chunk 的包仍可解析，
+ * 所以这里固定增加 aapt2 fallback，避免把本可链路注入的任务误降级成入口注入。
+ */
+function getApplicationAttributeFromManifestTools($aaptPath, $aapt2Path, $apkPath, $attrName, $label) {
+    $commands = [];
+
+    if (!empty($aaptPath)) {
+        $commands[] = escapeshellarg($aaptPath) . ' dump xmltree ' . escapeshellarg($apkPath) . ' AndroidManifest.xml 2>&1';
     }
 
-    echo "解析开始：\n";
-    $lines = explode("\n", $output);
+    if (!empty($aapt2Path)) {
+        $commands[] = escapeshellarg($aapt2Path) . ' dump xmltree ' . escapeshellarg($apkPath) . ' --file AndroidManifest.xml 2>&1';
+    }
 
-    $insideApplication = false;
-
-    foreach ($lines as $i => $line) {
-        $trimmed = trim($line);
-        echo "[$i] $trimmed\n";
-
-        if (strpos($trimmed, 'E: application') === 0) {
-            $insideApplication = true;
-            echo "进入 application 标签\n";
+    foreach ($commands as $cmd) {
+        echo "执行命令：$cmd\n";
+        $output = shell_exec($cmd);
+        if (!$output) {
+            echo "执行失败或未返回任何内容\n";
             continue;
         }
 
-        if ($insideApplication) {
-            // 如果遇到其他 E: 开头的标签，就退出
-            if (preg_match('/^E: /', $trimmed)) {
-                echo "遇到其他标签，终止处理\n";
-                break;
-            }
-
-            if (strpos($trimmed, 'A: android:name') !== false) {
-                echo "匹配行：$trimmed\n";
-                if (preg_match('/"([^"]+)"/', $trimmed, $matches)) {
-                    echo "提取成功：{$matches[1]}\n";
-                    return $matches[1];
-                }
-            }
+        $value = parseApplicationAttributeFromXmltree($output, $attrName);
+        if ($value !== false && $value !== '') {
+            echo "提取成功：{$value}\n";
+            return $value;
         }
     }
 
-    echo "未找到 Application 的 android:name\n";
+    echo "未找到 {$label}\n";
     return false;
 }
 
-//
-//通过AAPT获取工厂入口
-function getappComponentFactoryClassName($aaptPath, $apkPath) {
-    $aaptPath = escapeshellarg($aaptPath);
-    $apkPath = escapeshellarg($apkPath);
-
-    $cmd = "$aaptPath dump xmltree $apkPath AndroidManifest.xml";
-    echo "执行命令：$cmd\n";
-
-    $output = shell_exec($cmd);
-    if (!$output) {
-        echo "执行失败或未返回任何内容\n";
-        return false;
-    }
-
-    echo "解析开始：\n";
+/**
+ * 解析 xmltree 中 application 节点的属性。
+ */
+function parseApplicationAttributeFromXmltree(string $output, string $attrName) {
     $lines = explode("\n", $output);
-
     $insideApplication = false;
 
     foreach ($lines as $i => $line) {
@@ -3847,24 +3854,24 @@ function getappComponentFactoryClassName($aaptPath, $apkPath) {
             continue;
         }
 
-        if ($insideApplication) {
-            // 如果遇到其他标签，立即退出 application 块
-            if (preg_match('/^E: /', $trimmed)) {
-                echo "遇到其他标签，终止处理\n";
-                break;
-            }
+        if (!$insideApplication) {
+            continue;
+        }
 
-            if (strpos($trimmed, 'A: android:appComponentFactory') !== false) {
-                echo "匹配行：$trimmed\n";
-                if (preg_match('/"([^"]+)"/', $trimmed, $matches)) {
-                    echo "提取成功：{$matches[1]}\n";
-                    return $matches[1];
-                }
+        // application 的属性在子节点之前出现；遇到下一个元素后结束属性扫描。
+        if (preg_match('/^E: /', $trimmed)) {
+            echo "遇到其他标签，终止处理\n";
+            break;
+        }
+
+        if (strpos($trimmed, 'A:') === 0 && strpos($trimmed, $attrName) !== false) {
+            echo "匹配行：$trimmed\n";
+            if (preg_match('/="([^"]*)"/', $trimmed, $matches)) {
+                return $matches[1];
             }
         }
     }
 
-    echo "未找到 Application 的 android:appComponentFactory\n";
     return false;
 }
 
@@ -3953,8 +3960,8 @@ function patch_dex_superclass($xmx, $baksmali, $smali, $smali_past, $dir, $dexFi
         escapeshellarg($smaliDir),
         escapeshellarg($dexPath)
     );
-    $cmdBaksmali = "java -Xmx{$xmx} -jar " . escapeshellarg($baksmali) . 
-               ' d ' . escapeshellarg($dexPath) . 
+    $cmdBaksmali = "java -Xmx{$xmx} -jar " . escapeshellarg($baksmali) .
+               ' d ' . escapeshellarg($dexPath) .
                ' -o ' . escapeshellarg($smaliDir);
     shell_exec($cmdBaksmali);
 
@@ -3987,9 +3994,9 @@ function patch_dex_superclass($xmx, $baksmali, $smali, $smali_past, $dir, $dexFi
             //移除开头的 L 和结尾的 ;，保留中间的 L
             $origParentDotted = preg_replace(['/^L/', '/;$/'], '', $currSuperDesc);
             $origParentDotted = str_replace('/', '.', $origParentDotted);
-    
+
             echo "替换后的父类 {$origParentDotted}\n";
-            
+
             if ($currSuperDesc !== $newSuperDesc) {
                 $line = preg_replace('/^\s*\.super\s+L.+;/', '.super ' . $newSuperDesc, $line);
                 $changed = true;
@@ -4231,8 +4238,8 @@ function find_class_in_dex($dir, $classname) {
 
             $str = fread($fp, $utf_len);
             if ($str === false) continue;
-            
-            
+
+
             if (mb_convert_encoding($str, 'UTF-8', 'UTF-8') == mb_convert_encoding($descriptor, 'UTF-8', 'UTF-8')) {
                 echo "找到类 {$descriptor} 在文件 {$file}\n";
                 fclose($fp);
@@ -4517,7 +4524,7 @@ function isApkObfuscated($apkPath, $pdo) {
 
     // 从数据库读取混淆检测强度阈值（默认 0.4）
     $ascii = floatval(Auth::getSetting($pdo, 'ascii', 0.4));
-    
+
     $garbledCount = 0;
     foreach ($lines as $line) {
         if (isGarbledName($line,$ascii)) {
@@ -4767,10 +4774,10 @@ function compileSmaliToNextDex($smaliJar, $de_apk1, $de_apk2) {
         return false;
     }
     echo "壳dex已注入到{$targetPath}\n";
-    
-    
-    
-    
+
+
+
+
     return true;
 }
 
@@ -4950,7 +4957,7 @@ function addPermissions($editorPath, $dirPath, $permissions) {
     $manifest = rtrim($dirPath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'AndroidManifest.xml';
     $newManifest = rtrim($dirPath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'AndroidManifest-new.xml';
 
-    if (!file_exists($manifest) || !is_array($permissions) || empty($permissions)) {
+    if (!is_file($manifest) || !is_array($permissions) || empty($permissions)) {
         return false;
     }
 
@@ -4961,9 +4968,11 @@ function addPermissions($editorPath, $dirPath, $permissions) {
         $cmd .= ' -up ' . escapeshellarg($permission);
     }
 
-    shell_exec($cmd);
+    $cmd .= ' 2>&1';
+    $output = shell_exec($cmd);
 
-    if (!file_exists($newManifest)) {
+    if (!is_file($newManifest) || filesize($newManifest) === 0 || stripos((string)$output, 'Exception') !== false) {
+        echo "添加权限 ManifestEditor 输出异常：{$output}\n";
         return false;
     }
 
@@ -4980,18 +4989,103 @@ function addPermissions($editorPath, $dirPath, $permissions) {
 
 
 //入口修改
+/**
+ * 解析工具路径：优先使用项目内置文件，缺失时回退系统 PATH。
+ */
+function resolve_tool_path($preferredPath, $commandName) {
+    if (!empty($preferredPath) && (is_file($preferredPath) || is_executable($preferredPath))) {
+        return $preferredPath;
+    }
+
+    $found = trim((string)shell_exec('command -v ' . escapeshellarg($commandName) . ' 2>/dev/null'));
+    if ($found !== '') {
+        echo "使用系统工具 {$commandName}: {$found}\n";
+        return $found;
+    }
+
+    echo "未找到系统工具 {$commandName}，保留默认路径：{$preferredPath}\n";
+    return $preferredPath;
+}
+
+/**
+ * 预检测 ManifestEditor 是否能处理当前 Manifest。
+ *
+ * 检测在临时副本上执行，避免异常 AXML 让 ManifestEditor 生成 0 字节结果并破坏真实清单。
+ */
+function canManifestEditorProcess($editorPath, $dirPath) {
+    $manifest = rtrim($dirPath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'AndroidManifest.xml';
+    if (!is_file($manifest)) {
+        echo "ManifestEditor预检测失败：AndroidManifest.xml 不是文件\n";
+        return false;
+    }
+
+    $tmpDir = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'manifest_probe_' . uniqid();
+    if (!mkdir($tmpDir, 0777, true) && !is_dir($tmpDir)) {
+        echo "ManifestEditor预检测失败：无法创建临时目录\n";
+        return false;
+    }
+
+    $tmpManifest = $tmpDir . DIRECTORY_SEPARATOR . 'AndroidManifest.xml';
+    $tmpNewManifest = $tmpDir . DIRECTORY_SEPARATOR . 'AndroidManifest-new.xml';
+    copy($manifest, $tmpManifest);
+
+    $cmd = 'java -jar ' . escapeshellarg($editorPath) . ' ' . escapeshellarg($tmpManifest) . ' -an ' . escapeshellarg('android.app.Application') . ' 2>&1';
+    $output = shell_exec($cmd);
+    $ok = is_file($tmpNewManifest)
+        && filesize($tmpNewManifest) > 0
+        && stripos((string)$output, 'Exception') === false
+        && stripos((string)$output, 'failed') === false;
+
+    if (!$ok) {
+        echo "ManifestEditor预检测失败：" . substr((string)$output, 0, 500) . "\n";
+    }
+
+    delete_manifest_probe_dir($tmpDir);
+    return $ok;
+}
+
+/**
+ * 删除 ManifestEditor 预检测创建的临时目录。
+ */
+function delete_manifest_probe_dir(string $path): void {
+    if (!file_exists($path)) {
+        return;
+    }
+
+    if (is_file($path) || is_link($path)) {
+        @unlink($path);
+        return;
+    }
+
+    $items = scandir($path);
+    if ($items === false) {
+        return;
+    }
+
+    foreach ($items as $item) {
+        if ($item === '.' || $item === '..') {
+            continue;
+        }
+        delete_manifest_probe_dir($path . DIRECTORY_SEPARATOR . $item);
+    }
+
+    @rmdir($path);
+}
+
+//入口修改
 function updateManifest($editorPath, $dirPath, $className) {
     $manifest = rtrim($dirPath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'AndroidManifest.xml';
     $newManifest = rtrim($dirPath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'AndroidManifest-new.xml';
 
-    if (!file_exists($manifest)) {
+    if (!is_file($manifest)) {
         return false;
     }
 
-    $cmd = 'java -jar ' . escapeshellarg($editorPath) . ' ' . escapeshellarg($manifest) . ' -an ' . escapeshellarg($className);
-    shell_exec($cmd);
+    $cmd = 'java -jar ' . escapeshellarg($editorPath) . ' ' . escapeshellarg($manifest) . ' -an ' . escapeshellarg($className) . ' 2>&1';
+    $output = shell_exec($cmd);
 
-    if (!file_exists($newManifest)) {
+    if (!is_file($newManifest) || filesize($newManifest) === 0 || stripos((string)$output, 'Exception') !== false) {
+        echo "修改入口 ManifestEditor 输出异常：{$output}\n";
         return false;
     }
 
@@ -5011,14 +5105,15 @@ function fix_android_http_limit($editorPath, $dirPath, $className) {
     $manifest = rtrim($dirPath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'AndroidManifest.xml';
     $newManifest = rtrim($dirPath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'AndroidManifest-new.xml';
 
-    if (!file_exists($manifest)) {
+    if (!is_file($manifest)) {
         return false;
     }
 
-    $cmd = 'java -jar ' . escapeshellarg($editorPath) . ' ' . escapeshellarg($manifest) . ' -aa ' . escapeshellarg($className);
-    shell_exec($cmd);
+    $cmd = 'java -jar ' . escapeshellarg($editorPath) . ' ' . escapeshellarg($manifest) . ' -aa ' . escapeshellarg($className) . ' 2>&1';
+    $output = shell_exec($cmd);
 
-    if (!file_exists($newManifest)) {
+    if (!is_file($newManifest) || filesize($newManifest) === 0 || stripos((string)$output, 'Exception') !== false) {
+        echo "修改 Manifest 属性输出异常：{$output}\n";
         return false;
     }
 
@@ -5039,14 +5134,15 @@ function debuggable($editorPath, $dirPath, $debuggable) {
     $manifest = rtrim($dirPath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'AndroidManifest.xml';
     $newManifest = rtrim($dirPath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'AndroidManifest-new.xml';
 
-    if (!file_exists($manifest)) {
+    if (!is_file($manifest)) {
         return false;
     }
 
-    $cmd = 'java -jar ' . escapeshellarg($editorPath) . ' ' . escapeshellarg($manifest) . ' -d ' . escapeshellarg($debuggable);
-    shell_exec($cmd);
+    $cmd = 'java -jar ' . escapeshellarg($editorPath) . ' ' . escapeshellarg($manifest) . ' -d ' . escapeshellarg($debuggable) . ' 2>&1';
+    $output = shell_exec($cmd);
 
-    if (!file_exists($newManifest)) {
+    if (!is_file($newManifest) || filesize($newManifest) === 0 || stripos((string)$output, 'Exception') !== false) {
+        echo "debug ManifestEditor 输出异常：{$output}\n";
         return false;
     }
 
@@ -5094,15 +5190,15 @@ function isDexCountExceed($apkPath, $maxDexCount = 10) {
     if (!file_exists($apkPath)) {
         throw new Exception("APK 文件不存在: $apkPath");
     }
-    
+
     // 使用awk：查找以.dex结尾且路径不包含斜杠的文件
     $cmd = "unzip -l " . escapeshellarg($apkPath) . " | awk '\$NF ~ /\\.dex\$/ && \$NF !~ /\// {count++} END {print count+0}'";
-    
+
     $output = shell_exec($cmd);
-    
+
     // 转为整数
     $dexCount = (int)trim($output);
-    
+
     // 返回布尔值（是否超过阈值）和实际数量
     return [
         'exceed' => $dexCount > $maxDexCount,
@@ -5122,8 +5218,8 @@ function updateTaskStatus(PDO $pdo, int $taskId, string $status)
     }
 
     $stmt = $pdo->prepare("
-        UPDATE cainiao_inject_task 
-        SET status_text = :status, completed_at = :completed_at 
+        UPDATE cainiao_inject_task
+        SET status_text = :status, completed_at = :completed_at
         WHERE id = :id
     ");
 
@@ -5157,7 +5253,7 @@ function updateencry(PDO $pdo, int $taskId, string $encry)
     $now = null;
 
     $stmt = $pdo->prepare("
-        UPDATE cainiao_inject_task 
+        UPDATE cainiao_inject_task
         SET encry = :encry
         WHERE id = :id
     ");
@@ -5175,7 +5271,7 @@ function updateTaskInfo(PDO $pdo, int $taskId, string $status)
     $now = null;
 
     $stmt = $pdo->prepare("
-        UPDATE cainiao_inject_task 
+        UPDATE cainiao_inject_task
         SET status_info = :status
         WHERE id = :id
     ");
@@ -5249,7 +5345,7 @@ function safeDeleteFile(?string $filePath): bool
         strpos($realFile, $templatesBase) !== 0 &&
         strpos($realFile, $releaseBase) !== 0 &&
         strpos($realFile, $tempBase) !== 0
-        
+
     ) {
         echo "安全限制：禁止删除非 uploads/templates/release/temp 中的文件\n";
         return false;
@@ -5267,7 +5363,7 @@ function safeDeleteFile(?string $filePath): bool
 
 /**
  * 更新注入任务的 injected_apk 路径
- * 
+ *
  * @param PDO $pdo 数据库句柄
  * @param int $taskId 注入任务ID
  * @param string $apkPath 编译后APK的相对路径或完整路径
@@ -5384,7 +5480,7 @@ function updateInjectedApkPath($pdo, $taskId, $apkPath)
 
 /**
  * 检查指定注入任务是否存在
- * 
+ *
  * @param PDO $pdo 数据库句柄
  * @param int $taskId 任务ID
  * @return bool 存在返回 true，否则 false

@@ -1215,6 +1215,111 @@ function zipalign_apk($apk_path) {
 
     return $results;
 }*/
+/**
+ * 修复 apktool 解包时被同名目录污染的根文件。
+ *
+ * 部分 APK 会故意放入 AndroidManifest.xml/...、classes.dex/... 这类 ZIP 条目。
+ * apktool 在 --no-res --no-src 模式下可能先创建同名目录，导致真正的根文件
+ * AndroidManifest.xml / classes.dex / resources.arsc 无法落盘，后续注入流程会把目录当文件处理。
+ * 这里仅恢复 APK 根层关键文件，不处理子目录条目，避免引入路径穿越风险。
+ */
+function restore_apktool_root_files(string $apkFile, string $outputDir): void
+{
+    if (!is_file($apkFile) || !is_dir($outputDir)) {
+        return;
+    }
+
+    if (!class_exists('ZipArchive')) {
+        echo "ZipArchive 不可用，跳过根文件恢复\n";
+        return;
+    }
+
+    $zip = new ZipArchive();
+    if ($zip->open($apkFile) !== true) {
+        echo "无法打开 APK，跳过根文件恢复：{$apkFile}\n";
+        return;
+    }
+
+    for ($i = 0; $i < $zip->numFiles; $i++) {
+        $stat = $zip->statIndex($i);
+        if (!$stat || empty($stat['name'])) {
+            continue;
+        }
+
+        $entryName = $stat['name'];
+        if (substr($entryName, -1) === '/' || strpos($entryName, '/') !== false) {
+            continue;
+        }
+
+        if (!preg_match('/^(AndroidManifest\.xml|resources\.arsc|classes(?:\d*)\.dex)$/', $entryName)) {
+            continue;
+        }
+
+        $targetPath = rtrim($outputDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $entryName;
+        $needsRestore = is_dir($targetPath) || !is_file($targetPath) || filesize($targetPath) === 0;
+        if (!$needsRestore) {
+            continue;
+        }
+
+        if (is_dir($targetPath)) {
+            restore_remove_path($targetPath);
+        } elseif (file_exists($targetPath) && !unlink($targetPath)) {
+            echo "删除异常根文件失败：{$targetPath}\n";
+            continue;
+        }
+
+        $input = $zip->getStream($entryName);
+        if (!$input) {
+            echo "读取 APK 根文件失败：{$entryName}\n";
+            continue;
+        }
+
+        $output = fopen($targetPath, 'wb');
+        if (!$output) {
+            fclose($input);
+            echo "写入 APK 根文件失败：{$targetPath}\n";
+            continue;
+        }
+
+        stream_copy_to_stream($input, $output);
+        fclose($input);
+        fclose($output);
+
+        echo "已从原 APK 恢复根文件：{$entryName}\n";
+    }
+
+    $zip->close();
+}
+
+/**
+ * 删除 apktool 污染目录用的内部工具函数。
+ */
+function restore_remove_path(string $path): void
+{
+    if (!file_exists($path)) {
+        return;
+    }
+
+    if (is_file($path) || is_link($path)) {
+        @unlink($path);
+        return;
+    }
+
+    $items = scandir($path);
+    if ($items === false) {
+        return;
+    }
+
+    foreach ($items as $item) {
+        if ($item === '.' || $item === '..') {
+            continue;
+        }
+        restore_remove_path($path . DIRECTORY_SEPARATOR . $item);
+    }
+
+    @rmdir($path);
+}
+
 //20260301修复RCE漏洞
 function decompile_apks($apktool_jar, $apk_files, $output_base_dir = null) {
     $results = [];
@@ -1257,6 +1362,7 @@ function decompile_apks($apktool_jar, $apk_files, $output_base_dir = null) {
         echo "反编译执行结果：" . $output . "\n";
 
         if (is_dir($output_dir)) {
+            restore_apktool_root_files($apk_file_real, $output_dir);
             $results[] = [true, "反编译成功", $output_dir, $output];
         } else {
             $results[] = [false, "反编译失败", $output_dir, $output];
