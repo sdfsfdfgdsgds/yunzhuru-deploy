@@ -15,6 +15,26 @@
       justify-content: space-between;
       align-items: center;
     }
+    .delete-loading-mask {
+      background: rgba(17, 24, 39, 0.82) !important;
+    }
+    .delete-loading-mask .el-loading-spinner {
+      max-width: 86vw;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    .delete-loading-mask .el-loading-text {
+      color: #fff !important;
+      font-size: 16px;
+      font-weight: 700;
+      line-height: 1.7;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+      white-space: normal;
+      word-break: break-all;
+    }
+    .delete-loading-mask .el-loading-spinner .path {
+      stroke: #fff !important;
+    }
   </style>
 </head>
 <body>
@@ -999,7 +1019,8 @@ async function postAppDelete(method, row, successMessage) {
   const loading = ElementPlus.ElLoading.service({
     lock: true,
     text: lastProgressText,
-    background: 'rgba(0, 0, 0, 0.45)'
+    background: 'rgba(17, 24, 39, 0.82)',
+    customClass: 'delete-loading-mask'
   });
   const setDeleteLoadingText = (text) => {
     if (!text) return;
@@ -1009,7 +1030,7 @@ async function postAppDelete(method, row, successMessage) {
       return;
     }
     // 兼容旧版 Element Loading：没有 setText 时直接改当前 loading 文案。
-    const textEl = document.querySelector('.el-loading-mask .el-loading-text');
+    const textEl = document.querySelector('.delete-loading-mask .el-loading-text, .el-loading-mask .el-loading-text');
     if (textEl) textEl.textContent = text;
   };
   const pollDeleteProgress = async () => {
