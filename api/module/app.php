@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/../utils/DeletedApp.php';
+require_once __DIR__ . '/../utils/AppPhysicalDelete.php';
 
 if (!defined('OSS_DOWNLOAD_KEEP_MINUTES')) {
     // 注入产物可能达到数百 MB 到数 GB，OSS 临时下载对象需要覆盖完整下载和断点续传窗口。
@@ -1291,8 +1292,45 @@ function deleteApp(PDO $pdo, array $input)
         appDeleteDebugLog($appId, 'redis_delete_failed', ['message' => $e->getMessage()]);
     }
 
-    appDeleteProgressUpdate($progressToken, $userId, $appId, 'completed', '删除完成', 100);
-    appDeleteDebugLog($appId, 'delete_completed');
+    // 文件、桶配置和缓存清理完成后，再按依赖顺序物理删除数据库记录。
+    try {
+        appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在物理删除数据库配置和应用主表...', 92);
+        $physicalStart = microtime(true);
+        $physicalStep = 0;
+        appDeleteDebugLog($appId, 'db_physical_delete_start');
+        $physicalSummary = physicallyDeleteAppDatabase($pdo, $appId, function (array $event) use ($progressToken, $userId, $appId, &$physicalStep) {
+            $physicalStep++;
+            $label = (string)($event['label'] ?? $event['table'] ?? '数据库记录');
+            $affected = (int)($event['affected'] ?? 0);
+            $percent = min(99, 92 + (int)floor($physicalStep / 5));
+            appDeleteDebugLog($appId, 'db_physical_delete_step', $event);
+            appDeleteProgressUpdate(
+                $progressToken,
+                $userId,
+                $appId,
+                'running',
+                "正在物理删除数据库：{$label}（本步 {$affected} 行）...",
+                $percent,
+                [
+                    'db_step' => $label,
+                    'affected_rows' => $affected,
+                ]
+            );
+        });
+        appDeleteDebugLog($appId, 'db_physical_delete_done', [
+            'duration_ms' => (int)round((microtime(true) - $physicalStart) * 1000),
+            'summary' => $physicalSummary,
+        ]);
+    } catch (\Throwable $e) {
+        appDeleteDebugLog($appId, 'db_physical_delete_failed', [
+            'message' => $e->getMessage(),
+        ]);
+        appDeleteProgressUpdate($progressToken, $userId, $appId, 'failed', '数据库物理删除失败：' . $e->getMessage(), 100);
+        throw $e;
+    }
+
+    appDeleteProgressUpdate($progressToken, $userId, $appId, 'completed', '删除完成（数据库已物理删除）', 100);
+    appDeleteDebugLog($appId, 'delete_completed', ['database_physical_deleted' => true]);
     
     return ['message' => '删除成功'];
 }
