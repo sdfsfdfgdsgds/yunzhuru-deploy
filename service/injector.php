@@ -249,6 +249,28 @@ function handleInjectionTasks(PDO $pdo, $oss)
 
     $de_apk1 = $decompile[0][2];//反编译后的壳目录
     $de_apk2 = $decompile[1][2];//反编译后的应用目录
+    $earlyAppName = null;
+    $earlyManifestEditable = true;
+    if ((int)$mode === 3) {
+        echo "==================================入口反射模式预读Manifest\n";
+        $earlyAppName = readApplicationName($xml2axml, $de_apk2);
+        $earlyAaptAppName = getApplicationClassName($aapt, $apk_file[1], $aapt2);
+        if (empty($earlyAppName) && !empty($earlyAaptAppName)) {
+            $earlyAppName = $earlyAaptAppName;
+        }
+        if (strpos((string)$earlyAppName, '.') === 0) {
+            $earlyAppName = $task['package'] . $earlyAppName;
+        }
+        if ($earlyAppName === 'Application') {
+            $earlyAppName = 'android.app.Application';
+        }
+        $earlyManifestEditable = canManifestEditorProcess($Editor, $de_apk2);
+        if (!$earlyManifestEditable) {
+            echo "入口反射模式检测到Manifest受保护，强制启用保资源合并路径\n";
+            $task['confuse'] = 1;
+            $task['dexmerge'] = 0;
+        }
+    }
 
     /*echo "==================================开始注入so库,复制lib目录dex\n";
     $result = overwriteLib($de_apk2, $de_apk1);
@@ -315,6 +337,16 @@ function handleInjectionTasks(PDO $pdo, $oss)
     $GLOBALS['MainActivity']             = generateRandomString(10,20);
     $GLOBALS['ShellAppComponentFactory'] = generateRandomString(10,20);
     $GLOBALS['Config']                   = generateRandomString(10,20);
+    if ((int)$mode === 3 && !$earlyManifestEditable && !empty($earlyAppName)) {
+        $protectedPrefix = $task['package'] . '.';
+        $protectedAppLength = strlen($earlyAppName) - strlen($protectedPrefix);
+        if ($protectedAppLength > 0) {
+            $GLOBALS['App'] = generateRandomString($protectedAppLength, $protectedAppLength);
+            echo "Manifest受保护入口反射：壳Application类名长度对齐到{$protectedAppLength}，用于二进制替换\n";
+        } else {
+            echo "Manifest受保护入口反射：目标入口长度不足，无法提前对齐壳Application类名\n";
+        }
+    }
 
     echo "类名混淆结果：" .  dexedit_rc($dexedit, $xmx, $dexFile, $final_package.'.App',                      $final_package. "." .$GLOBALS['App'], $dexFile) . "\n";
     echo "类名混淆结果：" .  dexedit_rc($dexedit, $xmx, $dexFile, $final_package.'.MainActivity',             $final_package. "." .$GLOBALS['MainActivity'], $dexFile) . "\n";
@@ -948,16 +980,17 @@ $applicationlin=[];
         echo "注入模式3,入口注入.反射,保存入口{$appName}\n";
         echo "此模式原理,将原始入口保存，将壳类注入到application入口，然后由壳反射调用原入口\n";//通过反射调用，似乎在部分应用中存在问题，需要改成壳继承父入口类
 
-        /*$result = writeYunzhuru($de_apk2, $appName);//写出入口到assets中，138版本以下的旧版本壳需要写出此特征
+        $result = writeYunzhuru($de_apk2, $appName);//写出入口到assets中，兼容旧版壳和异常配置读取
 
         if(!$result){
             echo "保存原始入口失败\n";
             updateTaskStatus($pdo, $task['id'], '注入失败');
             updateTaskInfo($pdo, $task['id'], '保存原始入口失败');
             safeDeleteDirectory($temp_dir);
+            del_osstemp($oss_temp, $localSavePath);
             return;
         }
-        echo "保存原始入口成功\n";*/
+        echo "保存原始入口成功\n";
     }else{
         echo "未知的注入模式\n";
         updateTaskStatus($pdo, $task['id'], '注入失败');
@@ -994,19 +1027,32 @@ $applicationlin=[];
     echo "==================================开始修改AndroidManifest入口\n";
     if($mode == 0 || $mode == 3){
         if (!$manifestEditable) {
-            updateTaskStatus($pdo, $task['id'], '注入失败');
-            updateTaskInfo($pdo, $task['id'], 'Manifest受保护，无法修改入口，请改用链路注入模式');
-            safeDeleteDirectory($temp_dir);
-            del_osstemp($oss_temp, $localSavePath);
-            return;
-        }
-        $result = updateManifest($Editor, $de_apk2, $shellClassName);
-        if(!$result){
-            updateTaskStatus($pdo, $task['id'], '注入失败');
-            updateTaskInfo($pdo, $task['id'], '修改入口失败');
-            safeDeleteDirectory($temp_dir);
-            del_osstemp($oss_temp, $localSavePath);
-            return;
+            if ((int)$mode === 3) {
+                updateTaskInfo($pdo, $task['id'], 'Manifest受保护，使用保资源二进制入口替换');
+                $result = updateProtectedManifestApplicationBinary($de_apk2, $appName, $shellClassName);
+                if (!$result) {
+                    updateTaskStatus($pdo, $task['id'], '注入失败');
+                    updateTaskInfo($pdo, $task['id'], 'Manifest受保护，二进制入口替换失败，请使用保资源入口反射补丁');
+                    safeDeleteDirectory($temp_dir);
+                    del_osstemp($oss_temp, $localSavePath);
+                    return;
+                }
+            } else {
+                updateTaskStatus($pdo, $task['id'], '注入失败');
+                updateTaskInfo($pdo, $task['id'], 'Manifest受保护，无法修改入口，请改用入口反射保资源模式');
+                safeDeleteDirectory($temp_dir);
+                del_osstemp($oss_temp, $localSavePath);
+                return;
+            }
+        } else {
+            $result = updateManifest($Editor, $de_apk2, $shellClassName);
+            if(!$result){
+                updateTaskStatus($pdo, $task['id'], '注入失败');
+                updateTaskInfo($pdo, $task['id'], '修改入口失败');
+                safeDeleteDirectory($temp_dir);
+                del_osstemp($oss_temp, $localSavePath);
+                return;
+            }
         }
         echo "入口修改完成\n";
     }else{
@@ -5098,6 +5144,67 @@ function updateManifest($editorPath, $dirPath, $className) {
     }
 
     return true;
+}
+
+// 受保护Manifest入口替换：不重建AXML，只在字符串长度一致时做二进制字符串池替换
+function updateProtectedManifestApplicationBinary($dirPath, $oldClassName, $newClassName) {
+    $manifest = rtrim($dirPath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'AndroidManifest.xml';
+    if (!is_file($manifest)) {
+        echo "受保护Manifest替换失败：AndroidManifest.xml不存在\n";
+        return false;
+    }
+
+    $oldClassName = (string)$oldClassName;
+    $newClassName = (string)$newClassName;
+    if ($oldClassName === '' || $newClassName === '') {
+        echo "受保护Manifest替换失败：入口类名为空\n";
+        return false;
+    }
+    if (strlen($oldClassName) !== strlen($newClassName)) {
+        echo "受保护Manifest替换失败：类名长度不一致 {$oldClassName}(" . strlen($oldClassName) . ") -> {$newClassName}(" . strlen($newClassName) . ")\n";
+        return false;
+    }
+
+    $content = file_get_contents($manifest);
+    if ($content === false || $content === '') {
+        echo "受保护Manifest替换失败：读取Manifest失败\n";
+        return false;
+    }
+
+    $toUtf16Le = function (string $value): string {
+        $result = '';
+        $length = strlen($value);
+        for ($i = 0; $i < $length; $i++) {
+            $result .= $value[$i] . "\0";
+        }
+        return $result;
+    };
+    $utf16Old = $toUtf16Le($oldClassName);
+    $utf16New = $toUtf16Le($newClassName);
+    $countUtf16 = substr_count($content, $utf16Old);
+    if ($countUtf16 > 0) {
+        $content = str_replace($utf16Old, $utf16New, $content);
+        if (file_put_contents($manifest, $content) === false) {
+            echo "受保护Manifest替换失败：写回UTF-16入口失败\n";
+            return false;
+        }
+        echo "受保护Manifest替换成功：UTF-16命中{$countUtf16}处 {$oldClassName} -> {$newClassName}\n";
+        return true;
+    }
+
+    $countUtf8 = substr_count($content, $oldClassName);
+    if ($countUtf8 > 0) {
+        $content = str_replace($oldClassName, $newClassName, $content);
+        if (file_put_contents($manifest, $content) === false) {
+            echo "受保护Manifest替换失败：写回UTF-8入口失败\n";
+            return false;
+        }
+        echo "受保护Manifest替换成功：UTF-8命中{$countUtf8}处 {$oldClassName} -> {$newClassName}\n";
+        return true;
+    }
+
+    echo "受保护Manifest替换失败：未在字符串池中找到{$oldClassName}\n";
+    return false;
 }
 
 //解除HTTP限制
