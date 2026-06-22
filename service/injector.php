@@ -3196,70 +3196,39 @@ function DEXDecrypt($encFile, $keyFile) {
 
 
 
-//APK合并方法
+// APK合并方法：使用 PHP ZipArchive 覆盖写入，不依赖系统 zip 命令
 /**
- * 将解包目录中的 AndroidManifest.xml、所有 dex 文件、lib 目录、assets 下指定文件与指定目录
- * 覆盖写入到临时apk中（先把原始apk复制到临时目录作为临时apk），仅使用 zip 命令实现。
+ * 将解包目录中的 AndroidManifest.xml、DEX、lib 和指定 assets 覆盖写入原 APK 副本。
  *
- * @param string $apkPath 原始apk文件路径
- * @param string $tmpDir 临时目录路径（函数会把apk复制到这里，作为临时apk）
- * @param string $unpackDir 解包目录（包含AndroidManifest.xml、*.dex、lib、assets等）
- * @param array $assetFiles 指定要覆盖到 apk 的 assets 下的“文件”列表（相对 assets 的路径，如 ['config.json','sub/a.txt']）
- * @param array $assetDirs 指定要覆盖到 apk 的 assets 下的“目录”列表（相对 assets 的路径，如 ['bundle','packs/extra']）
- * @return string|false 成功返回覆盖后的临时apk完整路径，失败返回false
+ * @param string $apkPath 原始 APK 文件路径
+ * @param string $tmpDir 临时目录路径
+ * @param string $unpackDir 解包目录
+ * @param array $assetFiles 指定要覆盖到 APK 的 assets 文件列表
+ * @param array $assetDirs 指定要覆盖到 APK 的 assets 目录列表
+ * @return string|false 成功返回覆盖后的临时 APK 完整路径，失败返回 false
  */
 function patchApk($apkPath, $tmpDir, $unpackDir, array $assetFiles = ['cainiao_vip.so','yunzhuru.com','yunzhuru.pkg','yunzhuru.sig', '声明.txt'], array $assetDirs = ['yunzhuru'])
 {
-    $runCmd = function (string $cmd) {
-        echo "执行命令：{$cmd}\n";
-        $output = shell_exec($cmd . ' 2>&1; printf "__EXIT_CODE:%s" $?');
-        if ($output === null) {
-            echo "命令执行失败：shell_exec返回null\n";
-            return [1, ""];
-        }
-
-        $outputTrim = rtrim($output, "\r\n\0\x0B\t ");
-        $code = 1;
-        if (preg_match_all('/__EXIT_CODE:(\d+)/', $outputTrim, $m) && !empty($m[1])) {
-            $code = (int) end($m[1]);
-            $std = preg_replace('/\s*__EXIT_CODE:\d+\s*$/', '', $outputTrim);
-        } else {
-            $std = $outputTrim;
-        }
-
-        if ($std !== '') {
-            echo "命令输出：\n{$std}\n";
-        }
-        echo "命令退出码：{$code}\n";
-        return [$code, $std];
-    };
-
-    echo "开始执行patchApk...\n";
+    echo "开始执行patchApk(ZipArchive)...\n";
+    if (!class_exists('ZipArchive')) {
+        echo "错误：PHP ZipArchive扩展不可用\n";
+        return false;
+    }
     if (!is_file($apkPath)) {
         echo "错误：apk文件不存在：{$apkPath}\n";
         return false;
     }
-    if (!is_dir($tmpDir)) {
-        echo "临时目录不存在，尝试创建：{$tmpDir}\n";
-        if (!@mkdir($tmpDir, 0777, true) && !is_dir($tmpDir)) {
-            echo "错误：无法创建临时目录：{$tmpDir}\n";
-            return false;
-        }
+    if (!is_dir($tmpDir) && !@mkdir($tmpDir, 0777, true) && !is_dir($tmpDir)) {
+        echo "错误：无法创建临时目录：{$tmpDir}\n";
+        return false;
     }
     if (!is_dir($unpackDir)) {
         echo "错误：解包目录不存在：{$unpackDir}\n";
         return false;
     }
 
-    [$codeZip, $zipStdout] = $runCmd('zip -v');
-    if (stripos($zipStdout, 'Zip') === false && stripos($zipStdout, 'Info-ZIP') === false) {
-        echo "错误：系统未安装zip或不可用，请安装zip后重试。\n";
-        return false;
-    }
-
     $baseName = basename($apkPath);
     $tempApk = rtrim($tmpDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $baseName;
-
     echo "复制apk到临时目录：{$apkPath} -> {$tempApk}\n";
     if (!@copy($apkPath, $tempApk)) {
         echo "错误：复制apk失败，请检查读写权限。\n";
@@ -3267,104 +3236,136 @@ function patchApk($apkPath, $tmpDir, $unpackDir, array $assetFiles = ['cainiao_v
     }
 
     $entries = [];
+    $root = rtrim($unpackDir, DIRECTORY_SEPARATOR);
+    $addEntry = function (string $rel) use (&$entries, $root) {
+        $rel = ltrim(str_replace('\\', '/', $rel), '/');
+        if ($rel === '') {
+            return;
+        }
+        $abs = $root . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel);
+        if (is_file($abs)) {
+            $entries[$rel] = $abs;
+        }
+    };
+    $addDir = function (string $relDir) use (&$entries, $root) {
+        $relDir = rtrim(ltrim(str_replace('\\', '/', $relDir), '/'), '/');
+        $absDir = $root . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relDir);
+        if (!is_dir($absDir)) {
+            return;
+        }
+        $it = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($absDir, FilesystemIterator::SKIP_DOTS)
+        );
+        foreach ($it as $file) {
+            if (!$file->isFile()) {
+                continue;
+            }
+            $rel = ltrim(str_replace('\\', '/', substr($file->getPathname(), strlen($root) + 1)), '/');
+            $entries[$rel] = $file->getPathname();
+        }
+    };
 
-    $manifest = rtrim($unpackDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'AndroidManifest.xml';
-    if (is_file($manifest)) {
+    if (is_file($root . DIRECTORY_SEPARATOR . 'AndroidManifest.xml')) {
         echo "发现AndroidManifest.xml，将参与覆盖。\n";
-        $entries[] = 'AndroidManifest.xml';
+        $addEntry('AndroidManifest.xml');
     } else {
         echo "警告：未在解包目录找到AndroidManifest.xml，跳过此项覆盖。\n";
     }
 
     echo "扫描dex文件...\n";
-    $dexRelative = [];
-    $rii = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($unpackDir, FilesystemIterator::SKIP_DOTS));
+    $dexCount = 0;
+    $rii = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
     foreach ($rii as $file) {
-        if ($file->isFile() && preg_match('/\.dex$/i', $file->getFilename())) {
-            $rel = ltrim(str_replace('\\', '/', substr($file->getPathname(), strlen(rtrim($unpackDir, DIRECTORY_SEPARATOR)) + 1)), '/');
-            $dexRelative[] = $rel;
+        if ($file->isFile() && preg_match('/^classes(\d*)\.dex$/i', $file->getFilename())) {
+            $rel = ltrim(str_replace('\\', '/', substr($file->getPathname(), strlen($root) + 1)), '/');
+            $entries[$rel] = $file->getPathname();
+            $dexCount++;
         }
     }
-    if ($dexRelative) {
-        echo "发现dex文件共 " . count($dexRelative) . " 个，将参与覆盖。\n";
-        $entries = array_merge($entries, $dexRelative);
-    } else {
-        echo "警告：未发现任何dex文件，跳过dex覆盖。\n";
-    }
+    echo $dexCount > 0 ? "发现dex文件共 {$dexCount} 个，将参与覆盖。\n" : "警告：未发现任何dex文件，跳过dex覆盖。\n";
 
-    $libDirAbs = rtrim($unpackDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'lib';
+    $libDirAbs = $root . DIRECTORY_SEPARATOR . 'lib';
     if (is_dir($libDirAbs)) {
         echo "发现lib目录，将递归覆盖。\n";
-        $entries[] = 'lib';
+        $addDir('lib');
     } else {
         echo "提示：未发现lib目录，跳过lib覆盖。\n";
     }
 
     if (!empty($assetFiles)) {
         echo "处理assets指定文件...\n";
-        foreach ($assetFiles as $f) {
-            $rel = 'assets/' . ltrim(str_replace('\\', '/', $f), '/');
-            $abs = rtrim($unpackDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel);
-            if (is_file($abs)) {
+        foreach ($assetFiles as $file) {
+            $rel = 'assets/' . ltrim(str_replace('\\', '/', $file), '/');
+            if (is_file($root . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel))) {
                 echo "确认存在assets文件：{$rel}\n";
-                $entries[] = $rel;
+                $addEntry($rel);
             } else {
                 echo "警告：指定的assets文件不存在，跳过：{$rel}\n";
             }
         }
-    } else {
-        echo "提示：未提供assets文件列表，跳过assets文件覆盖。\n";
     }
 
     if (!empty($assetDirs)) {
         echo "处理assets指定目录...\n";
-        foreach ($assetDirs as $d) {
-            $rel = 'assets/' . ltrim(str_replace('\\', '/', $d), '/');
-            $abs = rtrim($unpackDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel);
-            if (is_dir($abs)) {
+        foreach ($assetDirs as $dir) {
+            $rel = 'assets/' . trim(str_replace('\\', '/', $dir), '/');
+            if (is_dir($root . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel))) {
                 echo "确认存在assets目录：{$rel}（将递归覆盖）\n";
-                $entries[] = $rel;
+                $addDir($rel);
             } else {
                 echo "警告：指定的assets目录不存在，跳过：{$rel}\n";
             }
         }
-    } else {
-        echo "提示：未提供assets目录列表，跳过assets目录覆盖。\n";
     }
-
-    $entries = array_values(array_unique($entries));
 
     if (empty($entries)) {
         echo "错误：没有任何可覆盖的条目，操作中止。\n";
         return false;
     }
 
-    $libEntries = [];
-    $otherEntries = [];
+    $zip = new ZipArchive();
+    $openResult = $zip->open($tempApk);
+    if ($openResult !== true) {
+        echo "错误：ZipArchive打开APK失败，错误码：{$openResult}\n";
+        return false;
+    }
 
-    foreach ($entries as $entry) {
-        if (stripos($entry, 'lib') === 0) {
-            $libEntries[] = escapeshellarg($entry);
-        } else {
-            $otherEntries[] = escapeshellarg($entry);
+    $deleteNames = [];
+    for ($i = 0; $i < $zip->numFiles; $i++) {
+        $name = $zip->getNameIndex($i);
+        if ($name !== false && preg_match('#^META-INF/#i', $name)) {
+            $deleteNames[] = $name;
         }
     }
-
-    $cmdParts = [];
-    $cmdParts[] = 'cd ' . escapeshellarg($unpackDir);
-    if (!empty($otherEntries)) {
-        $cmdParts[] = 'zip -9 -r ' . escapeshellarg($tempApk) . ' ' . implode(' ', $otherEntries);
+    foreach ($deleteNames as $name) {
+        $zip->deleteName($name);
     }
-    if (!empty($libEntries)) {
-        $cmdParts[] = 'zip -0 -r ' . escapeshellarg($tempApk) . ' ' . implode(' ', $libEntries);
+    if (!empty($deleteNames)) {
+        echo "已删除旧签名META-INF条目：" . count($deleteNames) . "\n";
     }
 
-    $cmd = implode(' && ', $cmdParts);
+    $written = 0;
+    foreach ($entries as $rel => $abs) {
+        if (!is_file($abs)) {
+            echo "警告：待写入文件不存在，跳过：{$rel}\n";
+            continue;
+        }
+        $zip->deleteName($rel);
+        if (!$zip->addFile($abs, $rel)) {
+            echo "错误：写入APK条目失败：{$rel}\n";
+            $zip->close();
+            return false;
+        }
+        if (stripos($rel, 'lib/') === 0 && substr($rel, -3) === '.so') {
+            $zip->setCompressionName($rel, ZipArchive::CM_STORE);
+        } else {
+            $zip->setCompressionName($rel, ZipArchive::CM_DEFLATE);
+        }
+        $written++;
+    }
 
-    echo "开始覆盖写入到临时apk...\n";
-    [$zipCode, ] = $runCmd($cmd);
-    if ($zipCode !== 0) {
-        echo "错误：zip覆盖写入失败。\n";
+    if (!$zip->close()) {
+        echo "错误：ZipArchive关闭写入失败\n";
         return false;
     }
 
@@ -3374,7 +3375,7 @@ function patchApk($apkPath, $tmpDir, $unpackDir, array $assetFiles = ['cainiao_v
         return false;
     }
 
-    echo "覆盖完成，临时apk路径：{$tempApk}\n";
+    echo "覆盖完成，写入条目 {$written} 个，临时apk路径：{$tempApk}\n";
     return $tempApk;
 }
 
