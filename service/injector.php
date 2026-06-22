@@ -137,7 +137,9 @@ function handleInjectionTasks(PDO $pdo, $oss)
     }
     $user_id = $task['user_id'];
     $vip_expire_time = $task['vip_expire_time'];
-    $mode = $task['mode'];
+    $mode = (int)$task['mode'];
+    $preserveResourceMode = ($mode === 4);
+    $reflectionEntryMode = ($mode === 3 || $mode === 4);
     $apk_user_id = $task['apk_user_id'];
     $shellClassName = $task['className'];
     if (!empty($vip_expire_time) && strtotime($vip_expire_time) > time()) {
@@ -251,7 +253,7 @@ function handleInjectionTasks(PDO $pdo, $oss)
     $de_apk2 = $decompile[1][2];//反编译后的应用目录
     $earlyAppName = null;
     $earlyManifestEditable = true;
-    if ((int)$mode === 3) {
+    if ($reflectionEntryMode) {
         echo "==================================入口反射模式预读Manifest\n";
         $earlyAppName = readApplicationName($xml2axml, $de_apk2);
         $earlyAaptAppName = getApplicationClassName($aapt, $apk_file[1], $aapt2);
@@ -265,7 +267,11 @@ function handleInjectionTasks(PDO $pdo, $oss)
             $earlyAppName = 'android.app.Application';
         }
         $earlyManifestEditable = canManifestEditorProcess($Editor, $de_apk2);
-        if (!$earlyManifestEditable) {
+        if ($preserveResourceMode) {
+            echo "保资源注入模式：强制启用保资源合并路径并关闭DEX重新分配\n";
+            $task['confuse'] = 1;
+            $task['dexmerge'] = 0;
+        } elseif (!$earlyManifestEditable) {
             echo "入口反射模式检测到Manifest受保护，强制启用保资源合并路径\n";
             $task['confuse'] = 1;
             $task['dexmerge'] = 0;
@@ -337,7 +343,7 @@ function handleInjectionTasks(PDO $pdo, $oss)
     $GLOBALS['MainActivity']             = generateRandomString(10,20);
     $GLOBALS['ShellAppComponentFactory'] = generateRandomString(10,20);
     $GLOBALS['Config']                   = generateRandomString(10,20);
-    if ((int)$mode === 3 && !$earlyManifestEditable && !empty($earlyAppName)) {
+    if ($reflectionEntryMode && !$earlyManifestEditable && !empty($earlyAppName)) {
         $protectedPrefix = $task['package'] . '.';
         $protectedAppLength = strlen($earlyAppName) - strlen($protectedPrefix);
         if ($protectedAppLength > 0) {
@@ -837,7 +843,7 @@ $applicationlin=[];
         echo "APP小于3M，不加桩\n";
     }*/
     echo "==================================保存APP原始入口到壳配置中\n";
-    if($mode == 3){
+    if($reflectionEntryMode){
         replace_config_APPLICATION($de_apk1, encrypt_text($appName));//将原始入口加密存放到壳配置中
     }else{
         replace_config_APPLICATION($de_apk1, "null");//非入口继承模式，将此处改为null字符串
@@ -976,9 +982,14 @@ $applicationlin=[];
         updateTaskInfo($pdo, $task['id'], '未启用的注入模式,请更换注入模式');
         safeDeleteDirectory($temp_dir);
         return;*/
-    }else if($mode == 3){
-        echo "注入模式3,入口注入.反射,保存入口{$appName}\n";
-        echo "此模式原理,将原始入口保存，将壳类注入到application入口，然后由壳反射调用原入口\n";//通过反射调用，似乎在部分应用中存在问题，需要改成壳继承父入口类
+    }else if($reflectionEntryMode){
+        if ($preserveResourceMode) {
+            echo "注入模式4,保资源注入,保存入口{$appName}\n";
+            echo "此模式原理,保留原APK资源和主DEX,只追加壳DEX/so,将壳类注入到application入口，然后由壳反射调用原入口\n";
+        } else {
+            echo "注入模式3,入口注入.反射,保存入口{$appName}\n";
+            echo "此模式原理,将原始入口保存，将壳类注入到application入口，然后由壳反射调用原入口\n";//通过反射调用，似乎在部分应用中存在问题，需要改成壳继承父入口类
+        }
 
         $result = writeYunzhuru($de_apk2, $appName);//写出入口到assets中，兼容旧版壳和异常配置读取
 
@@ -1025,9 +1036,9 @@ $applicationlin=[];
     $result = mergeDexFiles($de_apk2, $de_apk1);
     print_r($result);
     echo "==================================开始修改AndroidManifest入口\n";
-    if($mode == 0 || $mode == 3){
+    if($mode == 0 || $reflectionEntryMode){
         if (!$manifestEditable) {
-            if ((int)$mode === 3) {
+            if ($reflectionEntryMode) {
                 updateTaskInfo($pdo, $task['id'], 'Manifest受保护，使用保资源二进制入口替换');
                 $result = updateProtectedManifestApplicationBinary($de_apk2, $appName, $shellClassName);
                 if (!$result) {

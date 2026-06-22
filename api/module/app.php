@@ -3855,6 +3855,10 @@ function createInjectTask(PDO $pdo, array $input)
     $confuse = isset($input['confuse']) ? (int)(bool)$input['confuse'] : 0;//合并包
     $process = isset($input['process']) ? (int)$input['process'] : 0;//进程隔离，默认0，不隔离
     $dexmerge = isset($input['dexmerge']) ? (int)$input['dexmerge'] : 0;//dex重新划分，默认0，不划分
+    if ($mode === 4) {
+        $confuse = 1;//保资源注入必须走原包合并路径
+        $dexmerge = 0;//保资源注入禁止重排DEX，避免破坏特殊壳包
+    }
     // 注入桶选择（JSON 数组，如 [1,3,5]）
     $bucketIds = isset($input['bucket_ids']) && is_array($input['bucket_ids']) ? $input['bucket_ids'] : null;
     $bucketIdsJson = $bucketIds !== null ? json_encode(array_map('intval', $bucketIds)) : null;
@@ -3877,7 +3881,7 @@ function createInjectTask(PDO $pdo, array $input)
     if (!$apkId || !$templateId || (!$signId && !$isRandomSign)) {
         throw new Exception('参数不完整');
     }
-    if (!in_array($mode, [0, 1, 2, 3])) {
+    if (!in_array($mode, [0, 1, 2, 3, 4], true)) {
         throw new Exception('注入模式错误');
     }
     // 验证所有资源是否属于当前用户
@@ -4465,6 +4469,9 @@ function updateInjectTaskRemark(PDO $pdo, array $input)
     if (!$id) {
         throw new Exception('缺少任务ID');
     }
+    if (!in_array($mode, [0, 1, 2, 3, 4], true)) {
+        throw new Exception('注入模式错误');
+    }
 
     // 权限校验
     $where = $user['role'] === 'admin' ? 'id = :id' : 'id = :id AND user_id = :uid';
@@ -4503,6 +4510,10 @@ function updateInjectTaskRemark(PDO $pdo, array $input)
     $tv = !empty($input['tv']) ? 1 : 0;
     $permissions = isset($input['permissions']) && is_array($input['permissions']) ? $input['permissions'] : [];
     $permissionsJson = json_encode($permissions, JSON_UNESCAPED_UNICODE);
+    if ($mode === 4) {
+        $confuse = 1;//保资源注入必须走原包合并路径
+        $dexmerge = 0;//保资源注入禁止重排DEX，避免破坏特殊壳包
+    }
 
     $vipjiagu  = Auth::getSetting($pdo,"vipjiagu","0");
     if($vipjiagu && $jiagu){//如果开启了会员加固且提交的加固为1
@@ -5013,6 +5024,10 @@ function createTaskFromUrl(PDO $pdo, array $input)
     $confuse = (int)(bool)($input['confuse'] ?? 0);
     $process = (int)($input['process'] ?? 0);
     $dexmerge = (int)($input['dexmerge'] ?? 0);
+    if ($mode === 4) {
+        $confuse = 1;//保资源注入必须走原包合并路径
+        $dexmerge = 0;//保资源注入禁止重排DEX，避免破坏特殊壳包
+    }
     $permissions = isset($input['permissions']) && is_array($input['permissions']) ? $input['permissions'] : [];
     $permissionsJson = json_encode($permissions, JSON_UNESCAPED_UNICODE);
     $bucketIds = isset($input['bucket_ids']) && is_array($input['bucket_ids']) ? $input['bucket_ids'] : null;

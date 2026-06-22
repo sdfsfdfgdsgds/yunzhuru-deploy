@@ -185,6 +185,7 @@
             <el-form-item label="注入模式">
               <el-select v-model="editForm.mode" placeholder="请选择注入模式">
                 <el-option label="启动入口注入.反射(默认)" value="3"></el-option>
+                <el-option label="保资源注入(特殊壳包)" value="4"></el-option>
                 <el-option label="基类链路注入(未加固应用使用最佳)" value="1"></el-option>
                 <el-option label="启动入口注入.继承(次推荐)" value="0"></el-option>
                 <el-option label="组件工厂注入(速度快,优先级高)" value="2"></el-option>
@@ -357,6 +358,7 @@ function formatMode(row) {
   const mode = String(row.mode);
   if (mode === '0') return '入口注入.继承';
   if (mode === '3') return '入口注入.反射';
+  if (mode === '4') return '保资源注入';
   if (mode === '1') return '链路注入';
   if (mode === '2') return '工厂注入';
   return '未知注入';

@@ -356,13 +356,14 @@
           <el-option label="链路注入(默认)" :value="1"></el-option>
           <el-option label="启动入口注入【继承】(次推荐)" :value="0"></el-option>
           <el-option label="启动入口注入【反射】" :value="3"></el-option>
+          <el-option label="保资源注入(特殊壳包)" :value="4"></el-option>
           <el-option label="组件工厂注入(优先级高)" :value="2"></el-option>
         </el-select>
       </el-form-item>
     </el-form>
     <el-alert
       type="warning"
-      description="若注入后无法运行，可尝试更换注入模式">
+      description="若注入后无法运行，可尝试更换注入模式；DCloud/UniApp/受保护Manifest壳包建议使用保资源注入">
     </el-alert>
   </div>
   
@@ -498,6 +499,7 @@
         <el-option label="链路注入(默认)" :value="1"></el-option>
         <el-option label="启动入口注入【继承】" :value="0"></el-option>
         <el-option label="启动入口注入【反射】" :value="3"></el-option>
+        <el-option label="保资源注入(特殊壳包)" :value="4"></el-option>
         <el-option label="组件工厂注入" :value="2"></el-option>
       </el-select>
     </el-form-item>
