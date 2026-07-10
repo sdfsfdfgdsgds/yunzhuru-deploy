@@ -652,6 +652,7 @@ createApp({
           <div><b>应用：</b>${escapeDeleteHtml(appTitle)}</div>
           <div><b>包名：</b>${escapeDeleteHtml(packageName)}</div>
           <div><b>结果：</b>${escapeDeleteHtml(payload.message || fallbackMessage || '处理完成')}</div>
+          ${payload.async_cleanup ? '<div><b>清理方式：</b>已先从列表删除，文件/桶/数据库清理在后台继续执行</div>' : ''}
           <div><b>统计：</b>成功 ${Number(summary.success || 0)} 项，失败 ${Number(summary.failed || 0)} 项，注意 ${Number(summary.warning || 0)} 项，跳过 ${Number(summary.skipped || 0)} 项</div>
         </div>
       `;
@@ -685,9 +686,10 @@ createApp({
       const hasFailed = Number(summary.failed || 0) > 0;
       const hasWarning = Number(summary.warning || 0) > 0;
       const titlePrefix = method === 'clearAppFile' ? '仅删除文件结果' : '应用删除结果';
+      const titleSuffix = payload.async_cleanup && payload.cleanup_started !== false ? '后台清理已启动' : (hasFailed ? '有失败项' : '已完成');
       ElementPlus.ElMessageBox.alert(
         buildDeleteResultHtml(row, payload, fallbackMessage),
-        hasFailed ? `${titlePrefix}：有失败项` : `${titlePrefix}：已完成`,
+        `${titlePrefix}：${titleSuffix}`,
         {
           type: hasFailed ? 'error' : (hasWarning ? 'warning' : 'success'),
           dangerouslyUseHTMLString: true,
