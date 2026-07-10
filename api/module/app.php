@@ -1192,24 +1192,52 @@ function appDeleteFetchCleanupTasks(PDO $pdo, int $appId): array
     ];
 }
 
+function appDeleteCleanupQueueDir(string $subDir = ''): string
+{
+    $baseDir = appDeleteProgressDir() . '/cleanup_queue';
+    $dir = $subDir === '' ? $baseDir : $baseDir . '/' . trim($subDir, '/');
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0777, true);
+    }
+    return $dir;
+}
+
 function appDeleteStartBackgroundCleanup(int $appId, int $userId, string $role, string $progressToken): array
 {
-    $worker = dirname(__DIR__, 2) . '/service/delete_app_cleanup.php';
-    if (!is_file($worker)) {
+    $runner = dirname(__DIR__, 2) . '/service/delete_app_queue.php';
+    if (!is_file($runner)) {
         return [
             'started' => false,
-            'message' => '后台清理脚本不存在：' . $worker,
+            'message' => '后台队列脚本不存在：' . $runner,
         ];
     }
 
+    $pendingDir = appDeleteCleanupQueueDir('pending');
+    $runningDir = appDeleteCleanupQueueDir('running');
+    appDeleteCleanupQueueDir('done');
+    appDeleteCleanupQueueDir('failed');
+
+    $jobFile = $pendingDir . "/app_{$appId}.json";
+    $runningFile = $runningDir . "/app_{$appId}.json";
+    $job = [
+        'app_id' => $appId,
+        'user_id' => $userId,
+        'role' => $role,
+        'progress_token' => $progressToken,
+        'queued_at' => date('Y-m-d H:i:s'),
+        'queued_ts' => time(),
+    ];
+    $alreadyRunning = is_file($runningFile);
+    if (!$alreadyRunning) {
+        $tmp = $jobFile . '.' . uniqid('tmp_', true);
+        @file_put_contents($tmp, json_encode($job, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
+        @rename($tmp, $jobFile);
+    }
+
     $php = PHP_BINARY ?: 'php';
-    $logFile = appDeleteProgressDir() . "/delete_cleanup_{$appId}.log";
+    $logFile = appDeleteProgressDir() . "/delete_cleanup_queue.log";
     $cmd = 'nohup ' . escapeshellarg($php)
-        . ' ' . escapeshellarg($worker)
-        . ' --app-id=' . escapeshellarg((string)$appId)
-        . ' --user-id=' . escapeshellarg((string)$userId)
-        . ' --role=' . escapeshellarg($role)
-        . ' --progress-token=' . escapeshellarg($progressToken)
+        . ' ' . escapeshellarg($runner)
         . ' >> ' . escapeshellarg($logFile)
         . ' 2>&1 & echo $!';
 
@@ -1218,17 +1246,22 @@ function appDeleteStartBackgroundCleanup(int $appId, int $userId, string $role, 
     @exec($cmd, $output, $exitCode);
     $pid = trim((string)($output[0] ?? ''));
 
-    appDeleteDebugLog($appId, 'cleanup_worker_spawn', [
+    appDeleteDebugLog($appId, 'cleanup_queue_enqueue', [
         'cmd_exit_code' => $exitCode,
         'pid' => $pid,
         'log_file' => $logFile,
+        'job_file' => $alreadyRunning ? $runningFile : $jobFile,
+        'already_running' => $alreadyRunning,
     ]);
 
     return [
         'started' => $exitCode === 0 && $pid !== '',
+        'queued' => true,
+        'already_running' => $alreadyRunning,
         'pid' => $pid,
         'log_file' => $logFile,
-        'message' => $exitCode === 0 && $pid !== '' ? '后台清理任务已启动' : '后台清理任务启动失败',
+        'job_file' => $alreadyRunning ? $runningFile : $jobFile,
+        'message' => $exitCode === 0 && $pid !== '' ? '后台清理任务已进入队列' : '后台清理队列启动失败',
     ];
 }
 
@@ -1605,20 +1638,23 @@ function deleteApp(PDO $pdo, array $input)
 
     $workerResult = appDeleteStartBackgroundCleanup($appId, $userId, (string)($user['role'] ?? ''), $progressToken);
     if (!empty($workerResult['started'])) {
-        appDeleteResultAdd($deleteItems, '后台清理任务', "APPID {$appId}", 'success', '后台清理任务已启动，文件、桶配置、Redis 和数据库物理删除会继续执行', [
+        appDeleteResultAdd($deleteItems, '后台清理队列', "APPID {$appId}", 'success', '后台清理任务已进入队列，文件、桶配置、Redis 和数据库物理删除会按队列继续执行', [
             'pid' => $workerResult['pid'] ?? '',
+            'concurrency' => 1,
         ]);
-        appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '应用已从列表删除，后台清理任务已启动...', 25, [
+        appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '应用已从列表删除，后台清理任务已进入队列...', 25, [
             'app' => $appInfo,
             'async_cleanup' => true,
+            'queued_cleanup' => true,
             'result_summary' => appDeleteResultSummary($deleteItems),
             'result_items' => $deleteItems,
         ]);
     } else {
-        appDeleteResultAdd($deleteItems, '后台清理任务', "APPID {$appId}", 'failed', $workerResult['message'] ?? '后台清理任务启动失败');
-        appDeleteProgressUpdate($progressToken, $userId, $appId, 'failed', '应用已从列表删除，但后台清理任务启动失败，请联系管理员处理', 100, [
+        appDeleteResultAdd($deleteItems, '后台清理队列', "APPID {$appId}", 'failed', $workerResult['message'] ?? '后台清理队列启动失败');
+        appDeleteProgressUpdate($progressToken, $userId, $appId, 'failed', '应用已从列表删除，但后台清理队列启动失败，请联系管理员处理', 100, [
             'app' => $appInfo,
             'async_cleanup' => true,
+            'queued_cleanup' => true,
             'result_summary' => appDeleteResultSummary($deleteItems),
             'result_items' => $deleteItems,
         ]);
@@ -1626,13 +1662,14 @@ function deleteApp(PDO $pdo, array $input)
 
     $resultSummary = appDeleteResultSummary($deleteItems);
     $finalMessage = !empty($workerResult['started'])
-        ? '应用已从列表删除，后台清理已启动'
-        : '应用已从列表删除，但后台清理启动失败';
+        ? '应用已从列表删除，后台清理已进入队列'
+        : '应用已从列表删除，但后台清理队列启动失败';
 
     return [
         'message' => $finalMessage,
         'operation' => 'deleteApp',
         'async_cleanup' => true,
+        'queued_cleanup' => true,
         'cleanup_started' => !empty($workerResult['started']),
         'cleanup_pid' => $workerResult['pid'] ?? '',
         'progress_token' => $progressToken,
