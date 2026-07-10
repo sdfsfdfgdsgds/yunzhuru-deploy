@@ -343,6 +343,10 @@ if($exists !== false){
 // 新版汇总统计（替代旧 cainiao_request_stat 表）
 // =====================================================
 if(!$excluded){
+    try {
+        // 统计写入不能阻塞壳配置返回：遇到删除事务/行锁时 1 秒内放弃本次统计。
+        $pdo->exec('SET SESSION innodb_lock_wait_timeout = 1');
+        $pdo->exec('SET SESSION lock_wait_timeout = 1');
 
     /*$todayDate = date('Y-m-d');
     $startTime = $todayDate . ' 00:00:00';
@@ -472,6 +476,10 @@ if(!$excluded){
         ':visit_date'=> $todayDate
     ]);
 
+    } catch (Throwable $e) {
+        // 统计是旁路数据，失败只记录日志，不能影响 shell.php 主配置响应或占满 PHP worker。
+        error_log('[ShellStat] 跳过请求统计 appid=' . (string)$apkId . '，原因：' . $e->getMessage());
+    }
 }
 /*if(!$excluded){
     $todayDate = date('Y-m-d');

@@ -163,6 +163,56 @@ if (!function_exists('appPhysicalDeleteRows')) {
     }
 }
 
+if (!function_exists('appPhysicalDeleteRowsChunked')) {
+    function appPhysicalDeleteRowsChunked(PDO $pdo, string $label, string $table, string $column, int $value, int $batchSize = 5000, ?callable $onStep = null): int
+    {
+        if (!appPhysicalDeleteColumnExists($pdo, $table, $column)) {
+            if ($onStep) {
+                $onStep([
+                    'label' => $label,
+                    'table' => $table,
+                    'column' => $column,
+                    'affected' => 0,
+                    'skipped' => true,
+                    'chunked' => true,
+                ]);
+            }
+            return 0;
+        }
+
+        $batchSize = max(100, min(10000, $batchSize));
+        $total = 0;
+        $chunk = 0;
+        do {
+            $chunk++;
+            $stmt = $pdo->prepare("DELETE FROM `{$table}` WHERE `{$column}` = ? LIMIT {$batchSize}");
+            $stmt->execute([$value]);
+            $affected = $stmt->rowCount();
+            $total += $affected;
+
+            if ($onStep) {
+                $onStep([
+                    'label' => $label,
+                    'table' => $table,
+                    'column' => $column,
+                    'affected' => $affected,
+                    'total_affected' => $total,
+                    'chunk' => $chunk,
+                    'chunked' => true,
+                    'skipped' => false,
+                ]);
+            }
+
+            // 大表物理删除分片提交，避免长事务/大回滚锁住 shell.php 的统计外键校验。
+            if ($affected >= $batchSize) {
+                usleep(50000);
+            }
+        } while ($affected >= $batchSize);
+
+        return $total;
+    }
+}
+
 if (!function_exists('appPhysicalDeleteClickParamRefs')) {
     function appPhysicalDeleteClickParamRefs(PDO $pdo, string $targetType, array $targetIds, ?callable $onStep = null): int
     {
@@ -255,19 +305,24 @@ if (!function_exists('physicallyDeleteAppDatabase')) {
             }
         };
 
-        $pdo->beginTransaction();
         try {
             $affected = 0;
             if (appPhysicalDeleteTableExists($pdo, 'cainiao_apk') && appPhysicalDeleteColumnExists($pdo, 'cainiao_apk', 'reuse_apk_id')) {
-                $stmt = $pdo->prepare("
-                    UPDATE `cainiao_apk`
-                    SET `config_mode` = 0,
-                        `reuse_apk_id` = NULL,
-                        `reuse_options` = NULL
-                    WHERE `reuse_apk_id` = ?
-                ");
-                $stmt->execute([$appId]);
-                $affected = $stmt->rowCount();
+                // 先用普通 SELECT 找到复用本应用的主键，再按主键更新。
+                // 不能直接 `UPDATE ... WHERE reuse_apk_id = ?`：生产表该列可能无索引，会扫描并锁住大量应用行。
+                $reuseApkIds = appPhysicalDeleteSelectIds($pdo, 'cainiao_apk', 'reuse_apk_id', [$appId]);
+                if (!empty($reuseApkIds)) {
+                    $placeholders = implode(',', array_fill(0, count($reuseApkIds), '?'));
+                    $stmt = $pdo->prepare("
+                        UPDATE `cainiao_apk`
+                        SET `config_mode` = 0,
+                            `reuse_apk_id` = NULL,
+                            `reuse_options` = NULL
+                        WHERE `id` IN ({$placeholders})
+                    ");
+                    $stmt->execute($reuseApkIds);
+                    $affected = $stmt->rowCount();
+                }
             }
             $record([
                 'action' => 'update',
@@ -281,10 +336,10 @@ if (!function_exists('physicallyDeleteAppDatabase')) {
             appPhysicalDeleteRows($pdo, '违规公示', 'cainiao_violation', 'appid', $appId, $record);
             appPhysicalDeleteRows($pdo, '在线设备', 'cainiao_ws', 'apk_id', $appId, $record);
             appPhysicalDeleteRows($pdo, '试用设备', 'cainiao_trial', 'apk_id', $appId, $record);
-            appPhysicalDeleteRows($pdo, '请求统计明细', 'cainiao_request_stat', 'apk_id', $appId, $record);
-            appPhysicalDeleteRows($pdo, '请求统计汇总', 'cainiao_request_stat_sum', 'apk_id', $appId, $record);
-            appPhysicalDeleteRows($pdo, '请求统计 IP', 'cainiao_request_stat_ip', 'apk_id', $appId, $record);
-            appPhysicalDeleteRows($pdo, '请求统计设备', 'cainiao_request_stat_device', 'apk_id', $appId, $record);
+            appPhysicalDeleteRowsChunked($pdo, '请求统计明细', 'cainiao_request_stat', 'apk_id', $appId, 5000, $record);
+            appPhysicalDeleteRowsChunked($pdo, '请求统计汇总', 'cainiao_request_stat_sum', 'apk_id', $appId, 1000, $record);
+            appPhysicalDeleteRowsChunked($pdo, '请求统计 IP', 'cainiao_request_stat_ip', 'apk_id', $appId, 5000, $record);
+            appPhysicalDeleteRowsChunked($pdo, '请求统计设备', 'cainiao_request_stat_device', 'apk_id', $appId, 5000, $record);
             appPhysicalDeleteRows($pdo, '设备拉黑', 'cainiao_disable', 'appid', $appId, $record);
             appPhysicalDeleteRows($pdo, '卡密', 'cainiao_kami', 'app_id', $appId, $record);
 
@@ -343,12 +398,8 @@ if (!function_exists('physicallyDeleteAppDatabase')) {
             appPhysicalDeleteRows($pdo, '应用配置主表', 'cainiao_apk_config', 'apk_id', $appId, $record);
             appPhysicalDeleteRows($pdo, '应用主表', 'cainiao_apk', 'id', $appId, $record);
             appPhysicalDeleteRows($pdo, '删除标记', 'cainiao_apk_deleted', 'apk_id', $appId, $record);
-
-            $pdo->commit();
         } catch (Throwable $e) {
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
+            // 物理清理已改为逐语句自动提交，避免失败时回滚大量统计记录并长时间锁表。
             throw $e;
         }
 
