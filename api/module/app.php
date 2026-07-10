@@ -987,6 +987,127 @@ function appDeleteProgressBucketLabel(array $bucket): string
     return $parts ? implode(' / ', $parts) : ('桶ID ' . ($bucket['id'] ?? '未知'));
 }
 
+function appDeleteResultAdd(array &$items, string $scope, string $target, string $status, string $message, array $extra = []): void
+{
+    $allowStatus = ['success', 'failed', 'skipped', 'warning'];
+    if (!in_array($status, $allowStatus, true)) {
+        $status = 'warning';
+    }
+
+    $items[] = array_merge([
+        'scope' => $scope,
+        'target' => $target,
+        'status' => $status,
+        'message' => $message,
+        'time' => date('H:i:s'),
+    ], $extra);
+}
+
+function appDeleteResultSummary(array $items): array
+{
+    $summary = [
+        'total' => count($items),
+        'success' => 0,
+        'failed' => 0,
+        'skipped' => 0,
+        'warning' => 0,
+    ];
+
+    foreach ($items as $item) {
+        $status = (string)($item['status'] ?? 'warning');
+        if (!array_key_exists($status, $summary)) {
+            $status = 'warning';
+        }
+        $summary[$status]++;
+    }
+
+    $summary['ok'] = $summary['failed'] === 0;
+    return $summary;
+}
+
+function appDeleteResultMessage(string $successMessage, array $summary): string
+{
+    if ((int)($summary['failed'] ?? 0) > 0) {
+        return $successMessage . '，但有 ' . (int)$summary['failed'] . ' 项清理失败，请展开明细查看';
+    }
+    if ((int)($summary['warning'] ?? 0) > 0) {
+        return $successMessage . '，有 ' . (int)$summary['warning'] . ' 项需要注意';
+    }
+    return $successMessage;
+}
+
+function appDeleteAppInfo(array $app, int $appId): array
+{
+    return [
+        'id' => $appId,
+        'name' => (string)($app['name'] ?? ''),
+        'package' => (string)($app['package'] ?? ''),
+        'version' => (string)($app['version'] ?? ''),
+        'user_id' => (int)($app['user_id'] ?? 0),
+    ];
+}
+
+function appDeletePhysicalAffectedRows(?array $summary): int
+{
+    if (!$summary) {
+        return 0;
+    }
+
+    $count = 0;
+    foreach (['deleted', 'updated'] as $group) {
+        foreach (($summary[$group] ?? []) as $affected) {
+            $count += (int)$affected;
+        }
+    }
+    return $count;
+}
+
+function appDeleteDeleteLocalFile(array &$items, string $scope, string $baseDir, string $relativePath, string $emptyMessage = '未配置文件路径'): array
+{
+    $relativePath = trim((string)$relativePath, '/');
+    $target = $relativePath !== '' ? $relativePath : $scope;
+    if ($relativePath === '') {
+        appDeleteResultAdd($items, $scope, $target, 'skipped', $emptyMessage);
+        return ['status' => 'skipped', 'exists_before' => false, 'exists_after' => false];
+    }
+
+    $baseReal = realpath($baseDir);
+    $fullPath = rtrim($baseDir, '/') . '/' . $relativePath;
+    $existsBefore = is_file($fullPath);
+    if (!$existsBefore) {
+        appDeleteResultAdd($items, $scope, $target, 'skipped', '文件不存在，已无需删除', [
+            'exists_before' => false,
+            'exists_after' => false,
+        ]);
+        return ['status' => 'skipped', 'exists_before' => false, 'exists_after' => false];
+    }
+
+    $fileReal = realpath($fullPath);
+    if (!$baseReal || !$fileReal || strpos($fileReal, $baseReal . DIRECTORY_SEPARATOR) !== 0) {
+        appDeleteResultAdd($items, $scope, $target, 'failed', '路径校验失败，已跳过删除', [
+            'exists_before' => true,
+            'exists_after' => true,
+        ]);
+        return ['status' => 'failed', 'exists_before' => true, 'exists_after' => true];
+    }
+
+    $deleted = @unlink($fileReal);
+    $existsAfter = is_file($fileReal);
+    if ($deleted && !$existsAfter) {
+        appDeleteResultAdd($items, $scope, $target, 'success', '文件已删除', [
+            'exists_before' => true,
+            'exists_after' => false,
+        ]);
+        return ['status' => 'success', 'exists_before' => true, 'exists_after' => false];
+    }
+
+    appDeleteResultAdd($items, $scope, $target, 'failed', '文件删除失败，可能被占用或权限不足', [
+        'exists_before' => true,
+        'exists_after' => $existsAfter,
+    ]);
+    return ['status' => 'failed', 'exists_before' => true, 'exists_after' => $existsAfter];
+}
+
 function getDeleteProgress(PDO $pdo, array $input)
 {
     $user = Auth::check($pdo);
@@ -1100,6 +1221,10 @@ function deleteApp(PDO $pdo, array $input)
             throw new Exception('未找到对应应用或无权限删除');
         }
 
+    $deleteItems = [];
+    $appInfo = appDeleteAppInfo($app, $appId);
+    appDeleteResultAdd($deleteItems, '应用校验', "APPID {$appId}", 'success', '已确认应用存在且当前账号有删除权限');
+
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '已找到应用，正在读取关联注入产物...', 12);
     
     // 先取出关联产物路径，后面即使应用记录先删掉，也能继续清理文件。
@@ -1133,10 +1258,14 @@ function deleteApp(PDO $pdo, array $input)
             'duration_ms' => (int)round((microtime(true) - $markStart) * 1000),
             'affected_rows' => $affectedRows,
         ]);
+        appDeleteResultAdd($deleteItems, '后台列表', "APPID {$appId}", 'success', '已写入删除标记，应用会立即从列表和配置下发中隐藏', [
+            'affected_rows' => $affectedRows,
+        ]);
     } catch (\Throwable $e) {
         appDeleteDebugLog($appId, 'db_soft_delete_failed', [
             'message' => $e->getMessage(),
         ]);
+        appDeleteResultAdd($deleteItems, '后台列表', "APPID {$appId}", 'failed', '删除标记写入失败：' . $e->getMessage());
         appDeleteProgressUpdate($progressToken, $userId, $appId, 'failed', '删除标记写入失败：' . $e->getMessage(), 100);
         throw $e;
     }
@@ -1147,10 +1276,12 @@ function deleteApp(PDO $pdo, array $input)
         try {
             Auth::sendSystemMessage($pdo, $user['id'], $app['user_id'], '【应用删除提醒】您的应用“'.$app['name'].'”已被系统自动删除清理,该应用被系统识别到可能存在混淆/加固或违反相关规定等,若被误删或有疑问请联系管理员。QQ群：793107266。检测方式为云端自动多模式注入+自动实机测试');
             appDeleteDebugLog($appId, 'send_delete_message_done');
+            appDeleteResultAdd($deleteItems, '管理员提醒', "UID {$app['user_id']}", 'success', '已发送应用删除提醒');
             appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '管理员删除提醒已发送，准备清理文件...', 24);
         } catch (\Throwable $e) {
             error_log("[AppDelete] 发送删除提醒失败 appId={$appId}: " . $e->getMessage());
             appDeleteDebugLog($appId, 'send_delete_message_failed', ['message' => $e->getMessage()]);
+            appDeleteResultAdd($deleteItems, '管理员提醒', "UID {$app['user_id']}", 'warning', '提醒发送失败，不影响删除：' . $e->getMessage());
             appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '管理员删除提醒发送失败，继续清理文件...', 24);
         }
     }
@@ -1162,6 +1293,7 @@ function deleteApp(PDO $pdo, array $input)
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', "正在准备清理注入产物，共 {$taskCount} 个...", 25);
     if ($taskCount === 0) {
         appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '没有关联注入产物，跳过产物清理...', 38);
+        appDeleteResultAdd($deleteItems, '注入产物', 'release', 'skipped', '没有关联注入/加固产物，已跳过');
     }
 
     foreach ($allTasks as $index => $task) {
@@ -1182,10 +1314,8 @@ function deleteApp(PDO $pdo, array $input)
             25 + (int)floor(($current / max(1, $taskCount)) * 15)
         );
     
-        // 检查路径是否位于 release 目录下
-        if (is_file($fullPath) && strpos(realpath($fullPath), realpath($releaseDir)) === 0) {
-            @unlink($fullPath);
-        }
+        // 使用统一本地文件删除工具记录成功、跳过和失败明细，避免最终只显示一条笼统提示。
+        appDeleteDeleteLocalFile($deleteItems, "注入产物 {$current}/{$taskCount}", $releaseDir, $relative, '注入产物路径为空，已跳过');
         appDeleteDebugLog($appId, 'unlink_release_done', [
             'current' => $current,
             'total' => $taskCount,
@@ -1197,19 +1327,18 @@ function deleteApp(PDO $pdo, array $input)
 
     // 删除原始 APK 文件
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在删除原始安装包文件...', 42);
-    $filePath = __DIR__ . '/../../uploads/' . $app['path'];
+    $uploadDir = rtrim(__DIR__ . '/../../uploads', '/');
+    $filePath = $uploadDir . '/' . ($app['path'] ?? '');
     appDeleteDebugLog($appId, 'unlink_upload_start', ['file' => basename($filePath), 'exists_before' => is_file($filePath)]);
-    if (is_file($filePath)) {
-        @unlink($filePath);
-    }
+    appDeleteDeleteLocalFile($deleteItems, '原始安装包', $uploadDir, (string)($app['path'] ?? ''), '数据库未记录原始安装包路径，已跳过');
     appDeleteDebugLog($appId, 'unlink_upload_done', ['file' => basename($filePath), 'exists_after' => is_file($filePath)]);
     // 删除应用图标 文件
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在删除应用图标...', 48);
-    if($app['icon'] !== 'android.png'){
-        $iconPath = __DIR__ . '/../../icon/' . $app['icon'];
-        if (is_file($iconPath)) {
-            @unlink($iconPath);
-        }
+    if(($app['icon'] ?? '') !== 'android.png'){
+        $iconDir = rtrim(__DIR__ . '/../../icon', '/');
+        appDeleteDeleteLocalFile($deleteItems, '应用图标', $iconDir, (string)($app['icon'] ?? ''), '数据库未记录自定义图标路径，已跳过');
+    } else {
+        appDeleteResultAdd($deleteItems, '应用图标', 'android.png', 'skipped', '默认图标被多个应用共用，按设计保留');
     }
     appDeleteDebugLog($appId, 'unlink_icon_done', ['icon' => $app['icon'] ?? '', 'skipped_default' => ($app['icon'] ?? '') === 'android.png']);
     
@@ -1220,12 +1349,20 @@ function deleteApp(PDO $pdo, array $input)
         appDeleteDebugLog($appId, 'oss_delete_start', ['osspath' => $app['osspath'] ?? '']);
         $oss = new OSS();
         if(!empty($app['osspath'])){
-            $oss->deleteFile($app['osspath']);
+            $ossResult = $oss->deleteFile($app['osspath']);
+            if ((int)($ossResult['code'] ?? 0) === 200) {
+                appDeleteResultAdd($deleteItems, 'OSS 安装包', (string)$app['osspath'], 'success', 'OSS 文件删除成功');
+            } else {
+                appDeleteResultAdd($deleteItems, 'OSS 安装包', (string)$app['osspath'], 'failed', $ossResult['message'] ?? 'OSS 文件删除失败');
+            }
+        } else {
+            appDeleteResultAdd($deleteItems, 'OSS 安装包', 'osspath', 'skipped', '数据库未记录 OSS 路径，已跳过');
         }
         appDeleteDebugLog($appId, 'oss_delete_done', ['osspath' => $app['osspath'] ?? '']);
     } catch (\Throwable $e) {
         error_log("[AppDelete] 删除 OSS 文件失败 appId={$appId}: " . $e->getMessage());
         appDeleteDebugLog($appId, 'oss_delete_failed', ['message' => $e->getMessage()]);
+        appDeleteResultAdd($deleteItems, 'OSS 安装包', (string)($app['osspath'] ?? 'osspath'), 'failed', 'OSS 删除异常：' . $e->getMessage());
     }
     
     // 删除桶中的配置文件（让壳回退 API 走重定向/兜底）
@@ -1235,6 +1372,9 @@ function deleteApp(PDO $pdo, array $input)
         $bucketCount = count($bucketRows);
         $objectKey = "config/{$appId}.enc";
         appDeleteDebugLog($appId, 'bucket_delete_list_done', ['count' => $bucketCount, 'object_key' => $objectKey]);
+        if ($bucketCount === 0) {
+            appDeleteResultAdd($deleteItems, '桶配置', $objectKey, 'skipped', '没有启用的配置桶，已跳过远程配置删除');
+        }
         foreach ($bucketRows as $index => $b) {
             $current = $index + 1;
             $bucketLabel = appDeleteProgressBucketLabel($b);
@@ -1255,14 +1395,33 @@ function deleteApp(PDO $pdo, array $input)
             );
             try {
                 $client = new S3Client($b['access_key'], $b['secret_key'], $b['endpoint'], $b['bucket'], $b['region'] ?: 'auto');
-                $client->deleteObject($objectKey);
-                appDeleteDebugLog($appId, 'bucket_delete_done', [
-                    'current' => $current,
-                    'total' => $bucketCount,
-                    'bucket' => $bucketLabel,
-                    'object_key' => $objectKey,
-                ]);
+                $deleteResult = $client->deleteObject($objectKey);
+                if ((int)($deleteResult['code'] ?? 0) === 200) {
+                    appDeleteResultAdd($deleteItems, '桶配置', "{$bucketLabel} / {$objectKey}", 'success', '远程配置文件删除成功', [
+                        'http_code' => $deleteResult['http_code'] ?? null,
+                    ]);
+                    appDeleteDebugLog($appId, 'bucket_delete_done', [
+                        'current' => $current,
+                        'total' => $bucketCount,
+                        'bucket' => $bucketLabel,
+                        'object_key' => $objectKey,
+                        'http_code' => $deleteResult['http_code'] ?? null,
+                    ]);
+                } else {
+                    appDeleteResultAdd($deleteItems, '桶配置', "{$bucketLabel} / {$objectKey}", 'failed', $deleteResult['message'] ?? '远程配置文件删除失败', [
+                        'http_code' => $deleteResult['http_code'] ?? null,
+                    ]);
+                    appDeleteDebugLog($appId, 'bucket_delete_failed', [
+                        'current' => $current,
+                        'total' => $bucketCount,
+                        'bucket' => $bucketLabel,
+                        'object_key' => $objectKey,
+                        'message' => $deleteResult['message'] ?? '远程配置文件删除失败',
+                        'http_code' => $deleteResult['http_code'] ?? null,
+                    ]);
+                }
             } catch (\Throwable $e) {
+                appDeleteResultAdd($deleteItems, '桶配置', "{$bucketLabel} / {$objectKey}", 'failed', '远程配置文件删除异常：' . $e->getMessage());
                 appDeleteDebugLog($appId, 'bucket_delete_failed', [
                     'current' => $current,
                     'total' => $bucketCount,
@@ -1275,6 +1434,7 @@ function deleteApp(PDO $pdo, array $input)
     } catch (\Throwable $e) {
         error_log("[BucketClean] 删除桶配置失败 appId={$appId}: " . $e->getMessage());
         appDeleteDebugLog($appId, 'bucket_delete_outer_failed', ['message' => $e->getMessage()]);
+        appDeleteResultAdd($deleteItems, '桶配置', "config/{$appId}.enc", 'failed', '读取或删除配置桶失败：' . $e->getMessage());
     }
 
     //删除redis缓存
@@ -1287,9 +1447,11 @@ function deleteApp(PDO $pdo, array $input)
         $redis->del($appId);
         $redis->close();
         appDeleteDebugLog($appId, 'redis_delete_done');
+        appDeleteResultAdd($deleteItems, 'Redis 缓存', "APPID {$appId}", 'success', 'DB0 配置缓存和 DB2 映射缓存已删除');
     } catch (\Throwable $e) {
         error_log("[AppDelete] 删除 Redis 缓存失败 appId={$appId}: " . $e->getMessage());
         appDeleteDebugLog($appId, 'redis_delete_failed', ['message' => $e->getMessage()]);
+        appDeleteResultAdd($deleteItems, 'Redis 缓存', "APPID {$appId}", 'warning', 'Redis 缓存删除失败，后续请求会因数据库已删除而失效：' . $e->getMessage());
     }
 
     // 文件、桶配置和缓存清理完成后，再按依赖顺序物理删除数据库记录。
@@ -1321,18 +1483,35 @@ function deleteApp(PDO $pdo, array $input)
             'duration_ms' => (int)round((microtime(true) - $physicalStart) * 1000),
             'summary' => $physicalSummary,
         ]);
+        appDeleteResultAdd($deleteItems, '数据库', "APPID {$appId}", 'success', '关联配置、统计、任务和应用主表已物理删除', [
+            'affected_rows' => appDeletePhysicalAffectedRows($physicalSummary),
+        ]);
     } catch (\Throwable $e) {
         appDeleteDebugLog($appId, 'db_physical_delete_failed', [
             'message' => $e->getMessage(),
         ]);
+        appDeleteResultAdd($deleteItems, '数据库', "APPID {$appId}", 'failed', '数据库物理删除失败：' . $e->getMessage());
         appDeleteProgressUpdate($progressToken, $userId, $appId, 'failed', '数据库物理删除失败：' . $e->getMessage(), 100);
         throw $e;
     }
 
-    appDeleteProgressUpdate($progressToken, $userId, $appId, 'completed', '删除完成（数据库已物理删除）', 100);
+    $resultSummary = appDeleteResultSummary($deleteItems);
+    $finalMessage = appDeleteResultMessage('删除完成（数据库已物理删除）', $resultSummary);
+    appDeleteProgressUpdate($progressToken, $userId, $appId, 'completed', $finalMessage, 100, [
+        'app' => $appInfo,
+        'result_summary' => $resultSummary,
+        'result_items' => $deleteItems,
+    ]);
     appDeleteDebugLog($appId, 'delete_completed', ['database_physical_deleted' => true]);
     
-    return ['message' => '删除成功'];
+    return [
+        'message' => $finalMessage,
+        'operation' => 'deleteApp',
+        'app' => $appInfo,
+        'result_summary' => $resultSummary,
+        'result_items' => $deleteItems,
+        'physical_summary' => $physicalSummary ?? null,
+    ];
 }
 
 //删除应用但不删除配置
@@ -1367,6 +1546,9 @@ function clearAppFile(PDO $pdo, array $input)
         appDeleteProgressUpdate($progressToken, $userId, $appId, 'failed', '删除失败：无权限删除该应用', 100);
         throw new Exception('无权限删除该应用');
     }
+    $deleteItems = [];
+    $appInfo = appDeleteAppInfo($app, $appId);
+    appDeleteResultAdd($deleteItems, '应用校验', "APPID {$appId}", 'success', '已确认应用存在且当前账号有删除安装包权限');
     // 如果是管理员，但该应用属于其他用户，需判断该用户是否是VIP
     if ($user['role'] === 'admin' && (int)$app['user_id'] !== $userId) {
         $stmt = $pdo->prepare("SELECT vip_expire_time FROM `$userTable` WHERE id = :uid LIMIT 1");
@@ -1407,27 +1589,49 @@ function clearAppFile(PDO $pdo, array $input)
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在清空后台安装包路径，不删除远程配置...', 35);
     $update = $pdo->prepare("UPDATE `$apkTable` SET `path` = '', `osspath` = NULL, `size` = 0 WHERE `id` = :id");
     $update->execute([':id' => $appId]);
+    appDeleteResultAdd($deleteItems, '后台安装包字段', "APPID {$appId}", 'success', '已清空 path/osspath/size，远程配置保持不变', [
+        'affected_rows' => $update->rowCount(),
+    ]);
 
     // 删除原始 APK 文件
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在删除原始安装包文件...', 55);
-    $filePath = __DIR__ . '/../../uploads/' . $storedPath;
-    if ($storedPath && is_file($filePath)) {
-        @unlink($filePath);
-    }
+    $uploadDir = rtrim(__DIR__ . '/../../uploads', '/');
+    appDeleteDeleteLocalFile($deleteItems, '原始安装包', $uploadDir, $storedPath, '数据库未记录原始安装包路径，已跳过');
     //删除oss端储存的旧文件
     try {
         appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在删除 OSS 安装包文件...', 75);
         $oss = new OSS();
         if(!empty($storedOssPath)){
-            $oss->deleteFile($storedOssPath);
+            $ossResult = $oss->deleteFile($storedOssPath);
+            if ((int)($ossResult['code'] ?? 0) === 200) {
+                appDeleteResultAdd($deleteItems, 'OSS 安装包', (string)$storedOssPath, 'success', 'OSS 文件删除成功');
+            } else {
+                appDeleteResultAdd($deleteItems, 'OSS 安装包', (string)$storedOssPath, 'failed', $ossResult['message'] ?? 'OSS 文件删除失败');
+            }
+        } else {
+            appDeleteResultAdd($deleteItems, 'OSS 安装包', 'osspath', 'skipped', '数据库未记录 OSS 路径，已跳过');
         }
     } catch (\Throwable $e) {
         error_log("[AppClearFile] 删除 OSS 文件失败 appId={$appId}: " . $e->getMessage());
+        appDeleteResultAdd($deleteItems, 'OSS 安装包', (string)($storedOssPath ?: 'osspath'), 'failed', 'OSS 删除异常：' . $e->getMessage());
     }
+    appDeleteResultAdd($deleteItems, '远程配置', "APPID {$appId}", 'skipped', '仅删除文件模式按设计保留远程配置、桶配置和数据库配置');
 
-    appDeleteProgressUpdate($progressToken, $userId, $appId, 'completed', '安装包文件已删除，远程配置已保留', 100);
+    $resultSummary = appDeleteResultSummary($deleteItems);
+    $finalMessage = appDeleteResultMessage('安装包文件处理完成，远程配置已保留', $resultSummary);
+    appDeleteProgressUpdate($progressToken, $userId, $appId, 'completed', $finalMessage, 100, [
+        'app' => $appInfo,
+        'result_summary' => $resultSummary,
+        'result_items' => $deleteItems,
+    ]);
 
-    return ['message' => '安装包文件已删除，路径已清空'];
+    return [
+        'message' => $finalMessage,
+        'operation' => 'clearAppFile',
+        'app' => $appInfo,
+        'result_summary' => $resultSummary,
+        'result_items' => $deleteItems,
+    ];
 }
 
 

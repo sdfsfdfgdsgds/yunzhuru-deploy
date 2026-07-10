@@ -35,6 +35,38 @@
     .delete-loading-mask .el-loading-spinner .path {
       stroke: #fff !important;
     }
+    .delete-result-dialog {
+      max-height: 60vh;
+      overflow: auto;
+      line-height: 1.7;
+    }
+    .delete-result-summary {
+      margin: 8px 0 12px;
+      padding: 10px 12px;
+      background: #f8fafc;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+    }
+    .delete-result-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .delete-result-table th,
+    .delete-result-table td {
+      border: 1px solid #e5e7eb;
+      padding: 6px 8px;
+      text-align: left;
+      vertical-align: top;
+      word-break: break-all;
+    }
+    .delete-result-table th {
+      background: #f3f4f6;
+    }
+    .delete-result-success { color: #16a34a; font-weight: 700; }
+    .delete-result-failed { color: #dc2626; font-weight: 700; }
+    .delete-result-warning { color: #d97706; font-weight: 700; }
+    .delete-result-skipped { color: #6b7280; font-weight: 700; }
   </style>
 </head>
 <body>
@@ -1013,11 +1045,132 @@ async function confirmInject() {
 }
 
 
+function escapeDeleteHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function getDeleteStatusMeta(status) {
+  const map = {
+    success: { text: '成功', className: 'delete-result-success' },
+    failed: { text: '失败', className: 'delete-result-failed' },
+    warning: { text: '注意', className: 'delete-result-warning' },
+    skipped: { text: '跳过', className: 'delete-result-skipped' }
+  };
+  return map[status] || map.warning;
+}
+
+function getDeletePayload(source) {
+  if (!source) return {};
+  return source.data || source;
+}
+
+function buildDeleteResultHtml(row, payload, fallbackMessage) {
+  const app = payload.app || row || {};
+  const summary = payload.result_summary || {};
+  const items = Array.isArray(payload.result_items) ? payload.result_items : [];
+  const appTitle = `[${app.id || row?.id || '-'}] ${app.name || row?.name || '-'}`;
+  const packageName = app.package || row?.package || '-';
+  const summaryHtml = `
+    <div class="delete-result-summary">
+      <div><b>应用：</b>${escapeDeleteHtml(appTitle)}</div>
+      <div><b>包名：</b>${escapeDeleteHtml(packageName)}</div>
+      <div><b>结果：</b>${escapeDeleteHtml(payload.message || fallbackMessage || '处理完成')}</div>
+      <div><b>统计：</b>成功 ${Number(summary.success || 0)} 项，失败 ${Number(summary.failed || 0)} 项，注意 ${Number(summary.warning || 0)} 项，跳过 ${Number(summary.skipped || 0)} 项</div>
+    </div>
+  `;
+  const rows = items.length > 0
+    ? items.map(item => {
+        const meta = getDeleteStatusMeta(item.status);
+        return `<tr>
+          <td>${escapeDeleteHtml(item.scope || '-')}</td>
+          <td>${escapeDeleteHtml(item.target || '-')}</td>
+          <td class="${meta.className}">${meta.text}</td>
+          <td>${escapeDeleteHtml(item.message || '-')}</td>
+        </tr>`;
+      }).join('')
+    : `<tr><td colspan="4">${escapeDeleteHtml(fallbackMessage || '后端未返回明细')}</td></tr>`;
+  return `
+    <div class="delete-result-dialog">
+      ${summaryHtml}
+      <table class="delete-result-table">
+        <thead>
+          <tr><th>清理项</th><th>对象</th><th>状态</th><th>说明</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function showDeleteResultDialog(row, method, source, fallbackMessage) {
+  const payload = getDeletePayload(source);
+  const summary = payload.result_summary || {};
+  const hasFailed = Number(summary.failed || 0) > 0;
+  const hasWarning = Number(summary.warning || 0) > 0;
+  const titlePrefix = method === 'clearAppFile' ? '仅删除文件结果' : '应用删除结果';
+  ElementPlus.ElMessageBox.alert(
+    buildDeleteResultHtml(row, payload, fallbackMessage),
+    hasFailed ? `${titlePrefix}：有失败项` : `${titlePrefix}：已完成`,
+    {
+      type: hasFailed ? 'error' : (hasWarning ? 'warning' : 'success'),
+      dangerouslyUseHTMLString: true,
+      confirmButtonText: '知道了'
+    }
+  );
+}
+
+function showDeleteFailureDialog(row, message, lastProgressText) {
+  const html = `
+    <div class="delete-result-dialog">
+      <div class="delete-result-summary">
+        <div><b>应用：</b>${escapeDeleteHtml(`[${row?.id || '-'}] ${row?.name || '-'}`)}</div>
+        <div><b>包名：</b>${escapeDeleteHtml(row?.package || '-')}</div>
+        <div><b>失败原因：</b>${escapeDeleteHtml(message || '删除失败')}</div>
+        <div><b>最后进度：</b>${escapeDeleteHtml(lastProgressText || '无')}</div>
+      </div>
+    </div>
+  `;
+  ElementPlus.ElMessageBox.alert(html, '删除失败', {
+    type: 'error',
+    dangerouslyUseHTMLString: true,
+    confirmButtonText: '知道了'
+  });
+}
+
+function applyDeleteLocalChange(method, row) {
+  if (!row || !row.id) return;
+  if (method === 'deleteApp') {
+    const before = tableData.value.length;
+    tableData.value = tableData.value.filter(item => Number(item.id) !== Number(row.id));
+    if (tableData.value.length < before && total.value > 0) {
+      total.value -= 1;
+    }
+    return;
+  }
+  tableData.value = tableData.value.map(item => {
+    if (Number(item.id) !== Number(row.id)) return item;
+    return { ...item, path: '', osspath: null, size: 0 };
+  });
+}
+
+function refreshDeleteListLater() {
+  setTimeout(() => {
+    loadData();
+  }, 300);
+}
+
 async function postAppDelete(method, row, successMessage) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 120000);
   const progressToken = `del_${row.id}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   let lastProgressText = '正在提交删除请求...';
+  let lastProgressData = null;
+  let handledResult = false;
   const loading = ElementPlus.ElLoading.service({
     lock: true,
     text: lastProgressText,
@@ -1055,12 +1208,15 @@ async function postAppDelete(method, row, successMessage) {
       const progressJson = await progressRes.json();
       if (progressJson.code === 200 && progressJson.data) {
         const data = progressJson.data;
+        lastProgressData = data;
         setDeleteLoadingText(buildDeleteProgressText(data));
+        return data;
       }
     } catch (e) {
       // 进度轮询失败不打断删除主请求，主请求结果仍然作为最终结果。
       console.warn('删除进度读取失败', e);
     }
+    return null;
   };
   const progressTimer = setInterval(pollDeleteProgress, 700);
   pollDeleteProgress();
@@ -1078,28 +1234,49 @@ async function postAppDelete(method, row, successMessage) {
       json = text ? JSON.parse(text) : {};
     } catch (e) {
       console.error('删除接口返回无法解析', text);
-      ElementPlus.ElMessage.error('删除失败：接口返回异常');
+      handledResult = true;
+      showDeleteFailureDialog(row, '删除失败：接口返回异常', lastProgressText);
       return;
     }
 
     if (json.code === 200) {
-      ElementPlus.ElMessage.success(json.data?.message || json.message || successMessage);
-      loadData();
+      handledResult = true;
+      applyDeleteLocalChange(method, row);
+      showDeleteResultDialog(row, method, json, json.data?.message || json.message || successMessage);
+      refreshDeleteListLater();
     } else {
-      ElementPlus.ElMessage.error(json.message || '删除失败');
+      handledResult = true;
+      showDeleteFailureDialog(row, json.message || '删除失败', lastProgressText);
     }
   } catch (e) {
     console.error('删除请求异常', e);
     if (e && e.name === 'AbortError') {
-      ElementPlus.ElMessage.error(`删除请求超时，后台可能仍在继续。最后进度：${lastProgressText}，请刷新列表确认结果`);
+      const finalProgress = await pollDeleteProgress();
+      if (finalProgress && finalProgress.status === 'completed' && finalProgress.result_items) {
+        handledResult = true;
+        applyDeleteLocalChange(method, row);
+        showDeleteResultDialog(row, method, finalProgress, finalProgress.message || successMessage);
+        refreshDeleteListLater();
+      } else {
+        handledResult = true;
+        showDeleteFailureDialog(row, `删除请求超时，后台可能仍在继续，请刷新列表确认结果`, lastProgressText);
+      }
     } else {
-      ElementPlus.ElMessage.error('删除失败：请求异常');
+      handledResult = true;
+      showDeleteFailureDialog(row, '删除失败：请求异常', lastProgressText);
     }
   } finally {
     clearTimeout(timeoutId);
     clearInterval(progressTimer);
-    await pollDeleteProgress();
+    const finalProgress = await pollDeleteProgress();
     loading.close();
+    if (!handledResult && finalProgress && finalProgress.status === 'completed' && finalProgress.result_items) {
+      applyDeleteLocalChange(method, row);
+      showDeleteResultDialog(row, method, finalProgress, finalProgress.message || successMessage);
+      refreshDeleteListLater();
+    } else if (!handledResult && lastProgressData && lastProgressData.status === 'failed') {
+      showDeleteFailureDialog(row, lastProgressData.message || '删除失败', lastProgressText);
+    }
   }
 }
 
