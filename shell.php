@@ -388,7 +388,10 @@ if(!$excluded){
     // 原子判断今日是否首次（同时设置当天剩余过期时间）
     $isNewDeviceToday = $redis->set($deviceKey, 1, ['nx', 'ex' => $expireSeconds]);
     $isNewIpToday     = $redis->set($ipKey, 1, ['nx', 'ex' => $expireSeconds]);
+    $statMysqlSkipKey = 'stat:mysql:lock_skip';
+    $skipMysqlStats = $redis->get($statMysqlSkipKey) !== false;
 
+    if (!$skipMysqlStats) {
 
     // ================= 汇总表统计 =================
     $insertSumStmt = $pdo->prepare("
@@ -476,7 +479,15 @@ if(!$excluded){
         ':visit_date'=> $todayDate
     ]);
 
+    }
     } catch (Throwable $e) {
+        try {
+            // 某个请求遇到 MySQL 锁等待后，短时间内让后续 shell 请求直接跳过 MySQL 统计，避免 1 秒等待在高并发下继续占满 worker。
+            $redis->select(5);
+            $redis->setex('stat:mysql:lock_skip', 30, '1');
+        } catch (Throwable $cacheError) {
+            // 忽略熔断标记写入失败，主流程继续返回配置。
+        }
         // 统计是旁路数据，失败只记录日志，不能影响 shell.php 主配置响应或占满 PHP worker。
         error_log('[ShellStat] 跳过请求统计 appid=' . (string)$apkId . '，原因：' . $e->getMessage());
     }
