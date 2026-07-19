@@ -2470,6 +2470,88 @@ function extractApkIcon(string $apkPath, string $outputDir, string $outputName) 
     return false;
 }
 
+/**
+ * 从 APK 中查找与 XML 图标同名的位图兼容资源。
+ *
+ * Adaptive Icon 通常以 anydpi-v26 XML 作为高版本入口，同时保留给旧版 Android
+ * 使用的同名 PNG/WebP 密度资源。这里优先选择高密度资源，避免把 XML 当图片处理。
+ *
+ * @return array{path:string,data:string}|null
+ */
+function findApkRasterIconFallback(ZipArchive $zip, string $iconPath): ?array {
+    $iconBaseName = pathinfo($iconPath, PATHINFO_FILENAME);
+    if ($iconBaseName === '') {
+        return null;
+    }
+
+    $sourceType = '';
+    if (preg_match('#^res/(mipmap|drawable)(?:-[^/]*)?/#i', $iconPath, $sourceMatches)) {
+        $sourceType = strtolower($sourceMatches[1]);
+    }
+
+    $densityScores = [
+        'xxxhdpi' => 500,
+        'xxhdpi'  => 400,
+        'xhdpi'   => 300,
+        'hdpi'    => 200,
+        'mdpi'    => 100,
+        'ldpi'    => 50,
+    ];
+    $extensionScores = [
+        'png'  => 30,
+        'webp' => 20,
+        'jpg'  => 10,
+        'jpeg' => 10,
+    ];
+    $candidates = [];
+    $quotedBaseName = preg_quote($iconBaseName, '#');
+
+    for ($index = 0; $index < $zip->numFiles; $index++) {
+        $stat = $zip->statIndex($index);
+        $entryName = is_array($stat) ? (string)($stat['name'] ?? '') : '';
+        if (!preg_match(
+            '#^res/(mipmap|drawable)([^/]*)/' . $quotedBaseName . '\.(png|webp|jpe?g)$#i',
+            $entryName,
+            $entryMatches
+        )) {
+            continue;
+        }
+
+        $entryType = strtolower($entryMatches[1]);
+        $qualifiers = strtolower($entryMatches[2]);
+        $extension = strtolower($entryMatches[3]);
+        $score = ($entryType === $sourceType ? 1000 : 0) + ($extensionScores[$extension] ?? 0);
+        foreach ($densityScores as $density => $densityScore) {
+            if (strpos($qualifiers, '-' . $density) !== false) {
+                $score += $densityScore;
+                break;
+            }
+        }
+
+        $candidates[] = [
+            'index' => $index,
+            'path'  => $entryName,
+            'score' => $score,
+        ];
+    }
+
+    usort($candidates, static function (array $left, array $right): int {
+        return $right['score'] <=> $left['score'];
+    });
+
+    foreach ($candidates as $candidate) {
+        $iconData = $zip->getFromIndex($candidate['index']);
+        if ($iconData !== false && $iconData !== '') {
+            return [
+                'path' => $candidate['path'],
+                'data' => $iconData,
+            ];
+        }
+    }
+
+    return null;
+}
+
 //APK图标提取,aapt2的方式
 function extractApkIcon_aapt(string $apkPath, string $outputDir, string $outputName) {
     if (!is_file($apkPath) || !is_dir($outputDir)) {
@@ -2494,6 +2576,15 @@ function extractApkIcon_aapt(string $apkPath, string $outputDir, string $outputN
     }
 
     $iconData = $zip->getFromName($iconPath);
+    if (strtolower(pathinfo($iconPath, PATHINFO_EXTENSION)) === 'xml') {
+        $fallbackIcon = findApkRasterIconFallback($zip, $iconPath);
+        if ($fallbackIcon === null) {
+            $zip->close();
+            return false;
+        }
+        $iconPath = $fallbackIcon['path'];
+        $iconData = $fallbackIcon['data'];
+    }
     $zip->close();
 
     if ($iconData === false) {

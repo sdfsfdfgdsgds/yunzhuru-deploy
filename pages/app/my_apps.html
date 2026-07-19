@@ -147,7 +147,7 @@
       <el-table-column label="图标" width="60">
           <template #default="scope">
             <img
-              :src="`/icon.php?id=${scope.row.id}`"
+              :src="`/icon.php?id=${scope.row.id}&v=${encodeURIComponent((scope.row.icon || '') + '-' + (scope.row.upload_time || ''))}`"
               style="width: 32px; height: 32px; object-fit: contain; border-radius: 6px;"
               alt="icon"
             />

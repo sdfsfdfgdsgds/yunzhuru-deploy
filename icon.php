@@ -62,9 +62,16 @@ switch ($ext) {
         $contentType = 'application/octet-stream';
         break;
 }
-// 启用浏览器缓存（缓存 7 天）
-header('Cache-Control: public, max-age=31536000'); // 7天=7*24*60*60=604800秒
-header('Expires: ' . gmdate('D, d M Y H:i:s', time() + 31536000) . ' GMT');
+// 默认图标可能在后续重新提取后被自定义图标替换，禁止长期缓存默认占位图。
+if ($iconName === 'android.png') {
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
+    header('Expires: 0');
+} else {
+    // 自定义图标短期缓存 5 分钟；页面 URL 同时带 icon/upload_time 版本，替换后立即换 URL。
+    header('Cache-Control: public, max-age=300, must-revalidate');
+    header('Expires: ' . gmdate('D, d M Y H:i:s', time() + 300) . ' GMT');
+}
 header('Last-Modified: ' . gmdate('D, d M Y H:i:s', filemtime($iconPath)) . ' GMT');
 
 header('message: 200');
