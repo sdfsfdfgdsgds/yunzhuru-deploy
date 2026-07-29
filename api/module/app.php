@@ -2842,11 +2842,13 @@ function isApkObfuscated($apkPath, $pdo) {
             'keywords' => ['libijm_linker.so', 'ijiami.ajm', 'ijiami.dat', 'IJMDal.Data'],
             'message' => '检测到 爱加密 加固'
         ],
+        /*
         [
             'type' => '360加固',
             'keywords' => ['libjiagu.so', 'libprotectClass.so', 'libsecmain.so','libjiagu_a64.so','libjiagu_x64.so'],
             'message' => '检测到 360 加固'
         ],
+        */
         [
             'type' => '梆梆加固',
             'keywords' => ['libDexHelper.so','libDexHelper-x86.so'],
