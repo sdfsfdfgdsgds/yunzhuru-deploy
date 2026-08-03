@@ -138,8 +138,6 @@ function handleInjectionTasks(PDO $pdo, $oss)
     $user_id = $task['user_id'];
     $vip_expire_time = $task['vip_expire_time'];
     $mode = (int)$task['mode'];
-    $preserveResourceMode = ($mode === 4);
-    $reflectionEntryMode = ($mode === 3 || $mode === 4);
     $apk_user_id = $task['apk_user_id'];
     $shellClassName = $task['className'];
     if (!empty($vip_expire_time) && strtotime($vip_expire_time) > time()) {
@@ -161,6 +159,41 @@ function handleInjectionTasks(PDO $pdo, $oss)
         updateTaskInfo($pdo, $task['id'], "应用安装包不存在,请先重传安装包");
         return;
     }
+
+    // 链路注入会重写目标 Application 所在的 DEX。部分加固壳会把加密载荷放在
+    // DEX 标准 data 区之后，重写会同时丢失载荷。检测到这种结构时，提前切换到
+    // 保资源入口反射模式，确保后续模式标志、壳配置和 APK 合并路径全部保持一致。
+    $protectedDexOverlay = false;
+    if ($mode === 1 || $mode === 4) {
+        $protectedDexOverlay = detectProtectedDexOverlay($apk_file[1]);
+        if ($protectedDexOverlay !== false && empty($protectedDexOverlay['sha256'])) {
+            echo "保护DEX原始哈希计算失败，停止处理\n";
+            updateTaskStatus($pdo, $task['id'], '任务失败');
+            updateTaskInfo($pdo, $task['id'], '保护DEX完整性基线读取失败');
+            del_osstemp($oss_temp, $localSavePath);
+            return;
+        }
+        if ($protectedDexOverlay !== false && !empty($task['jiagu'])) {
+            $task['jiagu'] = 0;
+            echo "检测到已有保护DEX，自动关闭二次加固以保持原载荷完整\n";
+        }
+        if ($mode === 1 && $protectedDexOverlay !== false) {
+            $mode = 4;
+            $task['mode'] = 4;
+            $overlayInfo = sprintf(
+                '%s 尾部载荷 %d 字节（DEX条目 %d 字节，标准数据结束 %d）',
+                $protectedDexOverlay['entry'],
+                $protectedDexOverlay['overlay_bytes'],
+                $protectedDexOverlay['entry_size'],
+                $protectedDexOverlay['data_end']
+            );
+            echo "检测到保护DEX：{$overlayInfo}，链路注入自动切换为保资源注入模式\n";
+            updateTaskInfo($pdo, $task['id'], '检测到保护DEX，自动采用保资源注入');
+        }
+    }
+    $preserveResourceMode = ($mode === 4);
+    $reflectionEntryMode = ($mode === 3 || $mode === 4);
+
     /*
     $releasePath = __DIR__ . '/../release/';//编译后的储存目录
     if($task['injected_apk']){
@@ -697,7 +730,9 @@ $applicationlin=[];
     //云注入一般是注入到入口或者入口类的父类，属于第二层
     //所以清理的话，只需要看入口是否是云注入类，如果是，则改成云注入的父类
     //如果已经有入口类了，则反编译入口类dex，将其父类改成云注入的父类
-    if(!$task['kill_Inject']){
+    if($preserveResourceMode){
+        echo "保资源注入模式：跳过去除旧云注入，避免重写目标DEX及其加固载荷\n";
+    }else if(!$task['kill_Inject']){
         echo "该任务未选择去除云注入\n";
     }else{
 
@@ -813,18 +848,22 @@ $applicationlin=[];
 
     }
     echo "==================================开始修复可能存在的desugar问题\n";
-    echo "检测目标应用底包的desugar库是否缺失hashCode方法，如果缺了，则从本平台的库中移植这个方法进去确保兼容，只移植这一个方法即可,不然可能出现其他不可预知的问题\n";
-    $found = dexedit_ac($dexedit, $xmx, $apk_file[1], "j$.util.Objects");
-    if($found == false){
-        echo "该应用无desugar库，无需修复\n";
+    if($preserveResourceMode){
+        echo "保资源注入模式：跳过desugar融合，保持目标DEX字节不变\n";
     }else{
-        echo "该应用存在desugar库，需要检修\n";
-        $result = dexedit_mergedex($dexedit, $xmx, $de_apk2."/".$found, $de_apk1."/classes2.dex", $de_apk2."/".$found);
-
-        if ($result) {
-            echo "desugar库融合修复 成功\n";
+        echo "检测目标应用底包的desugar库是否缺失hashCode方法，如果缺了，则从本平台的库中移植这个方法进去确保兼容，只移植这一个方法即可,不然可能出现其他不可预知的问题\n";
+        $found = dexedit_ac($dexedit, $xmx, $apk_file[1], "j$.util.Objects");
+        if($found == false){
+            echo "该应用无desugar库，无需修复\n";
         } else {
-            echo "desugar库融合修复 失败\n";
+            echo "该应用存在desugar库，需要检修\n";
+            $result = dexedit_mergedex($dexedit, $xmx, $de_apk2."/".$found, $de_apk1."/classes2.dex", $de_apk2."/".$found);
+
+            if ($result) {
+                echo "desugar库融合修复 成功\n";
+            } else {
+                echo "desugar库融合修复 失败\n";
+            }
         }
     }
     //去找入口类所在的dex文件
@@ -1237,6 +1276,22 @@ $applicationlin=[];
         }
         $output_apk = $result[2];//拿到回编译之后的apk路径
 
+    }
+
+    if ($protectedDexOverlay !== false) {
+        echo "==================================校验保护DEX完整性\n";
+        updateTaskInfo($pdo, $task['id'], '校验保护DEX完整性');
+        $expectedDexHash = $protectedDexOverlay['sha256'] ?? false;
+        $actualDexHash = hashApkEntrySha256($output_apk, $protectedDexOverlay['entry']);
+        if (!$expectedDexHash || !$actualDexHash || !hash_equals($expectedDexHash, $actualDexHash)) {
+            echo "保护DEX完整性校验失败：{$protectedDexOverlay['entry']} 原始哈希={$expectedDexHash} 成包哈希={$actualDexHash}\n";
+            updateTaskStatus($pdo, $task['id'], '编译失败');
+            updateTaskInfo($pdo, $task['id'], '保护DEX在打包过程中发生变化，已停止输出');
+            safeDeleteDirectory($temp_dir);
+            del_osstemp($oss_temp, $localSavePath);
+            return;
+        }
+        echo "保护DEX完整性校验通过：{$protectedDexOverlay['entry']} SHA-256={$actualDexHash}\n";
     }
 
     echo "==================================清理解包目录\n";
@@ -5323,6 +5378,145 @@ function isDexCountExceed($apkPath, $maxDexCount = 10) {
         'exceed' => $dexCount > $maxDexCount,
         'count'  => $dexCount
     ];
+}
+
+/**
+ * 计算 APK 内指定 ZIP 条目解压后内容的 SHA-256。
+ *
+ * @return string|false
+ */
+function hashApkEntrySha256($apkPath, $entryName) {
+    if (!is_file($apkPath) || !class_exists('ZipArchive')) {
+        return false;
+    }
+
+    $zip = new ZipArchive();
+    if ($zip->open($apkPath) !== true) {
+        return false;
+    }
+
+    try {
+        return hashZipEntrySha256($zip, $entryName);
+    } finally {
+        $zip->close();
+    }
+}
+
+/**
+ * 计算已打开 ZipArchive 中指定条目的 SHA-256。
+ *
+ * @return string|false
+ */
+function hashZipEntrySha256($zip, $entryName) {
+    $stream = $zip->getStream($entryName);
+    if ($stream === false) {
+        return false;
+    }
+
+    $context = hash_init('sha256');
+    $bytes = hash_update_stream($context, $stream);
+    fclose($stream);
+    if ($bytes === false) {
+        return false;
+    }
+
+    return hash_final($context);
+}
+
+/**
+ * 检测 APK 中 DEX 标准 data 区之后的加固载荷。
+ *
+ * 正常 DEX 的 data_off + data_size 应接近 ZIP 条目的解压后大小；加固器常把
+ * 加密代码追加在该位置之后。DexPool/DexEdit 重建 DEX 时只会写出标准区段，
+ * 因此链路注入必须在写回前切换到保资源模式。
+ *
+ * @return array|false 命中时返回条目和大小信息，否则返回 false
+ */
+function detectProtectedDexOverlay($apkPath, $minimumOverlayBytes = 4096) {
+    if (!is_file($apkPath) || !class_exists('ZipArchive')) {
+        return false;
+    }
+
+    $zip = new ZipArchive();
+    if ($zip->open($apkPath) !== true) {
+        return false;
+    }
+
+    try {
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $entryName = $zip->getNameIndex($i);
+            if ($entryName === false || !preg_match('/^classes(?:\d+)?\.dex$/', $entryName)) {
+                continue;
+            }
+
+            $stat = $zip->statIndex($i);
+            if (!is_array($stat) || empty($stat['size']) || (int)$stat['size'] < 112) {
+                continue;
+            }
+
+            $stream = $zip->getStream($entryName);
+            if ($stream === false) {
+                continue;
+            }
+
+            $header = '';
+            while (strlen($header) < 112 && !feof($stream)) {
+                $chunk = fread($stream, 112 - strlen($header));
+                if ($chunk === false || $chunk === '') {
+                    break;
+                }
+                $header .= $chunk;
+            }
+            fclose($stream);
+
+            if (strlen($header) < 112 || substr($header, 0, 4) !== "dex\n" || substr($header, 7, 1) !== "\0") {
+                continue;
+            }
+
+            $fileSize = unpack('Vvalue', substr($header, 32, 4))['value'];
+            $headerSize = unpack('Vvalue', substr($header, 36, 4))['value'];
+            $endianTag = unpack('Vvalue', substr($header, 40, 4))['value'];
+            $linkSize = unpack('Vvalue', substr($header, 44, 4))['value'];
+            $linkOffset = unpack('Vvalue', substr($header, 48, 4))['value'];
+            $dataSize = unpack('Vvalue', substr($header, 104, 4))['value'];
+            $dataOffset = unpack('Vvalue', substr($header, 108, 4))['value'];
+            $entrySize = (int)$stat['size'];
+            $dataEnd = $dataOffset + $dataSize;
+            $linkEnd = ($linkSize > 0 && $linkOffset > 0) ? $linkOffset + $linkSize : 0;
+            $standardEnd = max($dataEnd, $linkEnd);
+
+            // DEX 040 及以下的标准 header 为 112 字节。DEX 041 使用 container
+            // 布局，字段语义不同，需走独立解析逻辑，这里不直接放宽 headerSize。
+            if ($headerSize !== 112 || $endianTag !== 0x12345678 || $fileSize < 112 || $fileSize > $entrySize) {
+                continue;
+            }
+            if (
+                $dataOffset < 112 ||
+                $dataSize <= 0 ||
+                $dataEnd > $fileSize ||
+                $linkEnd > $fileSize ||
+                $standardEnd > $entrySize
+            ) {
+                continue;
+            }
+
+            $overlayBytes = $entrySize - $standardEnd;
+            if ($overlayBytes > $minimumOverlayBytes) {
+                return [
+                    'entry' => $entryName,
+                    'entry_size' => $entrySize,
+                    'declared_file_size' => $fileSize,
+                    'data_end' => $standardEnd,
+                    'overlay_bytes' => $overlayBytes,
+                    'sha256' => hashZipEntrySha256($zip, $entryName),
+                ];
+            }
+        }
+    } finally {
+        $zip->close();
+    }
+
+    return false;
 }
 
 
