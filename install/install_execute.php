@@ -313,6 +313,21 @@ function installDatabase(PDO $pdo)
             KEY `idx_user_id` (`user_id`),
             KEY `idx_deleted_at` (`deleted_at`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='应用删除标记表'");
+
+        $pdo->exec("CREATE TABLE IF NOT EXISTS `{$tablePrefix}app_config_invalidation_job` (
+            `app_id` INT NOT NULL,
+            `dependent_ids` TEXT NOT NULL,
+            `redirect_source_ids` TEXT NOT NULL,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'pending',
+            `attempts` INT NOT NULL DEFAULT 0,
+            `next_retry_at` DATETIME NULL,
+            `last_error` TEXT NULL,
+            `last_result` MEDIUMTEXT NULL,
+            `created_at` DATETIME NOT NULL,
+            `updated_at` DATETIME NOT NULL,
+            PRIMARY KEY (`app_id`),
+            KEY `idx_status_retry` (`status`, `next_retry_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='已删应用配置运行面失效重试任务'");
         
         
         // --------------------

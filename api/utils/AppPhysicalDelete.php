@@ -281,6 +281,15 @@ if (!function_exists('physicallyDeleteAppDatabase')) {
         $spPutNameIds = appPhysicalDeleteSelectIds($pdo, 'cainiao_sp_put_name', 'config_id', $configIds);
         $spGetNameIds = appPhysicalDeleteSelectIds($pdo, 'cainiao_sp_get_name', 'config_id', $configIds);
         $spOverrideNameIds = appPhysicalDeleteSelectIds($pdo, 'cainiao_sp_override_name', 'config_id', $configIds);
+        $reuseApkIds = [];
+        $redirectSourceIds = [];
+        if (appPhysicalDeleteTableExists($pdo, 'cainiao_redirect')
+            && appPhysicalDeleteColumnExists($pdo, 'cainiao_redirect', 'apk_id1')
+            && appPhysicalDeleteColumnExists($pdo, 'cainiao_redirect', 'apk_id2')) {
+            $stmt = $pdo->prepare('SELECT DISTINCT `apk_id1` FROM `cainiao_redirect` WHERE `apk_id2` = ?');
+            $stmt->execute([$appId]);
+            $redirectSourceIds = array_values(array_filter(array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN))));
+        }
 
         $summary['ids'] = [
             'config' => $configIds,
@@ -291,6 +300,8 @@ if (!function_exists('physicallyDeleteAppDatabase')) {
             'popup_input' => $inputPopupIds,
             'popup_message_button' => $messageButtonIds,
             'popup_input_button' => $inputButtonIds,
+            'reuse_dependents' => [],
+            'redirect_sources' => $redirectSourceIds,
         ];
 
         $record = function (array $event) use (&$summary, $onStep): void {
@@ -311,6 +322,7 @@ if (!function_exists('physicallyDeleteAppDatabase')) {
                 // 先用普通 SELECT 找到复用本应用的主键，再按主键更新。
                 // 不能直接 `UPDATE ... WHERE reuse_apk_id = ?`：生产表该列可能无索引，会扫描并锁住大量应用行。
                 $reuseApkIds = appPhysicalDeleteSelectIds($pdo, 'cainiao_apk', 'reuse_apk_id', [$appId]);
+                $summary['ids']['reuse_dependents'] = $reuseApkIds;
                 if (!empty($reuseApkIds)) {
                     $placeholders = implode(',', array_fill(0, count($reuseApkIds), '?'));
                     $stmt = $pdo->prepare("

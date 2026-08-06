@@ -42,9 +42,11 @@ if (!$lockHandle) {
     exit(2);
 }
 
-if (!flock($lockHandle, LOCK_EX | LOCK_NB)) {
-    echo "已有删除队列 runner 正在执行，本次退出\n";
-    exit(0);
+// 后台进程在此等待现有 runner，而不是立即退出。
+// 否则会出现“旧 runner 已扫到空队列、新 job 随后落盘”的交错，导致 pending 无人继续处理。
+if (!flock($lockHandle, LOCK_EX)) {
+    fwrite(STDERR, "获取删除队列锁失败\n");
+    exit(3);
 }
 
 ftruncate($lockHandle, 0);
@@ -53,6 +55,17 @@ fwrite($lockHandle, json_encode([
     'started_at' => date('Y-m-d H:i:s'),
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
 fflush($lockHandle);
+
+// 能拿到独占锁说明当前没有其他 runner；running 目录中的任务是上次进程中断的遗留，
+// 操作本身幂等，安全放回 pending 重放，避免永久卡在 running。
+foreach (glob($runningDir . '/app_*.json') ?: [] as $staleRunningFile) {
+    $recoveredPendingFile = $pendingDir . '/' . basename($staleRunningFile);
+    if (is_file($recoveredPendingFile)) {
+        @unlink($staleRunningFile);
+        continue;
+    }
+    @rename($staleRunningFile, $recoveredPendingFile);
+}
 
 while (true) {
     $jobs = glob($pendingDir . '/app_*.json') ?: [];

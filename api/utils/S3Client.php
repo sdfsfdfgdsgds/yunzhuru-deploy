@@ -35,9 +35,10 @@ class S3Client {
      * @param string $objectKey    对象路径（如 config/123.enc）
      * @param string $content      文件内容
      * @param string $contentType  MIME 类型
+     * @param array $extraHeaders  额外对象响应头，例如 Cache-Control
      * @return array ['code' => 200|500, 'message' => string]
      */
-    public function putObject($objectKey, $content, $contentType = 'application/octet-stream') {
+    public function putObject($objectKey, $content, $contentType = 'application/octet-stream', array $extraHeaders = []) {
         $objectKey = ltrim($objectKey, '/');
         $uri = '/' . $this->bucket . '/' . $objectKey;
         $encodedUri = $this->uriEncodePath($uri);
@@ -55,6 +56,17 @@ class S3Client {
             'x-amz-content-sha256' => $payloadHash,
             'x-amz-date'          => $datetime,
         ];
+        foreach ($extraHeaders as $key => $value) {
+            $headerKey = strtolower(trim((string)$key));
+            $headerValue = trim((string)$value);
+            if ($headerKey === '' || $headerValue === '') {
+                continue;
+            }
+            if (in_array($headerKey, ['host', 'content-length', 'content-type', 'x-amz-content-sha256', 'x-amz-date'], true)) {
+                continue;
+            }
+            $headers[$headerKey] = $headerValue;
+        }
         ksort($headers);
 
         // 规范请求
@@ -90,15 +102,12 @@ class S3Client {
 
         $authorization = "AWS4-HMAC-SHA256 Credential={$this->accessKey}/{$scope}, SignedHeaders={$signedHeaders}, Signature={$signature}";
 
-        // 发送请求
-        return $this->curlRequest('PUT', $url, $content, [
-            "Authorization: {$authorization}",
-            "Content-Type: {$contentType}",
-            "Content-Length: " . strlen($content),
-            "x-amz-content-sha256: {$payloadHash}",
-            "x-amz-date: {$datetime}",
-            "Host: {$this->host}",
-        ]);
+        // 发送请求。对象元数据头必须同时参与签名并实际发出。
+        $curlHeaders = ["Authorization: {$authorization}"];
+        foreach ($headers as $key => $value) {
+            $curlHeaders[] = "{$key}: {$value}";
+        }
+        return $this->curlRequest('PUT', $url, $content, $curlHeaders);
     }
 
     /**

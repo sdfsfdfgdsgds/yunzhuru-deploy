@@ -78,7 +78,7 @@ $json = '{
     "newactivity": [],
     "view": []
 }';
-if(!$_GET['debug']){
+if (empty($_GET['debug'])) {
     echo encrypt_json($json, '1234567890abcdef');
     http_response_code(200);exit;
 }
@@ -111,6 +111,7 @@ require_once __DIR__ . '/config/redis.php';//Redis统一连接配置
 require_once __DIR__ . '/api/utils/Auth.php';//用户鉴权中间件，这里面有个获取系统设置的方法
 require_once __DIR__ . '/api/utils/XdbSearcher.php';//IP归属地查询库
 require_once __DIR__ . '/api/utils/ConfigHelper.php';//配置生成公共函数（桶推送共用）
+require_once __DIR__ . '/api/utils/AppConfigInvalidation.php';//删除应用配置失效与兜底缓存隔离
 if (!$pdo || !($pdo instanceof PDO)) {
     http_response_code(404);
     echo json_encode(['code' => 500, 'message' => '数据库连接失败']);
@@ -123,27 +124,77 @@ $redis = getRedisConnection(0);
 
 
 $redis->select(2);//选择数据库2，作为远程配置临时缓存库
-$exists = false;
-if (isApkDeleted($pdo, (int)$appid)) {
-    // 已删除应用不能继续吃旧 Redis 缓存，否则壳端仍可能拿到旧配置。
-    $redis->del($appid);
-} else {
-    $exists = $redis->get($appid);
+$fallbackResolution = false;
+$resolutionSource = 'app';
+$exists = $redis->get((string)$appid);
+$cachedApk = $exists !== false ? json_decode((string)$exists, true) : null;
+$cachedResolvedId = is_array($cachedApk) ? (int)($cachedApk['id'] ?? 0) : 0;
+if ($cachedResolvedId <= 0) {
+    $cachedResolvedId = (int)$appid;
 }
-if($exists !== false){
+
+// DB2 只是加速层，每次命中仍用一次轻量查询确认请求源和解析目标仍有效。
+// 这能拦住物理删除后 tombstone 已清理、但并发请求又回写的旧 DB2 数据。
+$stateStmt = $pdo->prepare("
+    SELECT
+        EXISTS(
+            SELECT 1
+            FROM cainiao_apk a
+            INNER JOIN cainiao_apk_config c ON c.apk_id = a.id
+            LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
+            WHERE a.id = :requested_id
+              AND a.user_id = :requested_user_id
+              AND d.apk_id IS NULL
+        ) AS requested_available,
+        EXISTS(
+            SELECT 1
+            FROM cainiao_apk a2
+            INNER JOIN cainiao_apk_config c2 ON c2.apk_id = a2.id
+            LEFT JOIN cainiao_apk_deleted d3 ON d3.apk_id = a2.id
+            WHERE a2.id = :resolved_id
+              AND d3.apk_id IS NULL
+        ) AS resolved_available
+");
+$stateStmt->execute([
+    ':requested_id' => (int)$appid,
+    ':requested_user_id' => (int)$appkey,
+    ':resolved_id' => $cachedResolvedId,
+]);
+$requestState = $stateStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+$requestedAppAvailable = !empty($requestState['requested_available']);
+$cachedResolvedAvailable = !empty($requestState['resolved_available']);
+$cachedFallbackResolution = is_array($cachedApk) && !empty($cachedApk['_fallback_resolution']);
+$cachedLooksRedirected = is_array($cachedApk)
+    && (!empty($cachedApk['redirect']) || (int)($cachedApk['id'] ?? 0) !== (int)$appid);
+$cachedResolutionFormatCurrent = !$cachedLooksRedirected
+    || array_key_exists('_fallback_resolution', $cachedApk);
+
+$cacheUsable = is_array($cachedApk)
+    && $cachedResolvedAvailable
+    && $cachedResolutionFormatCurrent
+    && ($requestedAppAvailable || $cachedFallbackResolution);
+if (!$cacheUsable) {
+    if ($exists !== false) {
+        $redis->del((string)$appid);
+    }
+    $exists = false;
+}
+
+if ($exists !== false) {
     //本次请求的appid有缓存，走缓存
     header('X-Data-Source-apk: redis');
-    $apk = json_decode($exists, true);
-}else{
+    $apk = $cachedApk;
+    $fallbackResolution = !empty($apk['_fallback_resolution'])
+        || (!empty($apk['redirect']) && (int)($apk['id'] ?? 0) !== (int)$appid);
+    $resolutionSource = (string)($apk['_resolution_source'] ?? ($fallbackResolution ? 'cached-fallback' : 'app'));
+    $redirect = !empty($apk['redirect']);
+} else {
     //本次请求的数据无缓存，走查询
-    // 查当前 APK 是否存在
-    //验证包名
-    /*$stmt = $pdo->prepare("SELECT * FROM cainiao_apk WHERE package = :package AND id = :id AND user_id = :user_id LIMIT 1");
-    $stmt->execute([':package' => $package, ':id' => $appid, ':user_id' => $appkey]);*/
-    //不验证包名
+    // 不验证包名，但要同时验证归属、删除标记和配置主表。
     $stmt = $pdo->prepare("
         SELECT a.*
         FROM cainiao_apk a
+        INNER JOIN cainiao_apk_config c ON c.apk_id = a.id
         LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
         WHERE a.id = :id
           AND a.user_id = :user_id
@@ -153,65 +204,95 @@ if($exists !== false){
     $stmt->execute([':id' => $appid, ':user_id' => $appkey]);
     $apk = $stmt->fetch(PDO::FETCH_ASSOC);
     $redirect = false;//应用重定向标记
+
+    $candidateStmt = $pdo->prepare("
+        SELECT a.*
+        FROM cainiao_apk a
+        INNER JOIN cainiao_apk_config c ON c.apk_id = a.id
+        LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
+        WHERE a.id = :id
+          AND d.apk_id IS NULL
+        LIMIT 1
+    ");
+
+    $redirectStmt = $pdo->prepare("SELECT apk_id2 FROM cainiao_redirect WHERE apk_id1 = :apk_id1 LIMIT 1");
+    $redirectStmt->execute([':apk_id1' => $appid]);
+    $redirectRow = $redirectStmt->fetch(PDO::FETCH_ASSOC);
+
     if (!$apk) {
-        //$shell_id = Auth::getSetting($pdo, 'shell', '');//兜底应用配置id
-        
-        //对于不存在的应用id，先检查是否存在应用id映射，如果存在则使用应用id映射的配置，如果不存在映射关系，则使用后台的最终兜底配置
-        $stmt = $pdo->prepare("SELECT apk_id2 FROM cainiao_redirect WHERE apk_id1 = :apk_id1 LIMIT 1");
-        $stmt->execute([':apk_id1' => $appid]);
-        $redirect = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-        if ($redirect && !empty($redirect['apk_id2'])) {
-            // 如果 redirect 中存在映射，则用 apk_id2 作为兜底 id
-            $shell_id = $redirect['apk_id2'];
-        } else {
-            // 否则进入原来的兜底逻辑（从配置表读取 shell）
-            $shell_id = Auth::getSetting($pdo, 'shell', '');
+        // 对于不存在/已删除的应用，优先尝试有效重定向；重定向失效后继续尝试系统最终兜底。
+        $candidates = [];
+        if ($redirectRow && !empty($redirectRow['apk_id2'])) {
+            $candidates[] = ['id' => (int)$redirectRow['apk_id2'], 'source' => 'redirect'];
         }
-        if(empty($shell_id)){
-            //http_response_code(404);
-            echo json_encode(['code' => 407, 'message' => '未找到该应用，请先上传应用']);
-            exit;
+        $globalFallbackId = (int)Auth::getSetting($pdo, 'shell', '');
+        if ($globalFallbackId > 0) {
+            $alreadyAdded = false;
+            foreach ($candidates as $candidate) {
+                if ((int)$candidate['id'] === $globalFallbackId) {
+                    $alreadyAdded = true;
+                    break;
+                }
+            }
+            if (!$alreadyAdded) {
+                $candidates[] = ['id' => $globalFallbackId, 'source' => 'system-shell'];
+            }
         }
-        //检查兜底配置id是否存在
-        // 查当前 APK 是否存在 ,不受包名和用户id的限制
-        $stmt = $pdo->prepare("
-            SELECT a.*
-            FROM cainiao_apk a
-            LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
-            WHERE a.id = :id
-              AND d.apk_id IS NULL
-            LIMIT 1
-        ");
-        $stmt->execute([':id' => $shell_id]);
-        $apk = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        $apk = false;
+        foreach ($candidates as $candidate) {
+            $candidateStmt->execute([':id' => (int)$candidate['id']]);
+            $candidateApk = $candidateStmt->fetch(PDO::FETCH_ASSOC);
+            if ($candidateApk) {
+                $apk = $candidateApk;
+                $resolutionSource = (string)$candidate['source'];
+                break;
+            }
+        }
+
         if (!$apk) {
-            //http_response_code(404);
             echo json_encode(['code' => 407, 'message' => '未找到该应用，请先上传应用']);
             exit;
         }
+        $fallbackResolution = true;
         $redirect = true;
-    }else{
-        //应用存在，也要检查重定向
-        $stmt = $pdo->prepare("SELECT apk_id2 FROM cainiao_redirect WHERE apk_id1 = :apk_id1 LIMIT 1");
-        $stmt->execute([':apk_id1' => $appid]);
-        $redirect = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($redirect && !empty($redirect['apk_id2'])) {
-            // 如果 redirect 中存在映射，则用 apk_id2 作为本次应用id
-            $redirectTargetId = (int)$redirect['apk_id2'];
-            if (!isApkDeleted($pdo, $redirectTargetId)) {
-                // 仅在目标应用未删除时沿用映射，避免删除后继续下发旧配置。
-                $apk['id'] = $redirectTargetId;
-                $redirect = true;
-            } else {
-                $redirect = false;
+    } else {
+        // 源应用存在时也要校验 redirect 目标；目标失效时继续尝试系统最终兜底。
+        if ($redirectRow && !empty($redirectRow['apk_id2'])) {
+            $candidates = [
+                ['id' => (int)$redirectRow['apk_id2'], 'source' => 'redirect'],
+            ];
+            $globalFallbackId = (int)Auth::getSetting($pdo, 'shell', '');
+            if ($globalFallbackId > 0 && $globalFallbackId !== (int)$redirectRow['apk_id2']) {
+                $candidates[] = ['id' => $globalFallbackId, 'source' => 'system-shell'];
+            }
+
+            foreach ($candidates as $candidate) {
+                $candidateStmt->execute([':id' => (int)$candidate['id']]);
+                $candidateApk = $candidateStmt->fetch(PDO::FETCH_ASSOC);
+                if ($candidateApk) {
+                    $apk = $candidateApk;
+                    $fallbackResolution = true;
+                    $redirect = true;
+                    $resolutionSource = (string)$candidate['source'];
+                    break;
+                }
             }
         }
     }
+    $fallbackResolution = $fallbackResolution
+        || (!empty($redirect) && (int)($apk['id'] ?? 0) !== (int)$appid);
     $apk['redirect'] = $redirect;
+    $apk['_fallback_resolution'] = $fallbackResolution;
+    $apk['_resolution_source'] = $resolutionSource;
     $apk['sign'] = null;
-    $redis->setex($appid, 10800, json_encode($apk,320));//缓存3小时
+    // 缺失/删除应用的兜底映射只短缓存，避免后台修改最终兜底后旧映射延续 3 小时。
+    $redis->setex($appid, $fallbackResolution ? 60 : 10800, json_encode($apk,320));
     header('X-Data-Source-apk: data');
+}
+
+if ($fallbackResolution) {
+    header('X-Config-Resolution: ' . $resolutionSource);
 }
 
 $apkId = (int)$apk['id'];
@@ -719,11 +800,14 @@ if (!is_dir($cacheDir)) {
     mkdir($cacheDir, 0777, true);
 }
 //$cacheKey = md5($package . $versionName . $versionCode . $appid . $appkey);//不能用设备缓存,否则会生成海量的缓存文件
-$cacheKey = $appid;//直接用appid作为键名
-//被禁用的设备和未禁用的设备，使用不同的缓存，防止缓存冲突
-if($disable){
-    $cacheKey = "禁用的设备：" . $appid . "_{$did}";
-}
+// 兜底/重定向响应使用独立命名空间，绝不能命中原 APPID 删除前留下的 DB0/磁盘旧配置。
+$cacheKey = buildShellConfigCacheKey(
+    (int)$appid,
+    $apkId,
+    (bool)$fallbackResolution,
+    (bool)$disable,
+    (string)$did
+);
 
 $cacheFile = __DIR__ . "/temp/{$cacheKey}.json";
 
@@ -818,7 +902,7 @@ if($disable){
     file_put_contents(__DIR__ . "/temp/AAA明文{$cacheKey}.json", $json);//将明文写入缓存,调试用
 }
 
-if($_GET['debug'] == 1){
+if (($_GET['debug'] ?? null) == 1) {
     echo $json;//输出明文
     exit;
 }

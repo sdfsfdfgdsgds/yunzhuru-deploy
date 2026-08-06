@@ -18,7 +18,19 @@ require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../api/utils/BucketPush.php';
 
 try {
-    $result = pushConfigWithDependents($pdo, $apkId);
+    $result = [];
+    for ($attempt = 1; $attempt <= 3; $attempt++) {
+        $result = pushConfigWithDependents($pdo, $apkId);
+        if ((int)($result['code'] ?? 500) !== 409) {
+            break;
+        }
+        if ($attempt < 3) {
+            error_log("[push_config.php] appId={$apkId} 推送未收敛，准备第 " . ($attempt + 1) . ' 次生成最新快照');
+            sleep(2 * $attempt);
+        } else {
+            error_log("[push_config.php] appId={$apkId} 连续 3 次推送未收敛，已保持回源 API 状态");
+        }
+    }
     error_log("[push_config.php] appId={$apkId} 推送完成: " . json_encode($result));
 } catch (\Throwable $e) {
     error_log("[push_config.php] appId={$apkId} 推送失败: " . $e->getMessage());

@@ -2,6 +2,8 @@
 
 require_once __DIR__ . '/../utils/DeletedApp.php';
 require_once __DIR__ . '/../utils/AppPhysicalDelete.php';
+require_once __DIR__ . '/../utils/AppConfigInvalidation.php';
+require_once __DIR__ . '/../utils/BucketPush.php';
 
 if (!defined('OSS_DOWNLOAD_KEEP_MINUTES')) {
     // 注入产物可能达到数百 MB 到数 GB，OSS 临时下载对象需要覆盖完整下载和断点续传窗口。
@@ -1205,13 +1207,6 @@ function appDeleteCleanupQueueDir(string $subDir = ''): string
 function appDeleteStartBackgroundCleanup(int $appId, int $userId, string $role, string $progressToken): array
 {
     $runner = dirname(__DIR__, 2) . '/service/delete_app_queue.php';
-    if (!is_file($runner)) {
-        return [
-            'started' => false,
-            'message' => '后台队列脚本不存在：' . $runner,
-        ];
-    }
-
     $pendingDir = appDeleteCleanupQueueDir('pending');
     $runningDir = appDeleteCleanupQueueDir('running');
     appDeleteCleanupQueueDir('done');
@@ -1228,10 +1223,48 @@ function appDeleteStartBackgroundCleanup(int $appId, int $userId, string $role, 
         'queued_ts' => time(),
     ];
     $alreadyRunning = is_file($runningFile);
+    $persisted = $alreadyRunning;
     if (!$alreadyRunning) {
+        $encodedJob = json_encode($job, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($encodedJob === false) {
+            return [
+                'started' => false,
+                'queued' => false,
+                'already_running' => false,
+                'message' => '后台清理任务序列化失败',
+            ];
+        }
         $tmp = $jobFile . '.' . uniqid('tmp_', true);
-        @file_put_contents($tmp, json_encode($job, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
-        @rename($tmp, $jobFile);
+        $written = @file_put_contents($tmp, $encodedJob, LOCK_EX);
+        $persisted = $written === strlen($encodedJob) && @rename($tmp, $jobFile);
+        // rename 成功即表示 job 已持久化；runner 可能紧接着把它移入 running，
+        // 因此不在这里二次用 is_file(pending) 判定成败。
+        if (!$persisted) {
+            @unlink($tmp);
+            appDeleteDebugLog($appId, 'cleanup_queue_persist_failed', [
+                'job_file' => $jobFile,
+                'written' => $written,
+                'expected' => strlen($encodedJob),
+            ]);
+            return [
+                'started' => false,
+                'queued' => false,
+                'already_running' => false,
+                'job_file' => $jobFile,
+                'message' => '后台清理任务落盘失败',
+            ];
+        }
+        $persisted = true;
+    }
+
+    if (!is_file($runner)) {
+        return [
+            'started' => false,
+            'queued' => $persisted,
+            'already_running' => $alreadyRunning,
+            'job_file' => $alreadyRunning ? $runningFile : $jobFile,
+            'message' => '后台队列脚本不存在，任务已落盘等待恢复：' . $runner,
+        ];
     }
 
     $php = PHP_BINARY ?: 'php';
@@ -1256,12 +1289,54 @@ function appDeleteStartBackgroundCleanup(int $appId, int $userId, string $role, 
 
     return [
         'started' => $exitCode === 0 && $pid !== '',
-        'queued' => true,
+        // runner 可能已把 pending 原子移到 running，这里使用落盘结果，不再二次猜测 pending 是否存在。
+        'queued' => $persisted || is_file($runningFile),
         'already_running' => $alreadyRunning,
         'pid' => $pid,
         'log_file' => $logFile,
         'job_file' => $alreadyRunning ? $runningFile : $jobFile,
         'message' => $exitCode === 0 && $pid !== '' ? '后台清理任务已进入队列' : '后台清理队列启动失败',
+    ];
+}
+
+/**
+ * 启动不受大表物理清理全局锁影响的轻量任务，优先下线 Redis/磁盘/桶配置。
+ * 主队列仍会在处理该应用时重试，因此这个轻量任务是快速通道，不是唯一保障。
+ */
+function appDeleteStartRuntimeInvalidation(int $appId): array
+{
+    $runner = dirname(__DIR__, 2) . '/service/invalidate_deleted_app.php';
+    if (!is_file($runner)) {
+        return [
+            'started' => false,
+            'message' => '配置即时下线脚本不存在：' . $runner,
+        ];
+    }
+
+    $php = PHP_BINARY ?: 'php';
+    $logFile = appDeleteProgressDir() . '/runtime_invalidation.log';
+    $cmd = 'nohup ' . escapeshellarg($php)
+        . ' ' . escapeshellarg($runner)
+        . ' ' . (int)$appId
+        . ' >> ' . escapeshellarg($logFile)
+        . ' 2>&1 & echo $!';
+    $output = [];
+    $exitCode = 0;
+    @exec($cmd, $output, $exitCode);
+    $pid = trim((string)($output[0] ?? ''));
+    $started = $exitCode === 0 && $pid !== '';
+
+    appDeleteDebugLog($appId, $started ? 'runtime_invalidation_started' : 'runtime_invalidation_start_failed', [
+        'cmd_exit_code' => $exitCode,
+        'pid' => $pid,
+        'log_file' => $logFile,
+    ]);
+
+    return [
+        'started' => $started,
+        'pid' => $pid,
+        'log_file' => $logFile,
+        'message' => $started ? '配置即时下线任务已启动' : '配置即时下线任务启动失败',
     ];
 }
 
@@ -1277,6 +1352,41 @@ function appDeleteRunCleanup(PDO $pdo, int $appId, int $userId, string $role, st
         'role' => $role,
         'progress_token' => $progressToken,
     ]);
+
+    // 无论应用主表是否已被上次进程物理删除，都先执行持久化运行面失效。
+    // 这使崩溃重放仍能继续删桶、收敛缓存和修复复用依赖。
+    try {
+        appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '后台正在执行持久化配置下线任务...', 23);
+        $persistentInvalidation = processAppConfigInvalidationJob($pdo, $appId);
+        appDeleteDebugLog($appId, 'persistent_runtime_invalidation_done', $persistentInvalidation);
+        appDeleteResultAdd(
+            $deleteItems,
+            '持久化配置下线',
+            "APPID {$appId}",
+            !empty($persistentInvalidation['ok']) ? 'success' : 'warning',
+            !empty($persistentInvalidation['ok'])
+                ? '缓存、桶对象与依赖配置已收敛'
+                : '部分失效操作将由常驻 worker 继续重试',
+            [
+                'attempts' => (int)($persistentInvalidation['attempts'] ?? 0),
+                'next_retry_at' => $persistentInvalidation['next_retry_at'] ?? null,
+                'errors' => $persistentInvalidation['errors'] ?? [],
+            ]
+        );
+    } catch (\Throwable $e) {
+        appDeleteDebugLog($appId, 'persistent_runtime_invalidation_failed', ['message' => $e->getMessage()]);
+        appDeleteResultAdd($deleteItems, '持久化配置下线', "APPID {$appId}", 'warning', '本次执行异常，常驻 worker 会继续拉取：' . $e->getMessage());
+        try {
+            $fallbackCacheInvalidation = invalidateAppConfigCaches($appId);
+            $fallbackBucketInvalidation = deleteAppConfigObjects($pdo, $appId);
+            appDeleteDebugLog($appId, 'persistent_runtime_direct_fallback_done', [
+                'cache' => $fallbackCacheInvalidation,
+                'bucket' => $fallbackBucketInvalidation,
+            ]);
+        } catch (\Throwable $fallbackError) {
+            appDeleteDebugLog($appId, 'persistent_runtime_direct_fallback_failed', ['message' => $fallbackError->getMessage()]);
+        }
+    }
 
     $stmt = $pdo->prepare("SELECT * FROM `cainiao_apk` WHERE id = :id LIMIT 1");
     $stmt->execute([':id' => $appId]);
@@ -1395,93 +1505,6 @@ function appDeleteRunCleanup(PDO $pdo, int $appId, int $userId, string $role, st
     }
 
     try {
-        require_once __DIR__ . '/../utils/S3Client.php';
-        $bucketRows = $pdo->query("SELECT * FROM cainiao_s3_bucket WHERE enabled = 1")->fetchAll(PDO::FETCH_ASSOC);
-        $bucketCount = count($bucketRows);
-        $objectKey = "config/{$appId}.enc";
-        appDeleteDebugLog($appId, 'bucket_delete_list_done', ['count' => $bucketCount, 'object_key' => $objectKey]);
-        if ($bucketCount === 0) {
-            appDeleteResultAdd($deleteItems, '桶配置', $objectKey, 'skipped', '没有启用的配置桶，已跳过远程配置删除');
-        }
-        foreach ($bucketRows as $index => $b) {
-            $current = $index + 1;
-            $bucketLabel = appDeleteProgressBucketLabel($b);
-            appDeleteDebugLog($appId, 'bucket_delete_start', [
-                'current' => $current,
-                'total' => $bucketCount,
-                'bucket' => $bucketLabel,
-                'object_key' => $objectKey,
-            ]);
-            appDeleteProgressUpdate(
-                $progressToken,
-                $userId,
-                $appId,
-                'running',
-                "后台正在删除桶配置 {$current}/{$bucketCount}：{$bucketLabel}（{$objectKey}）",
-                60 + (int)floor(($current / max(1, $bucketCount)) * 25),
-                ['bucket' => $bucketLabel, 'object_key' => $objectKey]
-            );
-            try {
-                $client = new S3Client($b['access_key'], $b['secret_key'], $b['endpoint'], $b['bucket'], $b['region'] ?: 'auto');
-                $deleteResult = $client->deleteObject($objectKey);
-                if ((int)($deleteResult['code'] ?? 0) === 200) {
-                    appDeleteResultAdd($deleteItems, '桶配置', "{$bucketLabel} / {$objectKey}", 'success', '远程配置文件删除成功', [
-                        'http_code' => $deleteResult['http_code'] ?? null,
-                    ]);
-                    appDeleteDebugLog($appId, 'bucket_delete_done', [
-                        'current' => $current,
-                        'total' => $bucketCount,
-                        'bucket' => $bucketLabel,
-                        'object_key' => $objectKey,
-                        'http_code' => $deleteResult['http_code'] ?? null,
-                    ]);
-                } else {
-                    appDeleteResultAdd($deleteItems, '桶配置', "{$bucketLabel} / {$objectKey}", 'failed', $deleteResult['message'] ?? '远程配置文件删除失败', [
-                        'http_code' => $deleteResult['http_code'] ?? null,
-                    ]);
-                    appDeleteDebugLog($appId, 'bucket_delete_failed', [
-                        'current' => $current,
-                        'total' => $bucketCount,
-                        'bucket' => $bucketLabel,
-                        'object_key' => $objectKey,
-                        'message' => $deleteResult['message'] ?? '远程配置文件删除失败',
-                        'http_code' => $deleteResult['http_code'] ?? null,
-                    ]);
-                }
-            } catch (\Throwable $e) {
-                appDeleteResultAdd($deleteItems, '桶配置', "{$bucketLabel} / {$objectKey}", 'failed', '远程配置文件删除异常：' . $e->getMessage());
-                appDeleteDebugLog($appId, 'bucket_delete_failed', [
-                    'current' => $current,
-                    'total' => $bucketCount,
-                    'bucket' => $bucketLabel,
-                    'object_key' => $objectKey,
-                    'message' => $e->getMessage(),
-                ]);
-            }
-        }
-    } catch (\Throwable $e) {
-        error_log("[BucketClean] 删除桶配置失败 appId={$appId}: " . $e->getMessage());
-        appDeleteDebugLog($appId, 'bucket_delete_outer_failed', ['message' => $e->getMessage()]);
-        appDeleteResultAdd($deleteItems, '桶配置', "config/{$appId}.enc", 'failed', '读取或删除配置桶失败：' . $e->getMessage());
-    }
-
-    try {
-        appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '后台正在删除 Redis 缓存...', 90);
-        appDeleteDebugLog($appId, 'redis_delete_start');
-        $redis = getRedisConnection(0);
-        $redis->del($appId);
-        $redis->select(2);
-        $redis->del($appId);
-        $redis->close();
-        appDeleteDebugLog($appId, 'redis_delete_done');
-        appDeleteResultAdd($deleteItems, 'Redis 缓存', "APPID {$appId}", 'success', 'DB0 配置缓存和 DB2 映射缓存已删除');
-    } catch (\Throwable $e) {
-        error_log("[AppDelete] 删除 Redis 缓存失败 appId={$appId}: " . $e->getMessage());
-        appDeleteDebugLog($appId, 'redis_delete_failed', ['message' => $e->getMessage()]);
-        appDeleteResultAdd($deleteItems, 'Redis 缓存', "APPID {$appId}", 'warning', 'Redis 缓存删除失败，后续请求会因数据库已删除而失效：' . $e->getMessage());
-    }
-
-    try {
         appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '后台正在物理删除数据库配置和应用主表...', 92);
         $physicalStart = microtime(true);
         $physicalStep = 0;
@@ -1527,6 +1550,114 @@ function appDeleteRunCleanup(PDO $pdo, int $appId, int $userId, string $role, st
         throw $e;
     }
 
+    // 物理删除会最后清掉 tombstone，因此必须再做一次终态失效，
+    // 收敛“旧请求在第一次清理后回写缓存”的竞态窗口。
+    try {
+        $finalInvalidation = invalidateAppConfigCaches($appId);
+        appDeleteDebugLog($appId, 'config_cache_final_invalidate_done', $finalInvalidation);
+        $finalInvalidationOk = !empty($finalInvalidation['redis_ok']) && !empty($finalInvalidation['disk_ok']);
+        appDeleteResultAdd(
+            $deleteItems,
+            '配置缓存终态收敛',
+            "APPID {$appId}",
+            $finalInvalidationOk ? 'success' : 'warning',
+            $finalInvalidationOk
+                ? '物理删除后已再次清理 DB0/DB2 与磁盘缓存'
+                : '物理删除后部分缓存收敛异常',
+            [
+                'redis_deleted' => (int)($finalInvalidation['redis_deleted'] ?? 0),
+                'disk_deleted' => (int)($finalInvalidation['disk_deleted'] ?? 0),
+                'errors' => array_merge(
+                    $finalInvalidation['redis_errors'] ?? [],
+                    $finalInvalidation['disk_errors'] ?? []
+                ),
+            ]
+        );
+    } catch (\Throwable $e) {
+        appDeleteDebugLog($appId, 'config_cache_final_invalidate_failed', ['message' => $e->getMessage()]);
+        appDeleteResultAdd($deleteItems, '配置缓存终态收敛', "APPID {$appId}", 'warning', '终态缓存清理异常：' . $e->getMessage());
+    }
+
+    // 物理删除会解除其他应用对本应用的配置复用，同步修复依赖方的缓存和桶配置。
+    $reuseDependents = array_values(array_unique(array_filter(array_map(
+        'intval',
+        $physicalSummary['ids']['reuse_dependents'] ?? []
+    ))));
+    foreach ($reuseDependents as $index => $dependentId) {
+        appDeleteProgressUpdate(
+            $progressToken,
+            $userId,
+            $appId,
+            'running',
+            '后台正在修复复用依赖应用 ' . ($index + 1) . '/' . count($reuseDependents) . "：APPID {$dependentId}",
+            99,
+            ['dependent_app_id' => $dependentId, 'async_cleanup' => true]
+        );
+        try {
+            $dependentCache = invalidateAppConfigCaches($dependentId);
+            $dependentBucketDelete = deleteAppConfigObjects($pdo, $dependentId);
+            $dependentPush = pushConfigToBuckets($pdo, $dependentId);
+
+            $pushFailures = 0;
+            foreach (($dependentPush['results'] ?? []) as $pushRow) {
+                if ((int)($pushRow['code'] ?? 500) !== 200) {
+                    $pushFailures++;
+                }
+            }
+            $dependentOk = !empty($dependentCache['redis_ok'])
+                && !empty($dependentCache['disk_ok'])
+                && (int)($dependentBucketDelete['failed'] ?? 0) === 0
+                && in_array((int)($dependentPush['code'] ?? 500), [200, 304], true)
+                && $pushFailures === 0;
+
+            appDeleteDebugLog($appId, 'reuse_dependent_repair_done', [
+                'dependent_app_id' => $dependentId,
+                'cache' => $dependentCache,
+                'bucket_delete' => $dependentBucketDelete,
+                'push' => $dependentPush,
+            ]);
+            appDeleteResultAdd(
+                $deleteItems,
+                '复用依赖修复',
+                "APPID {$dependentId}",
+                $dependentOk ? 'success' : 'warning',
+                $dependentOk
+                    ? '已解除复用、清理旧缓存并重建桶配置'
+                    : '已解除复用，部分缓存或桶配置修复需重试',
+                [
+                    'bucket_delete_failed' => (int)($dependentBucketDelete['failed'] ?? 0),
+                    'push_failed' => $pushFailures,
+                    'push_code' => (int)($dependentPush['code'] ?? 500),
+                ]
+            );
+        } catch (\Throwable $e) {
+            appDeleteDebugLog($appId, 'reuse_dependent_repair_failed', [
+                'dependent_app_id' => $dependentId,
+                'message' => $e->getMessage(),
+            ]);
+            appDeleteResultAdd($deleteItems, '复用依赖修复', "APPID {$dependentId}", 'warning', '修复异常：' . $e->getMessage());
+        }
+    }
+
+    // 被删应用作为 redirect 目标时，物理清理已删除映射，立即失效源应用的 DB2 映射。
+    foreach (array_values(array_unique(array_filter(array_map(
+        'intval',
+        $physicalSummary['ids']['redirect_sources'] ?? []
+    )))) as $redirectSourceId) {
+        try {
+            $redirectInvalidation = invalidateAppConfigCaches($redirectSourceId);
+            appDeleteDebugLog($appId, 'redirect_source_cache_invalidate_done', [
+                'source_app_id' => $redirectSourceId,
+                'result' => $redirectInvalidation,
+            ]);
+        } catch (\Throwable $e) {
+            appDeleteDebugLog($appId, 'redirect_source_cache_invalidate_failed', [
+                'source_app_id' => $redirectSourceId,
+                'message' => $e->getMessage(),
+            ]);
+        }
+    }
+
     $resultSummary = appDeleteResultSummary($deleteItems);
     $finalMessage = appDeleteResultMessage('后台清理完成（数据库已物理删除）', $resultSummary);
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'completed', $finalMessage, 100, [
@@ -1556,6 +1687,10 @@ function deleteApp(PDO $pdo, array $input)
     ignore_user_abort(true);
     set_time_limit(120);
 
+    // ensure* 会执行 MySQL DDL 并可能触发隐式提交，因此必须在任何建表/查询前拦截外层事务。
+    if ($pdo->inTransaction()) {
+        throw new RuntimeException('删除应用需要独立事务边界');
+    }
     $user = Auth::check($pdo);
     $progressToken = appDeleteProgressToken($input);
     appDeleteProgressCleanOld();
@@ -1577,15 +1712,28 @@ function deleteApp(PDO $pdo, array $input)
     ]);
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在校验应用和删除权限...', 5);
 
+    ensureApkDeleteMarkerTable($pdo);
     $apkTable = 'cainiao_apk';
     if($user['role']!=='admin'){
         // 查询应用记录
-        $stmt = $pdo->prepare("SELECT * FROM `$apkTable` WHERE id = :id AND user_id = :user_id LIMIT 1");
+        $stmt = $pdo->prepare("
+            SELECT a.*
+            FROM `$apkTable` a
+            LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
+            WHERE a.id = :id AND a.user_id = :user_id AND d.apk_id IS NULL
+            LIMIT 1
+        ");
         appDeleteDebugLog($appId, 'select_app_start', ['scope' => 'owner']);
         $stmt->execute([':id' => $appId, ':user_id' => $userId]);
     }else{
         // 查询应用记录
-        $stmt = $pdo->prepare("SELECT * FROM `$apkTable` WHERE id = :id LIMIT 1");
+        $stmt = $pdo->prepare("
+            SELECT a.*
+            FROM `$apkTable` a
+            LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
+            WHERE a.id = :id AND d.apk_id IS NULL
+            LIMIT 1
+        ");
         appDeleteDebugLog($appId, 'select_app_start', ['scope' => 'admin']);
         $stmt->execute([':id' => $appId]);
     }
@@ -1611,14 +1759,37 @@ function deleteApp(PDO $pdo, array $input)
 
     // 用户能看到的删除结果以删除标记为准，避免硬删 cainiao_apk 被外键/锁等待卡住。
     appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '正在标记应用为已删除（跳过 cainiao_apk 硬删除）...', 20);
+    $startedDeleteTransaction = false;
     try {
         @set_time_limit(120);
+        ensureApkDeleteMarkerTable($pdo);
+        ensureAppConfigInvalidationJobTable($pdo);
+        $pdo->beginTransaction();
+        $startedDeleteTransaction = true;
+
+        // 锁定应用主行并在事务内再次复核 tombstone。并发的第二个删除请求
+        // 会等待第一个事务提交，随后看到删除标记并结束，不会重置正在执行的失效 job。
+        $deleteGuard = $pdo->prepare("
+            SELECT a.id
+            FROM cainiao_apk a
+            LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
+            WHERE a.id = :id AND d.apk_id IS NULL
+            FOR UPDATE
+        ");
+        $deleteGuard->execute([':id' => $appId]);
+        if (!$deleteGuard->fetchColumn()) {
+            throw new RuntimeException('应用已删除或删除任务已启动');
+        }
         $markStart = microtime(true);
         appDeleteDebugLog($appId, 'db_soft_delete_start', [
             'table' => 'cainiao_apk_deleted',
             'role' => $user['role'] ?? '',
         ]);
         $affectedRows = markApkDeleted($pdo, $appId, (int)$app['user_id'], $userId, 'deleteApp');
+        $persistentJob = enqueueAppConfigInvalidationJob($pdo, $appId);
+        if ($startedDeleteTransaction && $pdo->inTransaction()) {
+            $pdo->commit();
+        }
         appDeleteDebugLog($appId, 'db_soft_delete_done', [
             'duration_ms' => (int)round((microtime(true) - $markStart) * 1000),
             'affected_rows' => $affectedRows,
@@ -1626,7 +1797,14 @@ function deleteApp(PDO $pdo, array $input)
         appDeleteResultAdd($deleteItems, '后台列表', "APPID {$appId}", 'success', '已写入删除标记，应用会立即从列表和配置下发中隐藏', [
             'affected_rows' => $affectedRows,
         ]);
+        appDeleteResultAdd($deleteItems, '配置下线持久化队列', "APPID {$appId}", 'success', '已与删除标记在同一事务中写入 MySQL 重试队列', [
+            'dependent_ids' => $persistentJob['dependent_ids'] ?? [],
+            'redirect_source_ids' => $persistentJob['redirect_source_ids'] ?? [],
+        ]);
     } catch (\Throwable $e) {
+        if ($startedDeleteTransaction && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
         appDeleteDebugLog($appId, 'db_soft_delete_failed', [
             'message' => $e->getMessage(),
         ]);
@@ -1635,19 +1813,33 @@ function deleteApp(PDO $pdo, array $input)
         throw $e;
     }
 
-
+    // 先原子落盘完整清理任务，避免后续任何子进程启动异常导致重清理丢失。
+    appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '应用已从列表删除，正在加入后台清理队列...', 21, [
+        'app' => $appInfo,
+        'async_cleanup' => true,
+        'queued_cleanup' => true,
+    ]);
     $workerResult = appDeleteStartBackgroundCleanup($appId, $userId, (string)($user['role'] ?? ''), $progressToken);
+    if (empty($workerResult['queued'])) {
+        appDeleteDebugLog($appId, 'cleanup_queue_persist_failed', $workerResult);
+        appDeleteResultAdd($deleteItems, '后台清理队列', "APPID {$appId}", 'failed', $workerResult['message'] ?? '后台清理任务落盘失败');
+    }
+
+    // 同时走一条不受大清理全局锁影响的快速通道，立即下线缓存与桶对象。
+    $runtimeInvalidation = appDeleteStartRuntimeInvalidation($appId);
+    appDeleteResultAdd(
+        $deleteItems,
+        '配置运行面快速下线',
+        "APPID {$appId}",
+        !empty($runtimeInvalidation['started']) ? 'success' : 'warning',
+        $runtimeInvalidation['message'] ?? '配置即时下线任务启动失败',
+        ['pid' => $runtimeInvalidation['pid'] ?? '']
+    );
+
     if (!empty($workerResult['started'])) {
         appDeleteResultAdd($deleteItems, '后台清理队列', "APPID {$appId}", 'success', '后台清理任务已进入队列，文件、桶配置、Redis 和数据库物理删除会按队列继续执行', [
             'pid' => $workerResult['pid'] ?? '',
             'concurrency' => 1,
-        ]);
-        appDeleteProgressUpdate($progressToken, $userId, $appId, 'running', '应用已从列表删除，后台清理任务已进入队列...', 25, [
-            'app' => $appInfo,
-            'async_cleanup' => true,
-            'queued_cleanup' => true,
-            'result_summary' => appDeleteResultSummary($deleteItems),
-            'result_items' => $deleteItems,
         ]);
     } else {
         appDeleteResultAdd($deleteItems, '后台清理队列', "APPID {$appId}", 'failed', $workerResult['message'] ?? '后台清理队列启动失败');
@@ -3372,6 +3564,10 @@ function parseApkInfo($apktool, $apkPath, $outputDir)
 //编辑应用信息
 function updateAppInfo(PDO $pdo, array $input)
 {
+    // config_mode=1 后面需要独立事务锁定复用目标；在 ensure* DDL 之前保护外层事务。
+    if (isset($input['config_mode']) && (int)$input['config_mode'] === 1 && $pdo->inTransaction()) {
+        throw new RuntimeException('复用配置修改需要独立事务边界');
+    }
     $user = Auth::check($pdo);
     $userId = (int)$user['id'];
     $apkTable = 'cainiao_apk';
@@ -3417,6 +3613,7 @@ function updateAppInfo(PDO $pdo, array $input)
     
     $fields = [];
     $params = [':id' => $appId, ':user_id' => $userId];
+    $reuseTargetIdForLock = null;
 
     // 可选字段
     if (isset($input['name'])) {
@@ -3467,6 +3664,7 @@ function updateAppInfo(PDO $pdo, array $input)
             }
 
             $reuseApkId = (int)$input['reuse_apk_id'];
+            $reuseTargetIdForLock = $reuseApkId;
 
             if ($reuseApkId === $appId) {
                 throw new Exception('不能复用自身的配置');
@@ -3547,9 +3745,48 @@ function updateAppInfo(PDO $pdo, array $input)
         throw new Exception('没有任何可修改的字段');
     }
 
-    $sql = "UPDATE `$apkTable` SET " . implode(', ', $fields) . " WHERE id = :id AND user_id = :user_id";
-    $update = $pdo->prepare($sql);
-    $update->execute($params);
+    $startedReuseTransaction = false;
+    try {
+        if ($reuseTargetIdForLock !== null) {
+            if ($pdo->inTransaction()) {
+                throw new RuntimeException('复用配置修改需要独立事务边界');
+            }
+            $pdo->beginTransaction();
+            $startedReuseTransaction = true;
+
+            // 与 deleteApp() 对目标主行的 FOR UPDATE 配对：删除先发生时本查询等待后
+            // 看到 tombstone 并结束；复用先发生时删除会在提交后收集到该依赖。
+            $reuseGuard = $pdo->prepare("
+                SELECT a.id
+                FROM `$apkTable` a
+                LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
+                WHERE a.id = :id
+                  AND a.user_id = :user_id
+                  AND a.is_reusable = 1
+                  AND d.apk_id IS NULL
+                FOR SHARE
+            ");
+            $reuseGuard->execute([':id' => $reuseTargetIdForLock, ':user_id' => $userId]);
+            if (!$reuseGuard->fetchColumn()) {
+                throw new RuntimeException('要复用的应用已下线或不再允许复用');
+            }
+        }
+
+        $sql = "UPDATE `$apkTable` SET " . implode(', ', $fields)
+            . " WHERE id = :id AND user_id = :user_id"
+            . " AND NOT EXISTS (SELECT 1 FROM cainiao_apk_deleted d WHERE d.apk_id = `$apkTable`.id)";
+        $update = $pdo->prepare($sql);
+        $update->execute($params);
+
+        if ($startedReuseTransaction && $pdo->inTransaction()) {
+            $pdo->commit();
+        }
+    } catch (\Throwable $e) {
+        if ($startedReuseTransaction && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
 
     // 配置变更后的缓存清理和存储桶推送走统一异步流程，避免保存按钮被外部桶网络阻塞。
     try {
