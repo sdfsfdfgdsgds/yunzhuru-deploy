@@ -13,9 +13,15 @@ if (!$pdo || !($pdo instanceof PDO)) {
     exit;
 }
 
-// ===== 获取 GET 参数 data =====
-$dataType = trim($_GET['data'] ?? '');
-$display = $_GET['display'];
+// 只接收标量查询参数，防止数组型输入污染接口响应。
+function getKamiQueryString(string $key): string {
+    $value = $_GET[$key] ?? '';
+    return is_scalar($value) ? trim((string)$value) : '';
+}
+
+// ===== 获取 GET 参数 =====
+$dataType = getKamiQueryString('data');
+$display = getKamiQueryString('display');
 
 function sendResponse($statusCode, $msg, $data = null) {
     global $dataType;
@@ -44,7 +50,7 @@ $version_shell = trim($_POST['version_shell'] ?? '');
 
 
 
-$appid_get = $_GET['appid'];
+$appid_get = getKamiQueryString('appid');
 if(!empty($appid_get)){
     $appId = $appid_get;//由接口get参数指定appid,实现卡密互通
 }else{
@@ -61,7 +67,7 @@ if(!empty($appid_get)){
 $stmt = $pdo->prepare("SELECT config_mode,reuse_apk_id,reuse_options FROM cainiao_apk WHERE id = :id LIMIT 1");
 $stmt->execute([':id' => $appId]);
 $reuse = $stmt->fetch(PDO::FETCH_ASSOC);
-if ($reuse['config_mode'] && !empty($reuse['reuse_options'])) {
+if ($reuse && !empty($reuse['config_mode']) && !empty($reuse['reuse_options'])) {
     $reuse_options = json_decode($reuse['reuse_options'], true);
     
     // 确保解码成功且是数组

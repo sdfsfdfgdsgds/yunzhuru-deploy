@@ -73,7 +73,7 @@ function servePrecompressedStatic(string $path): bool
 // 诊断端点：确认 router.php 在运行
 if ($path === '/router-status') {
     header('Content-Type: application/json');
-    echo json_encode(['router' => true, 'version' => 'v27', 'time' => date('Y-m-d H:i:s')]);
+    echo json_encode(['router' => true, 'version' => 'v28', 'time' => date('Y-m-d H:i:s')]);
     return true;
 }
 
@@ -120,6 +120,16 @@ if (strpos($path, '/uploads/') === 0) {
 
 // API 路由
 if (strpos($path, '/api/') === 0) {
+    return false;
+}
+
+// 公开卡密业务入口：仅放行明确文件，避免暴露整个目录。
+$allowedCardEndpoints = [
+    '/kami', '/kami/', '/kami/index.php',
+    '/jiebang', '/jiebang/', '/jiebang/index.php', '/jiebang/api.php',
+    '/shiyong', '/shiyong/', '/shiyong/index.php'
+];
+if (in_array($path, $allowedCardEndpoints, true)) {
     return false;
 }
 
