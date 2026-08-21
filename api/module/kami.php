@@ -58,13 +58,7 @@ function add(PDO $pdo, array $input) {
         VALUES (:app_id, :kami, NOW(), :name, :time, '', '', '', 1, :remark, :bind)");
 
     for ($i = 0; $i < $count; $i++) {
-        $uuidStr = '';
-        for ($j = 0; $j < 8; $j++) {
-            // uuid() 为我项目中的函数，这里直接调用
-            $uuidStr .= uuid();
-        }
-        $raw      = $uuidStr . substr((string)(microtime(true) * 1000), 0, 13);
-        $kamiCode = md5($raw);
+        // 使用 PHP 内置密码安全随机数生成卡密，避免依赖可选的 bcmath 扩展。
         $kamiCode = generateSecureKami();
         $stmt->execute([
             ':app_id' => $input['app_id'],
@@ -525,37 +519,15 @@ function edit(PDO $pdo, array $input) {
 }
 
 function generateSecureKami(): string {
-    $charset = 'ABCDEFGHJKLMNOPQRSTUVWXYZ023456789'; // 34 个字符，排除 I 和 1
-    $base = strlen($charset);
-
-    // 使用时间戳 + 随机数，hash 后转 10 进制字符串
-    $seed = microtime(true) . mt_rand(100000, 999999);
-    $hash = hash('sha256', $seed); // 64位 hex
-    $decimalStr = base_convert($hash, 16, 10); // 转十进制字符串（兼容）
-
-    // 自定义 base34 编码（兼容大数字）
+    // 保留原有 10 位卡密格式，并排除容易混淆的 I 和 1。
+    $charset = 'ABCDEFGHJKLMNOPQRSTUVWXYZ023456789';
+    $length = 10;
+    $maxIndex = strlen($charset) - 1;
     $result = '';
-    $num = $decimalStr;
 
-    while (strlen($result) < 10 && $num !== '0') {
-        $remainder = bcmod($num, $base);
-        $result .= $charset[$remainder];
-        $num = bcdiv($num, $base);
-    }
-
-    // 长度不足补随机字符
-    while (strlen($result) < 10) {
-        $result .= $charset[random_int(0, $base - 1)];
+    for ($i = 0; $i < $length; $i++) {
+        $result .= $charset[random_int(0, $maxIndex)];
     }
 
     return $result;
-}
-
-
-// 生成UUID方法
-function uuid() {
-    $data = random_bytes(16);
-    $data[6] = chr((ord($data[6]) & 0x0f) | 0x40); // version 4
-    $data[8] = chr((ord($data[8]) & 0x3f) | 0x80); // variant
-    return vsprintf('%s%s%s%s%s%s%s%s', str_split(bin2hex($data), 4));
 }

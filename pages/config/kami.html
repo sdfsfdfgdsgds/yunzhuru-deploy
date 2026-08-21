@@ -111,8 +111,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitForm">生成</el-button>
+        <el-button :disabled="submitting" @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="submitting" :disabled="submitting" @click="submitForm">生成</el-button>
       </template>
     </el-dialog>
 
@@ -284,6 +284,7 @@ async function submitImport() {
     const selectedAppId = ref(null);
     const list = ref([]);
     const dialogVisible = ref(false);
+    const submitting = ref(false);
     const editDialogVisible = ref(false);
     const form = reactive({
       count: 1,
@@ -420,24 +421,49 @@ async function submitImport() {
     }
 
     async function submitForm() {
+      // 请求未结束时忽略重复点击，避免同一批卡密被多次生成。
+      if (submitting.value) return;
+
       if (!form.count || !form.time) {
         ElementPlus.ElMessage.error('生成数量和有效时长不能为空');
         return;
       }
+
       const payload = {
         ...form,
         app_id: selectedAppId.value
       };
-      const res = await fetch('/api/index.php?module=kami&method=add', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const json = await res.json();
-      if (json.code === 200) {
+
+      submitting.value = true;
+      try {
+        const res = await fetch('/api/index.php?module=kami&method=add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        let json;
+        try {
+          json = await res.json();
+        } catch (error) {
+          console.error('生成卡密响应解析失败', error);
+          ElementPlus.ElMessage.error(`服务器响应格式异常（HTTP ${res.status}）`);
+          return;
+        }
+
+        if (!res.ok || !json || typeof json !== 'object' || json.code !== 200) {
+          ElementPlus.ElMessage.error(json?.message || `生成失败（HTTP ${res.status}）`);
+          return;
+        }
+
         ElementPlus.ElMessage.success(json.message || '生成成功');
         dialogVisible.value = false;
         loadList();
+      } catch (error) {
+        console.error('生成卡密请求失败', error);
+        ElementPlus.ElMessage.error('生成失败，网络连接或服务器异常，请稍后重试');
+      } finally {
+        submitting.value = false;
       }
     }
 
@@ -548,6 +574,7 @@ async function submitImport() {
       selectedAppId,
       list,
       dialogVisible,
+      submitting,
       editDialogVisible,
       form,
       editForm,
