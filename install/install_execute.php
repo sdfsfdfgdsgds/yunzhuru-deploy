@@ -1,4 +1,6 @@
 <?php
+require_once __DIR__ . '/../api/utils/BucketFeature.php';
+
 // 表前缀配置
 $tablePrefix = 'cainiao_';
 
@@ -145,6 +147,14 @@ function installDatabase(PDO $pdo)
             'lanzou_uid'     => "VARCHAR(20) DEFAULT NULL COMMENT '蓝奏uid'",
             'vip_expire_time'=> "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'VIP到期时间'",
             'pretty'         => "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否显示靓UID标'",
+            // 用户级个人桶用于注入成品 APK 上传，与管理员配置分发桶保持独立。
+            's3_endpoint'    => "VARCHAR(512) DEFAULT NULL COMMENT '个人S3 Endpoint'",
+            's3_access_key'  => "VARCHAR(512) DEFAULT NULL COMMENT '个人S3 Access Key'",
+            's3_secret_key'  => "VARCHAR(1024) DEFAULT NULL COMMENT '个人S3 Secret Key'",
+            's3_bucket'      => "VARCHAR(255) DEFAULT NULL COMMENT '个人S3 Bucket'",
+            's3_region'      => "VARCHAR(64) DEFAULT NULL COMMENT '个人S3 Region'",
+            's3_upload_path' => "VARCHAR(512) DEFAULT NULL COMMENT '个人S3上传路径'",
+            's3_public_url'  => "VARCHAR(512) DEFAULT NULL COMMENT '个人S3公开地址'",
         ];
         addFieldsIfNotExist($pdo, $userTable, $userFields);
         $indexCheck = $pdo->prepare("SHOW INDEX FROM `$userTable` WHERE Key_name = 'uniq_account'");
@@ -481,6 +491,8 @@ function installDatabase(PDO $pdo)
             'size'           => "INT DEFAULT NULL COMMENT '注入后的文件大小'",
             'injected_apk'   => "VARCHAR(255) DEFAULT NULL COMMENT '注入后APK路径'",
             'permissions'    => "TEXT DEFAULT NULL COMMENT '添加的额外权限'",
+            'bucket_ids'     => "TEXT DEFAULT NULL COMMENT '本次制品选择的配置桶ID JSON'",
+            'source_url'     => "VARCHAR(2048) DEFAULT NULL COMMENT '远程APK来源地址'",
             'encry'          => "VARCHAR(255) DEFAULT '无' COMMENT '应用加固情况'",
             'debugimg'       => "VARCHAR(1024) DEFAULT NULL COMMENT '云检测截图'"
         ];
@@ -1751,6 +1763,7 @@ function installDatabase(PDO $pdo)
             '系统设置' => [
                 '_icon' => 'Tools',
                 '系统信息' => 'admin/system',
+                '存储桶管理' => 'admin/bucket',
                 '安卓客户端' => 'admin/android'
             ],
         ];
@@ -1763,6 +1776,9 @@ function installDatabase(PDO $pdo)
         
         // 插入 admin 菜单
         insertMenuRecursive($pdo, $menuTable, $adminMenus, $adminRoleId);
+
+        // 配置分发桶与命中统计表属于鲜装必备结构，不再仅依赖线上手工 SQL。
+        ensureBucketFeatureSchema($pdo);
                 
         
         $settingTable = $tablePrefix . 'system_setting';

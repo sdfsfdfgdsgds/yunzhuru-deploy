@@ -1,311 +1,1424 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>存储桶管理</title>
   <link rel="stylesheet" href="/element/css/index.css">
   <script src="/element/js/vue.global.js"></script>
   <script src="/element/js/index.full.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: #f5f7fa;
+      color: #1f2937;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+    }
+    [v-cloak] { display: none; }
+    .page { padding: 20px; }
+    .card {
+      overflow: hidden;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+    }
+    .page-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 20px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .page-title { margin: 0; font-size: 22px; line-height: 1.35; }
+    .page-subtitle {
+      margin: 6px 0 0;
+      color: #6b7280;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .page-actions, .drawer-actions, .operation-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .page-actions, .operation-row { flex-wrap: nowrap; }
+    .page-actions .el-button, .drawer-actions .el-button, .operation-row .el-button {
+      margin-left: 0;
+    }
+    .notices {
+      display: grid;
+      gap: 10px;
+      padding: 16px 20px 0;
+    }
+    .table-shell { padding: 16px 20px 20px; }
+    .name { font-weight: 600; line-height: 1.45; }
+    .secondary {
+      margin-top: 4px;
+      color: #6b7280;
+      font-size: 12px;
+      line-height: 1.55;
+      word-break: break-all;
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    .ellipsis {
+      display: inline-block;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: bottom;
+      white-space: nowrap;
+    }
+    .switches {
+      display: grid;
+      justify-items: center;
+      gap: 5px;
+      color: #6b7280;
+      font-size: 12px;
+    }
+    .stats, .push-result { font-size: 12px; line-height: 1.7; }
+    .stats strong { font-size: 13px; }
+    .success { color: #15803d; }
+    .danger { color: #dc2626; }
+    .muted { color: #6b7280; }
+    .operation-row { width: max-content; min-width: 292px; }
+    .credential-input .el-input-group__append {
+      min-width: 66px;
+      padding: 0 8px;
+    }
+    .credential-toggle { width: 100%; padding: 0; font-size: 12px; }
+    .form-hint {
+      margin-top: 5px;
+      color: #6b7280;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .credential-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      width: 100%;
+      margin-top: 4px;
+    }
+    .credential-actions .form-hint { margin-top: 0; }
+    .dialog-switches {
+      display: flex;
+      align-items: center;
+      gap: 22px;
+      min-height: 32px;
+    }
+    .dialog-switch {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+    .bucket-dialog { max-width: calc(100vw - 24px); }
+
+    .bucket-files-drawer {
+      width: 60% !important;
+      min-width: 720px;
+    }
+    .drawer-body { padding: 0 4px 24px 0; }
+    .drawer-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding-right: 4px;
+    }
+    .drawer-title { margin: 0; font-size: 18px; }
+    .drawer-subtitle {
+      margin-top: 5px;
+      color: #6b7280;
+      font-size: 12px;
+      word-break: break-all;
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(104px, 1fr));
+      gap: 10px;
+      margin: 16px 0;
+    }
+    .summary-card {
+      min-width: 0;
+      padding: 13px 14px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      background: #fafafa;
+    }
+    .summary-label { color: #6b7280; font-size: 12px; }
+    .summary-value {
+      margin-top: 5px;
+      overflow: hidden;
+      font-size: 20px;
+      font-weight: 700;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .public-check {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+      padding: 11px 13px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .public-check.ok { border-color: #bbf7d0; background: #f0fdf4; }
+    .public-check.failed { border-color: #fecaca; background: #fef2f2; }
+    .public-check.unchecked { border-color: #d1d5db; background: #f9fafb; }
+    .file-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 14px 0 10px;
+    }
+    .file-toolbar .el-input { width: min(430px, 100%); }
+    .section-title { margin: 18px 0 10px; font-size: 15px; font-weight: 600; }
+    .file-key { max-width: 100%; overflow-wrap: anywhere; }
+    .pagination-row {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 12px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+    .bucket-table .el-table__inner-wrapper::before,
+    .file-table .el-table__inner-wrapper::before { height: 0; }
+
+    @media (max-width: 1100px) {
+      .summary-grid { grid-template-columns: repeat(3, minmax(100px, 1fr)); }
+      .bucket-files-drawer { width: 76% !important; min-width: 0; }
+    }
+    @media (max-width: 760px) {
+      .page { padding: 10px; }
+      .page-header, .drawer-header, .file-toolbar {
+        align-items: stretch;
+        flex-direction: column;
+      }
+      .page-header, .notices, .table-shell {
+        padding-left: 12px;
+        padding-right: 12px;
+      }
+      .page-actions, .drawer-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .page-actions .el-button, .drawer-actions .el-button { width: 100%; }
+      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .bucket-files-drawer { width: 96% !important; }
+      .dialog-switches {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .file-toolbar .el-input { width: 100%; }
+    }
+  </style>
 </head>
 <body>
-<div id="app" style="padding: 20px">
+<div id="app" class="page" v-cloak>
+  <section class="card">
+    <header class="page-header">
+      <div>
+        <h1 class="page-title">存储桶管理</h1>
+        <p class="page-subtitle">统一管理 Backblaze B2、AWS S3 和 Cloudflare R2 的配置分发、文件盘点与壳端命中回执。</p>
+      </div>
+      <div class="page-actions">
+        <el-button type="primary" @click="showAddDialog">添加存储桶</el-button>
+        <el-button :loading="loading" @click="loadBuckets">刷新</el-button>
+        <el-button type="warning" :loading="pushing" @click="pushAll(false)">同步全部配置</el-button>
+      </div>
+    </header>
 
-  <div style="margin-bottom: 20px; display: flex; gap: 10px; align-items: center;">
-    <el-button type="primary" @click="showAddDialog">添加存储桶</el-button>
-    <el-button @click="loadBuckets">刷新</el-button>
-    <el-button type="warning" @click="pushAll" :loading="pushing">同步全部配置到桶</el-button>
-  </div>
+    <div class="notices">
+      <el-alert
+        title="存储桶用于分发 config/{APPID}.enc；新注入的 APK 只写入开启“注入到 APK”的桶。"
+        type="info" show-icon :closable="false">
+      </el-alert>
+      <el-alert
+        title="统计口径：数据来自新版壳成功读取、解密并应用配置后的回执，不等于对象存储原始 HTTP 请求总量。浏览器直访、旧版壳和未完成回执的请求不在其中。"
+        type="warning" show-icon :closable="false">
+      </el-alert>
+    </div>
 
-  <el-alert
-    title="存储桶用于分发壳端配置，支持 S3、Cloudflare R2、Backblaze B2。壳端优先从桶获取配置，全部失败后回退到 API。"
-    type="info" show-icon :closable="false" style="margin-bottom: 20px">
-  </el-alert>
+    <div class="table-shell">
+      <el-table
+        v-loading="loading"
+        class="bucket-table"
+        :data="buckets"
+        border
+        row-key="id"
+        empty-text="暂无存储桶，请先添加">
+        <el-table-column label="ID" prop="id" width="66" fixed="left"></el-table-column>
 
-  <el-table :data="buckets" border style="width: 100%">
-    <el-table-column label="ID" prop="id" width="60"></el-table-column>
-    <el-table-column label="名称" prop="name" width="150"></el-table-column>
-    <el-table-column label="类型" prop="provider" width="80">
-      <template #default="scope">
-        <el-tag :type="providerTag(scope.row.provider)">{{ scope.row.provider.toUpperCase() }}</el-tag>
-      </template>
-    </el-table-column>
-    <el-table-column label="Endpoint" prop="endpoint" show-overflow-tooltip></el-table-column>
-    <el-table-column label="Bucket" prop="bucket" width="120"></el-table-column>
-    <el-table-column label="Region" prop="region" width="100"></el-table-column>
-    <el-table-column label="公开域名" prop="domain" show-overflow-tooltip></el-table-column>
-    <el-table-column label="状态" width="80" align="center">
-      <template #default="scope">
-        <el-switch
-          v-model="scope.row.enabled"
-          :active-value="1" :inactive-value="0"
-          @change="toggleEnabled(scope.row)">
-        </el-switch>
-      </template>
-    </el-table-column>
-    <el-table-column label="注入" width="80" align="center">
-      <template #default="scope">
-        <el-switch
-          v-model="scope.row.inject"
-          :active-value="1" :inactive-value="0"
-          @change="toggleInject(scope.row)">
-        </el-switch>
-      </template>
-    </el-table-column>
-    <el-table-column label="操作" width="220" align="center">
-      <template #default="scope">
-        <el-button size="small" @click="showEditDialog(scope.row)">编辑</el-button>
-        <el-button size="small" type="success" @click="testBucket(scope.row.id)" :loading="scope.row._testing">测试</el-button>
-        <el-button size="small" type="danger" @click="removeBucket(scope.row)">删除</el-button>
-      </template>
-    </el-table-column>
-  </el-table>
+        <el-table-column label="桶资料" min-width="196" fixed="left">
+          <template #default="scope">
+            <div class="name">{{ scope.row.name || '-' }}</div>
+            <div class="secondary">
+              <el-tag size="small" :type="providerTag(scope.row.provider)">
+                {{ scope.row.provider_label || providerLabel(scope.row.provider) }}
+              </el-tag>
+              <span class="mono" style="margin-left: 6px">{{ scope.row.bucket || '-' }}</span>
+            </div>
+            <div v-if="scope.row.note" class="secondary">备注：{{ scope.row.note }}</div>
+          </template>
+        </el-table-column>
 
-  <!-- 添加/编辑对话框 -->
-  <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑存储桶' : '添加存储桶'" width="560px">
-    <el-form :model="form" label-width="110px">
-      <el-form-item label="名称" required>
-        <el-input v-model="form.name" placeholder="如 Cloudflare R2"></el-input>
-      </el-form-item>
-      <el-form-item label="类型">
-        <el-select v-model="form.provider" style="width: 100%">
-          <el-option label="S3" value="s3"></el-option>
-          <el-option label="Cloudflare R2" value="r2"></el-option>
-          <el-option label="Backblaze B2" value="b2"></el-option>
-        </el-select>
-      </el-form-item>
-      <el-form-item label="Access Key" required>
-        <el-input v-model="form.access_key"></el-input>
-      </el-form-item>
-      <el-form-item label="Secret Key" required>
-        <el-input v-model="form.secret_key" type="password" show-password></el-input>
-      </el-form-item>
+        <el-table-column label="Endpoint / Region" min-width="250">
+          <template #default="scope">
+            <div class="mono ellipsis" :title="scope.row.endpoint">{{ scope.row.endpoint || '-' }}</div>
+            <div class="secondary">Region：{{ scope.row.region || '-' }}</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="公开访问地址" min-width="240">
+          <template #default="scope">
+            <el-link
+              v-if="scope.row.domain"
+              class="ellipsis"
+              type="primary"
+              :href="scope.row.domain"
+              target="_blank"
+              rel="noopener noreferrer"
+              :title="scope.row.domain">
+              {{ scope.row.domain }}
+            </el-link>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="状态" width="116" align="center">
+          <template #default="scope">
+            <div class="switches">
+              <el-switch
+                v-model="scope.row.enabled"
+                :active-value="1" :inactive-value="0"
+                :loading="scope.row._updatingEnabled"
+                @change="toggleEnabled(scope.row)">
+              </el-switch>
+              <span>{{ scope.row.enabled ? '启用推送' : '停止推送' }}</span>
+              <el-switch
+                v-model="scope.row.inject"
+                :active-value="1" :inactive-value="0"
+                :loading="scope.row._updatingInject"
+                @change="toggleInject(scope.row)">
+              </el-switch>
+              <span>{{ scope.row.inject ? '注入到 APK' : '不注入 APK' }}</span>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="命中统计" min-width="205">
+          <template #default="scope">
+            <div class="stats">
+              <div><strong>今日 {{ formatNumber(scope.row.stats.today_hits) }}，累计 {{ formatNumber(scope.row.stats.total_hits) }}</strong></div>
+              <div class="muted">最近命中：{{ formatTime(scope.row.stats.last_seen_at) }}</div>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="最近推送" min-width="230">
+          <template #default="scope">
+            <div class="push-result">
+              <div>{{ formatTime(scope.row.last_push_at_display || scope.row.last_push_at) }}</div>
+              <el-tag
+                v-if="scope.row.last_push_result"
+                size="small"
+                effect="plain"
+                :type="pushResultTag(scope.row.last_push_result)"
+                :title="scope.row.last_push_result">
+                {{ shortText(scope.row.last_push_result, 42) }}
+              </el-tag>
+              <span v-else class="muted">尚无推送记录</span>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="326" align="center" fixed="right">
+          <template #default="scope">
+            <div class="operation-row">
+              <el-button size="small" type="success" :loading="scope.row._testing" @click="testBucket(scope.row)">测试</el-button>
+              <el-button size="small" type="primary" plain @click="openFiles(scope.row)">文件</el-button>
+              <el-button size="small" @click="showEditDialog(scope.row)">编辑</el-button>
+              <el-button size="small" type="danger" plain @click="removeBucket(scope.row)">删除</el-button>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+  </section>
+
+  <!-- 编辑详情不返回原始敏感值；四个眼睛分别在用户点击后按字段请求明文。 -->
+  <el-dialog
+    v-model="dialogVisible"
+    class="bucket-dialog"
+    :title="isEdit ? '编辑存储桶' : '添加存储桶'"
+    width="720px"
+    destroy-on-close
+    @closed="handleDialogClosed">
+    <el-form :model="form" label-position="top">
+      <el-row :gutter="16">
+        <el-col :xs="24" :sm="14">
+          <el-form-item label="名称" required>
+            <el-input v-model.trim="form.name" maxlength="100" show-word-limit placeholder="例如：生产 R2 配置桶"></el-input>
+          </el-form-item>
+        </el-col>
+        <el-col :xs="24" :sm="10">
+          <el-form-item label="类型" required>
+            <el-select v-model="form.provider" style="width: 100%" @change="handleProviderChange">
+              <el-option label="Backblaze B2" value="b2"></el-option>
+              <el-option label="AWS S3" value="s3"></el-option>
+              <el-option label="Cloudflare R2" value="r2"></el-option>
+            </el-select>
+          </el-form-item>
+        </el-col>
+      </el-row>
+
+      <el-alert :title="providerHelp" type="info" :closable="false" style="margin-bottom: 16px"></el-alert>
+
+      <el-row :gutter="16">
+        <el-col :xs="24" :sm="12">
+          <el-form-item label="平台登录帐号">
+            <el-input
+              v-model="form.login_account"
+              class="credential-input"
+              autocomplete="off"
+              :type="credentialVisible.login_account ? 'text' : 'password'"
+              :placeholder="credentialPlaceholder('login_account', '选填，用于运维登录')"
+              @input="markCredentialDirty('login_account')">
+              <template #append>
+                <el-button
+                  class="credential-toggle"
+                  :loading="credentialLoading.login_account"
+                  :aria-label="credentialVisible.login_account ? '隐藏平台登录帐号' : '查看平台登录帐号'"
+                  @click="toggleCredential('login_account')">
+                  {{ credentialVisible.login_account ? '隐藏' : '👁 查看' }}
+                </el-button>
+              </template>
+            </el-input>
+            <div v-if="isEdit" class="credential-actions">
+              <span class="form-hint">
+                {{ credentialCleared.login_account ? '保存后清除已存帐号。' : '纯查看不会随保存提交。' }}
+              </span>
+              <el-button
+                link
+                :type="credentialCleared.login_account ? 'primary' : 'danger'"
+                @click="toggleCredentialClear('login_account')">
+                {{ credentialCleared.login_account ? '撤销清除' : '清除已保存值' }}
+              </el-button>
+            </div>
+          </el-form-item>
+        </el-col>
+        <el-col :xs="24" :sm="12">
+          <el-form-item label="平台登录密码">
+            <el-input
+              v-model="form.login_password"
+              class="credential-input"
+              autocomplete="new-password"
+              :type="credentialVisible.login_password ? 'text' : 'password'"
+              :placeholder="credentialPlaceholder('login_password', '选填，用于运维登录')"
+              @input="markCredentialDirty('login_password')">
+              <template #append>
+                <el-button
+                  class="credential-toggle"
+                  :loading="credentialLoading.login_password"
+                  :aria-label="credentialVisible.login_password ? '隐藏平台登录密码' : '查看平台登录密码'"
+                  @click="toggleCredential('login_password')">
+                  {{ credentialVisible.login_password ? '隐藏' : '👁 查看' }}
+                </el-button>
+              </template>
+            </el-input>
+            <div v-if="isEdit" class="credential-actions">
+              <span class="form-hint">
+                {{ credentialCleared.login_password ? '保存后清除已存密码。' : '关闭弹窗后立即清空明文。' }}
+              </span>
+              <el-button
+                link
+                :type="credentialCleared.login_password ? 'primary' : 'danger'"
+                @click="toggleCredentialClear('login_password')">
+                {{ credentialCleared.login_password ? '撤销清除' : '清除已保存值' }}
+              </el-button>
+            </div>
+          </el-form-item>
+        </el-col>
+      </el-row>
+
+      <el-row :gutter="16">
+        <el-col :xs="24" :sm="12">
+          <el-form-item label="Access Key" required>
+            <el-input
+              v-model="form.access_key"
+              class="credential-input mono"
+              autocomplete="off"
+              :type="credentialVisible.access_key ? 'text' : 'password'"
+              :placeholder="credentialPlaceholder('access_key', '请填写 Access Key')"
+              @input="markCredentialDirty('access_key')">
+              <template #append>
+                <el-button
+                  class="credential-toggle"
+                  :loading="credentialLoading.access_key"
+                  :aria-label="credentialVisible.access_key ? '隐藏 Access Key' : '查看 Access Key'"
+                  @click="toggleCredential('access_key')">
+                  {{ credentialVisible.access_key ? '隐藏' : '👁 查看' }}
+                </el-button>
+              </template>
+            </el-input>
+            <div v-if="isEdit" class="form-hint">留空保持原值；输入新值后完成轮换。</div>
+          </el-form-item>
+        </el-col>
+        <el-col :xs="24" :sm="12">
+          <el-form-item label="Secret Key" required>
+            <el-input
+              v-model="form.secret_key"
+              class="credential-input mono"
+              autocomplete="new-password"
+              :type="credentialVisible.secret_key ? 'text' : 'password'"
+              :placeholder="credentialPlaceholder('secret_key', '请填写 Secret Key')"
+              @input="markCredentialDirty('secret_key')">
+              <template #append>
+                <el-button
+                  class="credential-toggle"
+                  :loading="credentialLoading.secret_key"
+                  :aria-label="credentialVisible.secret_key ? '隐藏 Secret Key' : '查看 Secret Key'"
+                  @click="toggleCredential('secret_key')">
+                  {{ credentialVisible.secret_key ? '隐藏' : '👁 查看' }}
+                </el-button>
+              </template>
+            </el-input>
+            <div v-if="isEdit" class="form-hint">明文只在当前弹窗内临时保留。</div>
+          </el-form-item>
+        </el-col>
+      </el-row>
+
       <el-form-item label="Endpoint" required>
-        <el-input v-model="form.endpoint" placeholder="https://xxx.r2.cloudflarestorage.com"></el-input>
+        <el-input v-model.trim="form.endpoint" class="mono" :placeholder="endpointPlaceholder"></el-input>
+        <div class="form-hint">仅填写 HTTPS 服务根地址，不附加 Bucket、对象路径、查询参数或 URL 片段。</div>
       </el-form-item>
-      <el-form-item label="Bucket" required>
-        <el-input v-model="form.bucket"></el-input>
+
+      <el-row :gutter="16">
+        <el-col :xs="24" :sm="15">
+          <el-form-item label="Bucket" required>
+            <el-input v-model.trim="form.bucket" class="mono" placeholder="Bucket 名称"></el-input>
+          </el-form-item>
+        </el-col>
+        <el-col :xs="24" :sm="9">
+          <el-form-item label="Region" required>
+            <el-input
+              v-model.trim="form.region"
+              class="mono"
+              :disabled="form.provider === 'r2'"
+              :placeholder="regionPlaceholder">
+            </el-input>
+          </el-form-item>
+        </el-col>
+      </el-row>
+
+      <el-form-item label="公开访问地址" required>
+        <el-input v-model.trim="form.domain" class="mono" placeholder="https://cdn.example.com"></el-input>
+        <div class="form-hint">壳端会在该地址后请求 config/{APPID}.enc，需确保对象可公开读取。</div>
       </el-form-item>
-      <el-form-item label="Region">
-        <el-input v-model="form.region" placeholder="auto（R2填auto，S3填实际区域）"></el-input>
+
+      <el-form-item label="备注">
+        <el-input
+          v-model="form.note"
+          type="textarea"
+          :rows="3"
+          maxlength="512"
+          show-word-limit
+          placeholder="例如：帐号归属、续费时间、用途或应急联系信息">
+        </el-input>
       </el-form-item>
-      <el-form-item label="公开域名" required>
-        <el-input v-model="form.domain" placeholder="https://cdn.example.com（壳端访问用）"></el-input>
-      </el-form-item>
-      <el-form-item label="启用推送">
-        <el-switch v-model="form.enabled" :active-value="1" :inactive-value="0"></el-switch>
-        <span style="margin-left: 8px; color: #909399; font-size: 12px">保存配置时推送到此桶</span>
-      </el-form-item>
-      <el-form-item label="注入到APK">
-        <el-switch v-model="form.inject" :active-value="1" :inactive-value="0"></el-switch>
-        <span style="margin-left: 8px; color: #909399; font-size: 12px">新注入的APK包含此桶域名</span>
+
+      <el-form-item label="分发开关">
+        <div class="dialog-switches">
+          <label class="dialog-switch">
+            <el-switch v-model="form.enabled" :active-value="1" :inactive-value="0"></el-switch>
+            <span>启用推送</span>
+          </label>
+          <label class="dialog-switch">
+            <el-switch v-model="form.inject" :active-value="1" :inactive-value="0"></el-switch>
+            <span>注入到新 APK</span>
+          </label>
+        </div>
       </el-form-item>
     </el-form>
+
     <template #footer>
-      <el-button @click="testForm" :loading="formTesting" type="success">测试连接</el-button>
+      <el-button :loading="formTesting" type="success" plain @click="testForm">
+        {{ isEdit ? '测试已保存配置' : '测试当前配置' }}
+      </el-button>
       <el-button @click="dialogVisible = false">取消</el-button>
-      <el-button type="primary" @click="submitForm" :loading="submitting">{{ isEdit ? '保存' : '添加' }}</el-button>
+      <el-button type="primary" :loading="submitting" @click="submitForm">{{ isEdit ? '保存' : '添加' }}</el-button>
     </template>
   </el-dialog>
 
+  <!-- 文件抽屉读取真实对象清单，并与当前成功注入应用的期望文件集合对账。 -->
+  <el-drawer
+    v-model="filesVisible"
+    class="bucket-files-drawer"
+    size="60%"
+    direction="rtl"
+    :with-header="false"
+    destroy-on-close
+    @closed="clearFilesState">
+    <div class="drawer-body" v-loading="filesLoading">
+      <div class="drawer-header">
+        <div>
+          <h2 class="drawer-title">{{ fileData.bucket.name || activeBucket.name || '存储桶' }} · 文件盘点</h2>
+          <div class="drawer-subtitle">
+            {{ fileData.bucket.provider_label || providerLabel(fileData.bucket.provider || activeBucket.provider) }}
+            <span v-if="fileData.bucket.bucket || activeBucket.bucket">｜{{ fileData.bucket.bucket || activeBucket.bucket }}</span>
+            <span v-if="fileData.bucket.region || activeBucket.region">｜{{ fileData.bucket.region || activeBucket.region }}</span>
+          </div>
+        </div>
+        <div class="drawer-actions">
+          <el-button :loading="filesLoading" @click="loadBucketFiles">刷新文件</el-button>
+          <el-button type="warning" :loading="pushing" @click="pushAll(true)">同步全部配置</el-button>
+          <el-button @click="filesVisible = false">关闭</el-button>
+        </div>
+      </div>
+
+      <template v-if="filesLoaded">
+        <div class="summary-grid">
+          <div class="summary-card">
+            <div class="summary-label">应有文件</div>
+            <div class="summary-value">{{ formatNumber(fileData.summary.expected_count) }}</div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-label">实际对象</div>
+            <div class="summary-value">{{ formatNumber(fileData.summary.actual_count) }}</div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-label">缺失文件</div>
+            <div class="summary-value" :class="Number(fileData.summary.missing_count) ? 'danger' : 'success'">
+              {{ formatNumber(fileData.summary.missing_count) }}
+            </div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-label">历史文件</div>
+            <div class="summary-value">{{ formatNumber(fileData.summary.history_count) }}</div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-label">对象总大小</div>
+            <div class="summary-value">{{ formatBytes(fileData.summary.total_size) }}</div>
+          </div>
+        </div>
+
+        <div class="public-check" :class="publicCheckClass(fileData.public_check)">
+          <el-tag :type="publicCheckTag(fileData.public_check)" effect="dark">
+            {{ publicCheckLabel(fileData.public_check) }}
+          </el-tag>
+          <span v-if="publicCheckPerformed(fileData.public_check) && fileData.public_check.http_code">
+            HTTP {{ fileData.public_check.http_code }}
+          </span>
+          <span>{{ fileData.public_check.message || '尚无可检查对象' }}</span>
+        </div>
+
+        <el-alert
+          v-if="fileData.summary.truncated"
+          :title="'对象清单已读取 ' + formatNumber(fileData.summary.pages) + ' 页并达到扫描上限，下方结果可能不完整。'"
+          type="warning" show-icon :closable="false">
+        </el-alert>
+
+        <el-alert
+          title="“在用”文件包含所有仍需维护的历史成功注入制品，不只代表最新一次注入。"
+          type="info"
+          show-icon
+          :closable="false"
+          style="margin-top: 12px">
+        </el-alert>
+
+        <div class="file-toolbar">
+          <el-input
+            v-model.trim="fileSearch"
+            clearable
+            placeholder="按对象名、应用名、APPID 或包名搜索">
+          </el-input>
+          <div class="muted">
+            命中 {{ formatNumber(filteredFiles.length) }} 个实际对象，{{ formatNumber(filteredMissingFiles.length) }} 个缺失文件
+          </div>
+        </div>
+
+        <div class="section-title">实际对象</div>
+        <el-table class="file-table" :data="paginatedFiles" border empty-text="没有匹配的对象">
+          <el-table-column label="对象名" min-width="248">
+            <template #default="scope">
+              <el-link
+                v-if="scope.row.public_url"
+                class="file-key mono"
+                type="primary"
+                :href="scope.row.public_url"
+                target="_blank"
+                rel="noopener noreferrer">
+                {{ scope.row.key || '-' }}
+              </el-link>
+              <span v-else class="file-key mono">{{ scope.row.key || '-' }}</span>
+              <div class="secondary">{{ formatBytes(scope.row.size) }}｜{{ formatTime(scope.row.last_modified) }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="归类" width="96" align="center">
+            <template #default="scope">
+              <el-tag size="small" :type="fileScopeTag(scope.row.file_scope)">
+                {{ fileScopeLabel(scope.row.file_scope) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="应用" min-width="190">
+            <template #default="scope">
+              <div>{{ scope.row.app_name || '-' }}</div>
+              <div v-if="scope.row.app_id" class="secondary mono">APPID：{{ scope.row.app_id }}</div>
+              <div v-if="scope.row.package_name" class="secondary mono">{{ scope.row.package_name }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="文件命中" min-width="196">
+            <template #default="scope">
+              <div>今日 {{ formatNumber(fileStats(scope.row).today_hits) }}，累计 {{ formatNumber(fileStats(scope.row).total_hits) }}</div>
+              <div class="secondary">最近：{{ formatTime(fileStats(scope.row).last_seen_at) }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="ETag / 存储类别" min-width="165">
+            <template #default="scope">
+              <div class="mono ellipsis" :title="scope.row.etag">{{ scope.row.etag || '-' }}</div>
+              <div class="secondary">{{ scope.row.storage_class || '-' }}</div>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div v-if="filteredFiles.length > filePageSize" class="pagination-row">
+          <el-pagination
+            v-model:current-page="filePage"
+            :page-size="filePageSize"
+            :total="filteredFiles.length"
+            layout="total, prev, pager, next, jumper"
+            background>
+          </el-pagination>
+        </div>
+
+        <template v-if="filteredMissingFiles.length || Number(fileData.summary.missing_count)">
+          <div class="section-title danger">缺失文件</div>
+          <el-table class="file-table" :data="paginatedMissingFiles" border empty-text="搜索条件下没有匹配的缺失文件">
+            <el-table-column label="应有对象" min-width="250">
+              <template #default="scope">
+                <span class="file-key mono">{{ scope.row.key || '-' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="应用" min-width="220">
+              <template #default="scope">
+                <div>{{ scope.row.app_name || '-' }}</div>
+                <div class="secondary mono">APPID：{{ scope.row.app_id || '-' }}</div>
+                <div v-if="scope.row.package_name" class="secondary mono">{{ scope.row.package_name }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="历史命中" min-width="200">
+              <template #default="scope">
+                <div>今日 {{ formatNumber(fileStats(scope.row).today_hits) }}，累计 {{ formatNumber(fileStats(scope.row).total_hits) }}</div>
+                <div class="secondary">最近：{{ formatTime(fileStats(scope.row).last_seen_at) }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="92" align="center">
+              <template #default><el-tag size="small" type="danger">缺失</el-tag></template>
+            </el-table-column>
+          </el-table>
+          <div v-if="filteredMissingFiles.length > filePageSize" class="pagination-row">
+            <el-pagination
+              v-model:current-page="missingFilePage"
+              :page-size="filePageSize"
+              :total="filteredMissingFiles.length"
+              layout="total, prev, pager, next, jumper"
+              background>
+            </el-pagination>
+          </div>
+        </template>
+      </template>
+
+      <el-empty v-else-if="!filesLoading" description="尚未读取文件清单"></el-empty>
+    </div>
+  </el-drawer>
 </div>
 
 <script>
-const { createApp, ref, reactive, onMounted } = Vue;
+const { createApp, ref, reactive, computed, watch, onMounted } = Vue;
 
 createApp({
   setup() {
     const buckets = ref([]);
+    const loading = ref(false);
     const dialogVisible = ref(false);
     const isEdit = ref(false);
     const submitting = ref(false);
     const pushing = ref(false);
     const formTesting = ref(false);
+    const filesVisible = ref(false);
+    const filesLoading = ref(false);
+    const filesLoaded = ref(false);
+    const fileSearch = ref('');
+    const filePage = ref(1);
+    const missingFilePage = ref(1);
+    const filePageSize = 100;
+    const activeBucket = reactive({});
 
-    const emptyForm = { name: '', provider: 's3', access_key: '', secret_key: '', endpoint: '', bucket: '', region: 'auto', domain: '', enabled: 1, inject: 1 };
+    // 请求代次只在当前页面内递增，用于丢弃关闭、切换或刷新后的迟到响应。
+    let editRequestGeneration = 0;
+    let credentialContextGeneration = 0;
+    let fileRequestGeneration = 0;
+    const credentialRequestGeneration = {
+      login_account: 0,
+      login_password: 0,
+      access_key: 0,
+      secret_key: 0,
+    };
+
+    // 表单和四项敏感状态只服务于当前弹窗，关闭后统一销毁明文。
+    const emptyForm = Object.freeze({
+      name: '', provider: 's3', login_account: '', login_password: '', note: '',
+      access_key: '', secret_key: '', endpoint: '', bucket: '', region: '',
+      domain: '', enabled: 1, inject: 1,
+    });
     const form = reactive({ ...emptyForm });
+    const credentialVisible = reactive({
+      login_account: false, login_password: false, access_key: false, secret_key: false,
+    });
+    const credentialLoading = reactive({
+      login_account: false, login_password: false, access_key: false, secret_key: false,
+    });
+    const credentialLoaded = reactive({
+      login_account: false, login_password: false, access_key: false, secret_key: false,
+    });
+    const credentialDirty = reactive({
+      login_account: false, login_password: false, access_key: false, secret_key: false,
+    });
+    const credentialCleared = reactive({
+      login_account: false, login_password: false,
+    });
+    const credentialDisplay = reactive({
+      login_account: '', login_password: '', access_key: '', secret_key: '',
+    });
 
-    function providerTag(p) {
-      return { r2: 'warning', b2: 'success', s3: '' }[p] || '';
+    // 文件接口字段使用稳定默认值，避免空桶和部分响应导致模板访问空对象。
+    function emptyFileData() {
+      return {
+        bucket: {},
+        summary: {
+          expected_count: 0, actual_count: 0, missing_count: 0, history_count: 0,
+          other_count: 0, total_size: 0, truncated: 0, pages: 0,
+        },
+        public_check: { checked: 0, ok: 0, http_code: 0, message: '' },
+        files: [],
+        missing_files: [],
+      };
+    }
+    const fileData = reactive(emptyFileData());
+
+    const providerHelp = computed(function () {
+      return {
+        b2: 'B2 Endpoint 应类似 https://s3.us-west-004.backblazeb2.com，Region 可由 Endpoint 推导。',
+        s3: 'S3 Endpoint 应类似 https://s3.ap-east-1.amazonaws.com；us-east-1 也可使用 https://s3.amazonaws.com。',
+        r2: 'R2 Endpoint 应类似 https://ACCOUNT_ID.r2.cloudflarestorage.com，Region 固定为 auto。',
+      }[form.provider] || '请填写对象存储服务的官方 S3 兼容 Endpoint。';
+    });
+    const endpointPlaceholder = computed(function () {
+      return {
+        b2: 'https://s3.us-west-004.backblazeb2.com',
+        s3: 'https://s3.ap-east-1.amazonaws.com',
+        r2: 'https://ACCOUNT_ID.r2.cloudflarestorage.com',
+      }[form.provider] || 'https://...';
+    });
+    const regionPlaceholder = computed(function () {
+      return form.provider === 'r2' ? 'auto' : '可由 Endpoint 推导';
+    });
+
+    // 实际文件与缺失文件复用同一套对象名、应用名、APPID、包名搜索合同。
+    function matchesFileSearch(item) {
+      const keyword = fileSearch.value.trim().toLowerCase();
+      if (!keyword) return true;
+      return [item.key, item.app_name, item.app_id, item.package_name].some(function (value) {
+        return String(value == null ? '' : value).toLowerCase().includes(keyword);
+      });
+    }
+    const filteredFiles = computed(function () {
+      return (Array.isArray(fileData.files) ? fileData.files : []).filter(matchesFileSearch);
+    });
+    const filteredMissingFiles = computed(function () {
+      return (Array.isArray(fileData.missing_files) ? fileData.missing_files : []).filter(matchesFileSearch);
+    });
+    const paginatedFiles = computed(function () {
+      const offset = (filePage.value - 1) * filePageSize;
+      return filteredFiles.value.slice(offset, offset + filePageSize);
+    });
+    const paginatedMissingFiles = computed(function () {
+      const offset = (missingFilePage.value - 1) * filePageSize;
+      return filteredMissingFiles.value.slice(offset, offset + filePageSize);
+    });
+    watch(fileSearch, function () {
+      filePage.value = 1;
+      missingFilePage.value = 1;
+    });
+
+    function providerTag(provider) {
+      return { r2: 'warning', b2: 'success', s3: 'primary' }[String(provider || '').toLowerCase()] || 'info';
+    }
+    function providerLabel(provider) {
+      return { r2: 'Cloudflare R2', b2: 'Backblaze B2', s3: 'AWS S3' }[String(provider || '').toLowerCase()] || '未知类型';
+    }
+    function pushResultTag(result) {
+      const text = String(result || '').toLowerCase();
+      if (text.includes('失败') || text.includes('error') || text.includes('fail')) return 'danger';
+      if (text.includes('成功') || text.includes(' ok')) return 'success';
+      return 'warning';
+    }
+    function fileScopeLabel(scope) {
+      return { app: '在用', history: '历史', other: '其他' }[scope] || '其他';
+    }
+    function fileScopeTag(scope) {
+      return { app: 'success', history: 'warning', other: 'info' }[scope] || 'info';
+    }
+    function fileStats(row) {
+      return row && row.stats ? row.stats : { today_hits: 0, total_hits: 0, last_seen_at: '' };
+    }
+    function publicCheckPerformed(check) {
+      if (!check || typeof check !== 'object') return false;
+      if (Object.prototype.hasOwnProperty.call(check, 'checked')) return Number(check.checked) === 1;
+      return Number(check.http_code || 0) > 0;
+    }
+    function publicCheckClass(check) {
+      if (!publicCheckPerformed(check)) return 'unchecked';
+      return Number(check.ok) === 1 ? 'ok' : 'failed';
+    }
+    function publicCheckTag(check) {
+      if (!publicCheckPerformed(check)) return 'info';
+      return Number(check.ok) === 1 ? 'success' : 'danger';
+    }
+    function publicCheckLabel(check) {
+      if (!publicCheckPerformed(check)) return '尚未检查';
+      return Number(check.ok) === 1 ? '公开读取正常' : '公开读取异常';
+    }
+    function formatNumber(value) {
+      const number = Number(value || 0);
+      return Number.isFinite(number) ? number.toLocaleString('zh-CN') : '0';
+    }
+    function formatBytes(value) {
+      let bytes = Number(value || 0);
+      if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let index = 0;
+      while (bytes >= 1024 && index < units.length - 1) {
+        bytes /= 1024;
+        index += 1;
+      }
+      const digits = index === 0 || bytes >= 100 ? 0 : (bytes >= 10 ? 1 : 2);
+      return bytes.toFixed(digits) + ' ' + units[index];
+    }
+    function formatTime(value) {
+      if (!value) return '暂无';
+      const text = String(value).trim();
+      // S3 LastModified 以 Z 结尾，转换为页面统一的北京时间；后端已格式化的时间保持原值。
+      if (/Z$/i.test(text)) {
+        const parsed = new Date(text);
+        if (!Number.isNaN(parsed.getTime())) {
+          return new Date(parsed.getTime() + 8 * 60 * 60 * 1000)
+            .toISOString()
+            .slice(0, 19)
+            .replace('T', ' ');
+        }
+      }
+      return text.replace('T', ' ').replace(/\.\d+$/, '');
+    }
+    function shortText(value, maxLength) {
+      const text = String(value || '');
+      return text.length > maxLength ? text.slice(0, maxLength) + '…' : text;
+    }
+    function getErrorMessage(error, fallback) {
+      return error && error.message ? error.message : fallback;
     }
 
+    /**
+     * 调用原生 PHP API。所有方法的外层固定为 {code,message,data}，
+     * 非 JSON 响应统一转为可读错误，避免页面出现未处理异常。
+     */
     async function api(method, data) {
-      const res = await fetch(`/api/index.php?module=bucket&method=${method}`, {
+      const response = await fetch('/api/index.php?module=bucket&method=' + encodeURIComponent(method), {
         method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data || {})
+        body: JSON.stringify(data || {}),
       });
-      return await res.json();
+      const text = await response.text();
+      let json;
+      try {
+        json = JSON.parse(text);
+      } catch (error) {
+        throw new Error(response.ok ? '接口返回了无效 JSON' : 'HTTP ' + response.status);
+      }
+      if (!response.ok && Number(json.code) === 200) {
+        throw new Error(json.message || 'HTTP ' + response.status);
+      }
+      return json;
+    }
+
+    function normalizeBucket(row) {
+      const stats = row && row.stats ? row.stats : {};
+      return {
+        ...(row || {}),
+        enabled: Number(row && row.enabled) === 1 ? 1 : 0,
+        inject: Number(row && row.inject) === 1 ? 1 : 0,
+        stats: {
+          total_hits: Number(stats.total_hits || 0),
+          ok_hits: Number(stats.ok_hits || 0),
+          fail_hits: Number(stats.fail_hits || 0),
+          today_hits: Number(stats.today_hits || 0),
+          today_ok_hits: Number(stats.today_ok_hits || 0),
+          today_fail_hits: Number(stats.today_fail_hits || 0),
+          last_seen_at: stats.last_seen_at || '',
+        },
+        _testing: false,
+        _updatingEnabled: false,
+        _updatingInject: false,
+      };
     }
 
     async function loadBuckets() {
-      const json = await api('getBuckets');
-      if (json.code === 200) {
-        buckets.value = (json.data || []).map(b => ({ ...b, enabled: parseInt(b.enabled), inject: parseInt(b.inject), _testing: false }));
-      } else {
-        ElementPlus.ElMessage.error(json.message || '加载失败');
+      loading.value = true;
+      try {
+        const json = await api('getBuckets');
+        if (Number(json.code) !== 200) throw new Error(json.message || '加载存储桶失败');
+        buckets.value = (Array.isArray(json.data) ? json.data : []).map(normalizeBucket);
+      } catch (error) {
+        ElementPlus.ElMessage.error(getErrorMessage(error, '加载存储桶失败'));
+      } finally {
+        loading.value = false;
       }
     }
 
+    const credentialFields = ['login_account', 'login_password', 'access_key', 'secret_key'];
+
+    // 使所有正在进行的凭据请求过期，迟到响应只能被丢弃。
+    function invalidateCredentialRequests() {
+      credentialContextGeneration += 1;
+      credentialFields.forEach(function (field) {
+        credentialRequestGeneration[field] += 1;
+      });
+    }
+
+    // 无论取消、保存还是右上角关闭，都会清空四项敏感明文和查看状态。
+    function clearCredentialState() {
+      invalidateCredentialRequests();
+      credentialFields.forEach(function (field) {
+        form[field] = '';
+        credentialVisible[field] = false;
+        credentialLoading[field] = false;
+        credentialLoaded[field] = false;
+        credentialDirty[field] = false;
+        credentialDisplay[field] = '';
+      });
+      credentialCleared.login_account = false;
+      credentialCleared.login_password = false;
+    }
+    function resetForm() {
+      editRequestGeneration += 1;
+      Object.keys(form).forEach(function (key) { delete form[key]; });
+      Object.assign(form, { ...emptyForm });
+      clearCredentialState();
+    }
+    function handleDialogClosed() {
+      editRequestGeneration += 1;
+      isEdit.value = false;
+      clearCredentialState();
+    }
     function showAddDialog() {
       isEdit.value = false;
-      Object.assign(form, { ...emptyForm });
+      resetForm();
       dialogVisible.value = true;
     }
-
     async function showEditDialog(row) {
       isEdit.value = true;
-      const json = await api('getBucket', { id: row.id });
-      if (json.code !== 200) {
-        ElementPlus.ElMessage.error(json.message || '加载存储桶详情失败');
-        return;
+      resetForm();
+      const requestGeneration = editRequestGeneration;
+      const requestedBucketId = Number(row.id);
+      try {
+        const json = await api('getBucket', { id: requestedBucketId });
+        if (requestGeneration !== editRequestGeneration || !isEdit.value) return;
+        if (Number(json.code) !== 200) throw new Error(json.message || '加载存储桶详情失败');
+        const detail = json.data || {};
+        if (Number(detail.id || requestedBucketId) !== requestedBucketId) return;
+        Object.assign(form, {
+          id: requestedBucketId,
+          name: detail.name || '',
+          provider: detail.provider || 's3',
+          note: detail.note || '',
+          endpoint: detail.endpoint || '',
+          bucket: detail.bucket || '',
+          region: detail.region || '',
+          domain: detail.domain || '',
+          enabled: Number(detail.enabled) === 1 ? 1 : 0,
+          inject: Number(detail.inject) === 1 ? 1 : 0,
+        });
+        credentialDisplay.login_account = detail.login_account_display || '';
+        credentialDisplay.login_password = detail.login_password_display || '';
+        credentialDisplay.access_key = detail.access_key_display || '';
+        credentialDisplay.secret_key = detail.secret_key_display || '';
+        dialogVisible.value = true;
+      } catch (error) {
+        if (requestGeneration !== editRequestGeneration || !isEdit.value) return;
+        clearCredentialState();
+        ElementPlus.ElMessage.error(getErrorMessage(error, '加载存储桶详情失败'));
       }
-      const detail = json.data || {};
-      Object.assign(form, {
-        id: detail.id,
-        name: detail.name,
-        provider: detail.provider,
-        access_key: detail.access_key,
-        secret_key: detail.secret_key || '',
-        endpoint: detail.endpoint,
-        bucket: detail.bucket,
-        region: detail.region,
-        domain: detail.domain,
-        enabled: parseInt(detail.enabled),
-        inject: parseInt(detail.inject),
-      });
-      dialogVisible.value = true;
+    }
+    function credentialPlaceholder(field, addPlaceholder) {
+      if (!isEdit.value) return addPlaceholder;
+      if (credentialCleared[field]) return '已标记清除，保存后生效';
+      return credentialDisplay[field]
+        ? '已保存：' + credentialDisplay[field] + '；留空保持原值'
+        : '未设置；留空保持原值';
     }
 
+    // 只有用户在输入框中实际编辑才标记 dirty，程序回填查看值不标记。
+    function markCredentialDirty(field) {
+      if (!Object.prototype.hasOwnProperty.call(credentialDirty, field)) return;
+      credentialDirty[field] = true;
+      if (Object.prototype.hasOwnProperty.call(credentialCleared, field)) {
+        credentialCleared[field] = false;
+      }
+    }
+
+    // 平台帐号和密码使用显式 clear 字段，与“留空保持原值”区分。
+    function toggleCredentialClear(field) {
+      if (!['login_account', 'login_password'].includes(field)) return;
+      credentialRequestGeneration[field] += 1;
+      credentialLoading[field] = false;
+      credentialVisible[field] = false;
+      form[field] = '';
+      credentialDirty[field] = false;
+      credentialCleared[field] = !credentialCleared[field];
+      credentialLoaded[field] = credentialCleared[field];
+    }
+
+    /**
+     * 编辑时首次点眼睛才请求一个敏感字段；后续仅在本弹窗切换可见性，
+     * 不会因为查看某一项而批量拉取其他三项。
+     */
+    async function toggleCredential(field) {
+      if (!Object.prototype.hasOwnProperty.call(credentialVisible, field)) return;
+      if (credentialCleared[field]) {
+        credentialVisible[field] = false;
+        return;
+      }
+      if (!isEdit.value || credentialLoaded[field]) {
+        credentialVisible[field] = !credentialVisible[field];
+        return;
+      }
+      const requestedBucketId = Number(form.id);
+      const contextGeneration = credentialContextGeneration;
+      const requestGeneration = ++credentialRequestGeneration[field];
+      credentialLoading[field] = true;
+      try {
+        const json = await api('revealBucketCredential', { id: requestedBucketId, field: field });
+        if (
+          contextGeneration !== credentialContextGeneration ||
+          requestGeneration !== credentialRequestGeneration[field] ||
+          !dialogVisible.value ||
+          !isEdit.value ||
+          Number(form.id) !== requestedBucketId
+        ) return;
+        if (Number(json.code) !== 200) throw new Error(json.message || '查看凭据失败');
+        form[field] = String((json.data && json.data.value) || '');
+        credentialLoaded[field] = true;
+        credentialDirty[field] = false;
+        credentialVisible[field] = true;
+      } catch (error) {
+        if (
+          contextGeneration !== credentialContextGeneration ||
+          requestGeneration !== credentialRequestGeneration[field]
+        ) return;
+        ElementPlus.ElMessage.error(getErrorMessage(error, '查看凭据失败'));
+      } finally {
+        if (requestGeneration === credentialRequestGeneration[field]) {
+          credentialLoading[field] = false;
+        }
+      }
+    }
+
+    function handleProviderChange(provider) {
+      if (provider === 'r2') form.region = 'auto';
+      else if (form.region === 'auto') form.region = '';
+    }
+    function validateForm() {
+      if (!String(form.name || '').trim()) return '请填写名称';
+      if (!['b2', 's3', 'r2'].includes(form.provider)) return '请选择存储桶类型';
+      if (!String(form.endpoint || '').trim()) return '请填写 Endpoint';
+      if (!String(form.bucket || '').trim()) return '请填写 Bucket';
+      if (!String(form.domain || '').trim()) return '请填写公开访问地址';
+      if (!isEdit.value && !String(form.access_key || '').trim()) return '请填写 Access Key';
+      if (!isEdit.value && !String(form.secret_key || '').trim()) return '请填写 Secret Key';
+      return '';
+    }
+
+    // 编辑时只提交 dirty 凭据；纯查看不提交，帐号和密码的清除使用独立字段。
+    function formPayload() {
+      const data = { ...form };
+      if (isEdit.value) {
+        credentialFields.forEach(function (field) {
+          if (!credentialDirty[field] || !String(data[field] || '').trim()) delete data[field];
+        });
+        if (credentialCleared.login_account) data.clear_login_account = 1;
+        if (credentialCleared.login_password) data.clear_login_password = 1;
+      }
+      return data;
+    }
     async function submitForm() {
+      const warning = validateForm();
+      if (warning) {
+        ElementPlus.ElMessage.warning(warning);
+        return;
+      }
       submitting.value = true;
       try {
-        const method = isEdit.value ? 'updateBucket' : 'addBucket';
-        const data = { ...form };
-        // 编辑时如果密钥为空则不传
-        if (isEdit.value && !data.secret_key) delete data.secret_key;
-        const json = await api(method, data);
-        if (json.code === 200) {
-          ElementPlus.ElMessage.success(json.message || '操作成功');
-          dialogVisible.value = false;
-          loadBuckets();
+        const json = await api(isEdit.value ? 'updateBucket' : 'addBucket', formPayload());
+        if (Number(json.code) !== 200) throw new Error(json.message || '保存失败');
+        const result = json.data || {};
+        const message = result.message || json.message || '保存成功';
+        if (Object.prototype.hasOwnProperty.call(result, 'sync_scheduled') && Number(result.sync_scheduled) !== 1) {
+          ElementPlus.ElMessage.warning(message);
         } else {
-          ElementPlus.ElMessage.error(json.message || '操作失败');
+          ElementPlus.ElMessage.success(message);
         }
+        dialogVisible.value = false;
+        await loadBuckets();
+      } catch (error) {
+        ElementPlus.ElMessage.error(getErrorMessage(error, '保存失败'));
       } finally {
         submitting.value = false;
       }
     }
 
-    async function testBucket(id) {
-      const row = buckets.value.find(b => b.id === id);
-      if (row) row._testing = true;
-      try {
-        const json = await api('testBucket', { id });
-        if (json.code === 200) {
-          ElementPlus.ElMessage.success('连接成功');
-        } else {
-          ElementPlus.ElMessage.error(json.message || '连接失败');
-        }
-      } finally {
-        if (row) row._testing = false;
-      }
-    }
-
-    async function testForm() {
-      if (!form.access_key || !form.endpoint || !form.bucket) {
-        ElementPlus.ElMessage.warning('请先填写 Access Key、Endpoint、Bucket');
+    function showBucketTestResult(json) {
+      const result = json.data || {};
+      const message = result.message || json.message || '连接成功';
+      if (Object.prototype.hasOwnProperty.call(result, 'cleanup_ok') && Number(result.cleanup_ok) !== 1) {
+        const objectKey = result.object_key ? '；待手工清理对象：' + result.object_key : '';
+        ElementPlus.ElMessage.warning({ message: message + objectKey, duration: 8000, showClose: true });
         return;
       }
-      // 编辑模式下如果没填新密钥，需要提示
-      if (isEdit.value && !form.secret_key) {
-        ElementPlus.ElMessage.warning('测试连接需要填写 Secret Key');
+      ElementPlus.ElMessage.success(message);
+    }
+
+    async function testBucket(row) {
+      row._testing = true;
+      try {
+        const json = await api('testBucket', { id: row.id });
+        if (Number(json.code) !== 200) throw new Error(json.message || '连接测试失败');
+        showBucketTestResult(json);
+        await loadBuckets();
+      } catch (error) {
+        ElementPlus.ElMessage.error(getErrorMessage(error, '连接测试失败'));
+      } finally {
+        row._testing = false;
+      }
+    }
+    async function testForm() {
+      const warning = validateForm();
+      if (!isEdit.value && warning) {
+        ElementPlus.ElMessage.warning(warning);
         return;
       }
       formTesting.value = true;
       try {
-        const json = await api('testBucket', {
-          access_key: form.access_key,
-          secret_key: form.secret_key,
-          endpoint: form.endpoint,
-          bucket: form.bucket,
-          region: form.region || 'auto',
-        });
-        if (json.code === 200) {
-          ElementPlus.ElMessage.success('连接成功');
-        } else {
-          ElementPlus.ElMessage.error(json.message || '连接失败');
-        }
+        // 编辑模式使用已保存密文测试，避免为测试隐式读取未点击的敏感字段。
+        const payload = isEdit.value ? { id: form.id } : formPayload();
+        const json = await api('testBucket', payload);
+        if (Number(json.code) !== 200) throw new Error(json.message || '连接测试失败');
+        showBucketTestResult(json);
+      } catch (error) {
+        ElementPlus.ElMessage.error(getErrorMessage(error, '连接测试失败'));
       } finally {
         formTesting.value = false;
       }
     }
 
-    async function toggleEnabled(row) {
-      const json = await api('updateBucket', { id: row.id, enabled: row.enabled });
-      if (json.code === 200) {
-        ElementPlus.ElMessage.success(row.enabled ? '已启用推送' : '已禁用推送');
-      } else {
-        ElementPlus.ElMessage.error(json.message || '操作失败');
-        row.enabled = row.enabled ? 0 : 1;
+    async function updateSwitch(row, field, loadingField, successText, failureText) {
+      row[loadingField] = true;
+      try {
+        const payload = { id: row.id, field: field, value: row[field] };
+        const json = await api('setBucketStatus', payload);
+        if (Number(json.code) !== 200) throw new Error(json.message || failureText);
+        const result = json.data || {};
+        const message = result.message || json.message || successText;
+        const syncStatus = result.sync_scheduled;
+        // inject 开关不触发存量同步，后端用 null 表示“不适用”，不应误报调度失败。
+        if (syncStatus !== null && syncStatus !== undefined && Number(syncStatus) !== 1) {
+          ElementPlus.ElMessage.warning(message);
+        } else {
+          ElementPlus.ElMessage.success(message);
+        }
+      } catch (error) {
+        row[field] = row[field] ? 0 : 1;
+        ElementPlus.ElMessage.error(getErrorMessage(error, failureText));
+      } finally {
+        row[loadingField] = false;
       }
     }
-
-    async function toggleInject(row) {
-      const json = await api('updateBucket', { id: row.id, inject: row.inject });
-      if (json.code === 200) {
-        ElementPlus.ElMessage.success(row.inject ? '已启用注入' : '已禁用注入');
-      } else {
-        ElementPlus.ElMessage.error(json.message || '操作失败');
-        row.inject = row.inject ? 0 : 1;
-      }
+    function toggleEnabled(row) {
+      return updateSwitch(
+        row, 'enabled', '_updatingEnabled',
+        row.enabled ? '已启用配置推送' : '已停止配置推送',
+        '更新推送状态失败'
+      );
+    }
+    function toggleInject(row) {
+      return updateSwitch(
+        row, 'inject', '_updatingInject',
+        row.inject ? '新 APK 将写入该桶' : '新 APK 将不再写入该桶',
+        '更新 APK 注入状态失败'
+      );
     }
 
     async function removeBucket(row) {
-      const confirm = await ElementPlus.ElMessageBox.confirm(
-        `确认删除存储桶「${row.name}」？删除后已注入的 APK 仍会尝试访问该桶（会失败后跳过）。`,
-        '警告', { type: 'warning' }
-      ).catch(() => null);
-      if (!confirm) return;
-
-      const json = await api('deleteBucket', { id: row.id });
-      if (json.code === 200) {
-        ElementPlus.ElMessage.success('删除成功');
-        loadBuckets();
-      } else {
-        ElementPlus.ElMessage.error(json.message || '删除失败');
+      const confirmed = await ElementPlus.ElMessageBox.confirm(
+        '确认删除存储桶「' + row.name + '」的管理记录？这会清理本系统聚合的桶统计，但不会删除云端 Bucket、已有对象和测试文件。已注入 APK 仍可能保留该公开地址。',
+        '删除存储桶管理记录',
+        {
+          type: 'warning',
+          confirmButtonText: '只删除管理记录',
+          cancelButtonText: '取消',
+          distinguishCancelAndClose: true,
+        }
+      ).catch(function () { return false; });
+      if (!confirmed) return;
+      try {
+        const json = await api('deleteBucket', { id: row.id });
+        if (Number(json.code) !== 200) throw new Error(json.message || '删除失败');
+        ElementPlus.ElMessage.success((json.data && json.data.message) || json.message || '管理记录已删除');
+        await loadBuckets();
+      } catch (error) {
+        ElementPlus.ElMessage.error(getErrorMessage(error, '删除失败'));
       }
     }
 
-    async function pushAll() {
-      const confirm = await ElementPlus.ElMessageBox.confirm(
-        '将所有应用的当前配置推送到全部启用的存储桶，可能需要一些时间。',
-        '同步全部配置', { type: 'info' }
-      ).catch(() => null);
-      if (!confirm) return;
-
+    /**
+     * 全量同步的业务结果位于 json.data：
+     * json.data.message 为摘要，json.data.data 为按 APPID 组织的结果。
+     */
+    async function pushAll(refreshFilesAfter) {
+      const confirmed = await ElementPlus.ElMessageBox.confirm(
+        '将所有成功注入应用的当前配置推送到对应存储桶，过程可能需要一段时间。',
+        '同步全部配置',
+        { type: 'info', confirmButtonText: '开始同步', cancelButtonText: '取消' }
+      ).catch(function () { return false; });
+      if (!confirmed) return;
       pushing.value = true;
       try {
         const json = await api('pushAllConfigs');
-        if (json.code === 200) {
-          const data = json.data || {};
-          const total = Object.keys(data).length;
-          ElementPlus.ElMessage.success(`同步完成，共处理 ${total} 个应用`);
+        if (Number(json.code) !== 200) throw new Error(json.message || '同步失败');
+        const result = json.data || {};
+        const appResults = result.data && typeof result.data === 'object' ? result.data : {};
+        const resultItems = Object.values(appResults);
+        const derivedSuccess = resultItems.filter(function (item) { return Number(item && item.code) === 200; }).length;
+        const derivedFail = resultItems.length - derivedSuccess;
+        const successCount = Number.isFinite(Number(result.success)) ? Number(result.success) : derivedSuccess;
+        const failCount = Number.isFinite(Number(result.fail)) ? Number(result.fail) : derivedFail;
+        const innerCode = Number(result.code == null ? (failCount > 0 ? 500 : 200) : result.code);
+        const message = result.message || json.message || (
+          '同步完成：成功 ' + successCount + '，失败 ' + failCount + '，共 ' + resultItems.length + ' 个应用'
+        );
+        if (failCount > 0 && successCount > 0) {
+          ElementPlus.ElMessage.warning({ message: message, duration: 8000, showClose: true });
+        } else if (failCount > 0 || innerCode !== 200) {
+          ElementPlus.ElMessage.error({ message: message, duration: 8000, showClose: true });
         } else {
-          ElementPlus.ElMessage.error(json.message || '同步失败');
+          ElementPlus.ElMessage.success(message);
         }
+        await loadBuckets();
+        if (refreshFilesAfter && filesVisible.value) await loadBucketFiles();
+      } catch (error) {
+        ElementPlus.ElMessage.error(getErrorMessage(error, '同步失败'));
       } finally {
         pushing.value = false;
+      }
+    }
+
+    function clearFilesState() {
+      fileRequestGeneration += 1;
+      Object.keys(activeBucket).forEach(function (key) { delete activeBucket[key]; });
+      Object.assign(fileData, emptyFileData());
+      fileSearch.value = '';
+      filePage.value = 1;
+      missingFilePage.value = 1;
+      filesLoaded.value = false;
+      filesLoading.value = false;
+    }
+    async function openFiles(row) {
+      clearFilesState();
+      Object.assign(activeBucket, row);
+      filesVisible.value = true;
+      await loadBucketFiles();
+    }
+    async function loadBucketFiles() {
+      if (!activeBucket.id) return;
+      const requestedBucketId = Number(activeBucket.id);
+      const requestGeneration = ++fileRequestGeneration;
+      filesLoading.value = true;
+      try {
+        const json = await api('getBucketFiles', { id: requestedBucketId });
+        if (
+          requestGeneration !== fileRequestGeneration ||
+          !filesVisible.value ||
+          Number(activeBucket.id) !== requestedBucketId
+        ) return;
+        if (Number(json.code) !== 200) throw new Error(json.message || '读取桶文件失败');
+        const data = json.data || {};
+        if (data.bucket && Number(data.bucket.id || requestedBucketId) !== requestedBucketId) return;
+        const defaults = emptyFileData();
+        Object.assign(fileData, defaults, {
+          bucket: data.bucket || {},
+          summary: { ...defaults.summary, ...(data.summary || {}) },
+          public_check: { ...defaults.public_check, ...(data.public_check || {}) },
+          files: Array.isArray(data.files) ? data.files : [],
+          missing_files: Array.isArray(data.missing_files) ? data.missing_files : [],
+        });
+        filePage.value = 1;
+        missingFilePage.value = 1;
+        filesLoaded.value = true;
+      } catch (error) {
+        if (requestGeneration !== fileRequestGeneration) return;
+        filesLoaded.value = false;
+        ElementPlus.ElMessage.error(getErrorMessage(error, '读取桶文件失败'));
+      } finally {
+        if (requestGeneration === fileRequestGeneration) {
+          filesLoading.value = false;
+        }
       }
     }
 
     onMounted(loadBuckets);
 
     return {
-      buckets, dialogVisible, isEdit, form, submitting, pushing, formTesting,
-      providerTag, loadBuckets, showAddDialog, showEditDialog, submitForm,
-      testBucket, testForm, toggleEnabled, toggleInject, removeBucket, pushAll
+      buckets, loading, dialogVisible, isEdit, submitting, pushing, formTesting,
+      filesVisible, filesLoading, filesLoaded, fileSearch, activeBucket, fileData,
+      filePage, missingFilePage, filePageSize,
+      form, credentialVisible, credentialLoading, credentialCleared,
+      providerHelp, endpointPlaceholder, regionPlaceholder,
+      filteredFiles, filteredMissingFiles, paginatedFiles, paginatedMissingFiles,
+      providerTag, providerLabel, pushResultTag, fileScopeLabel, fileScopeTag,
+      publicCheckPerformed, publicCheckClass, publicCheckTag, publicCheckLabel,
+      fileStats, formatNumber, formatBytes, formatTime, shortText,
+      loadBuckets, showAddDialog, showEditDialog, clearCredentialState, handleDialogClosed,
+      credentialPlaceholder, markCredentialDirty, toggleCredentialClear, toggleCredential,
+      handleProviderChange, submitForm,
+      testBucket, testForm, toggleEnabled, toggleInject, removeBucket, pushAll,
+      clearFilesState, openFiles, loadBucketFiles,
     };
-  }
+  },
 }).use(ElementPlus).mount('#app');
 </script>
 </body>

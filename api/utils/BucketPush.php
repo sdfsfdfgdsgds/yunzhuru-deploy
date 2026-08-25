@@ -7,6 +7,24 @@
 require_once __DIR__ . '/S3Client.php';
 require_once __DIR__ . '/Auth.php';
 require_once __DIR__ . '/DeletedApp.php';
+require_once __DIR__ . '/BucketFeature.php';
+
+if (!function_exists('recordBucketPushOutcome')) {
+    /** 保存单个桶最近一次真实 PUT 结果，供管理页直接识别失效凭据。 */
+    function recordBucketPushOutcome(PDO $pdo, int $bucketId, string $objectKey, int $code, string $message): void {
+        if ($bucketId <= 0) return;
+        try {
+            $summary = $objectKey . ': ' . ($code === 200 ? 'ok' : ('HTTP/SDK ' . $code . ' ' . $message));
+            $stmt = $pdo->prepare('UPDATE cainiao_s3_bucket SET last_push_at=UTC_TIMESTAMP(), last_push_result=:result WHERE id=:id');
+            $stmt->execute([
+                ':result' => mb_substr($summary, 0, 1900, 'UTF-8'),
+                ':id' => $bucketId,
+            ]);
+        } catch (Throwable $ignored) {
+            // 可观测字段写入失败不覆盖真实对象推送结果。
+        }
+    }
+}
 
 if (!function_exists('bucketPushAppAvailable')) {
     function bucketPushAppAvailable(PDO $pdo, int $appId): bool {
@@ -63,6 +81,7 @@ if (!function_exists('bucketPushReuseStateToken')) {
  * @return array 推送结果
  */
 function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3): array {
+    ensureBucketFeatureSchema($pdo);
     $stateRetry = max(0, min(3, $stateRetry));
     // 确保 ConfigHelper 中的函数可用（fetchCol/fetchMap 依赖 global $pdo）
     $GLOBALS['pdo'] = $pdo;
@@ -260,16 +279,26 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3):
             }
 
             $results[] = [
+                'bucket_id' => (int)$b['id'],
                 'bucket' => $b['name'],
                 'code' => $result['code'],
                 'message' => $result['message'],
             ];
+            recordBucketPushOutcome(
+                $pdo,
+                (int)$b['id'],
+                $objectKey,
+                (int)($result['code'] ?? 500),
+                (string)($result['message'] ?? '')
+            );
         } catch (\Throwable $e) {
             $results[] = [
+                'bucket_id' => (int)($b['id'] ?? 0),
                 'bucket' => $b['name'],
                 'code' => 500,
                 'message' => $e->getMessage(),
             ];
+            recordBucketPushOutcome($pdo, (int)($b['id'] ?? 0), $objectKey, 500, $e->getMessage());
         }
     }
 
@@ -313,7 +342,18 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3):
         ];
     }
 
-    return ['code' => 200, 'results' => $results];
+    $failed = array_filter($results, static function (array $item): bool {
+        return (int)($item['code'] ?? 500) !== 200;
+    });
+    return [
+        'code' => empty($failed) ? 200 : 500,
+        'message' => empty($failed)
+            ? "应用 {$appId} 配置已推送到全部目标桶"
+            : "应用 {$appId} 有 " . count($failed) . ' 个桶推送失败',
+        'partial_failure' => empty($failed) ? 0 : 1,
+        'failed_count' => count($failed),
+        'results' => $results,
+    ];
 }
 
 /**
@@ -421,8 +461,11 @@ function pushAllConfigsToBuckets(PDO $pdo): array {
     }
 
     return [
-        'code' => 200,
+        'code' => $fail === 0 ? 200 : 500,
         'message' => "同步完成：成功 {$success}，失败 {$fail}，共 " . count($appIds) . " 个应用",
+        'success' => $success,
+        'fail' => $fail,
+        'total' => count($appIds),
         'data' => $results,
     ];
 }

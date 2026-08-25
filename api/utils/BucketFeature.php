@@ -378,7 +378,8 @@ if (!function_exists('bucketMigrateLegacyProviderLabels')) {
      */
     function bucketMigrateLegacyProviderLabels(PDO $pdo): void {
         $rows = $pdo->query('SELECT id, provider, endpoint FROM cainiao_s3_bucket')->fetchAll(PDO::FETCH_ASSOC);
-        $update = $pdo->prepare('UPDATE cainiao_s3_bucket SET provider=:provider WHERE id=:id');
+        // Provider 归一是结构迁移，不应篡改管理员最后编辑时间。
+        $update = $pdo->prepare('UPDATE cainiao_s3_bucket SET provider=:provider, updated_at=updated_at WHERE id=:id');
         foreach ($rows as $row) {
             if (strtolower((string)($row['provider'] ?? '')) !== 's3') continue;
             $host = strtolower((string)(parse_url((string)($row['endpoint'] ?? ''), PHP_URL_HOST) ?: ''));

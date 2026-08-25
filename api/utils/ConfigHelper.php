@@ -7,6 +7,7 @@
 require_once __DIR__ . '/PopupImageAssetHelper.php';
 require_once __DIR__ . '/ClickParamAssetHelper.php';
 require_once __DIR__ . '/DeletedApp.php';
+require_once __DIR__ . '/BucketFeature.php';
 
 if (!function_exists('fetchCol')) {
     // 通用函数：返回单列结果
@@ -368,9 +369,8 @@ if (!function_exists('getResponseData')) {
             "newactivity" => fetchMap("SELECT activity, newactivity FROM cainiao_newactivity WHERE config_id = :id", [':id' => $configId]),
             "view" => fetchMap("SELECT activity,view_class,view_id,visibility,clickable,imageview,textview,clickAction,clickText FROM cainiao_view WHERE config_id = :id AND enabled = 1", [':id' => $configId]),
             "buckets" => fetchCol("SELECT domain FROM cainiao_s3_bucket WHERE enabled = 1 ORDER BY id ASC", []),
-            // 弹窗统计上报地址（由壳调用，不需要鉴权）
-            "stat_url" => (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http')
-                . '://' . ($_SERVER['HTTP_HOST'] ?? '') . '/api/index.php',
+            // 壳端弹窗与桶命中回执地址。CLI 推送时也必须生成有效绝对地址。
+            "stat_url" => bucketPublicApiUrl(),
         ];
 
         return $response;
