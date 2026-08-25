@@ -436,7 +436,7 @@ function pushConfigWithDependents(PDO $pdo, int $appId): array {
  * @param PDO $pdo
  * @return array
  */
-function pushAllConfigsToBuckets(PDO $pdo): array {
+function pushAllConfigsToBucketsUnlocked(PDO $pdo): array {
     ensureApkDeleteMarkerTable($pdo);
 
     // 只查有成功注入记录的应用（没注入过的无需推送配置）
@@ -468,4 +468,104 @@ function pushAllConfigsToBuckets(PDO $pdo): array {
         'total' => count($appIds),
         'data' => $results,
     ];
+}
+
+/**
+ * 全量桶同步使用 MySQL advisory lock 去重。
+ *
+ * 配置分发页连续保存多个节点时会连续触发异步刷新；后到任务
+ * 若发现已有全量任务，直接合并为“已在同步”，避免 126 个应用重复排队。
+ */
+function pushAllConfigsToBuckets(PDO $pdo, bool $force = true): array {
+    $driver = (string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+    if ($driver !== 'mysql') {
+        return pushAllConfigsToBucketsUnlocked($pdo);
+    }
+
+    $lockName = 'yunzhuru_cfg_push_all';
+    // 异步工作者允许等待前一轮；取锁后会检查 dirty 标记，
+    // 前一工作者已经吸收了最新变更时会立即返回，不再重复遍历所有应用。
+    $stmt = $pdo->prepare('SELECT GET_LOCK(:lock_name, 600)');
+    $stmt->execute([':lock_name' => $lockName]);
+    if ((int)$stmt->fetchColumn() !== 1) {
+        return [
+            'code' => 409,
+            'message' => '已有全量配置同步在运行，本次触发已合并',
+            'success' => 0,
+            'fail' => 0,
+            'total' => 0,
+            'data' => [],
+        ];
+    }
+
+    try {
+        $dirtyAvailable = true;
+        try {
+            $dirtyStmt = $pdo->prepare("SELECT key_value FROM cainiao_config_delivery_meta
+                WHERE key_name='distribution_dirty' LIMIT 1");
+            $dirtyStmt->execute();
+            $dirty = (string)$dirtyStmt->fetchColumn() === '1';
+        } catch (Throwable $ignored) {
+            $dirtyAvailable = false;
+            $dirty = true;
+        }
+
+        if (!$force && $dirtyAvailable && !$dirty) {
+            return [
+                'code' => 200,
+                'message' => '最新全局配置已由前一同步任务处理',
+                'success' => 0,
+                'fail' => 0,
+                'total' => 0,
+                'data' => [],
+                'coalesced' => 1,
+            ];
+        }
+
+        $passes = 0;
+        $result = [];
+        do {
+            if ($dirtyAvailable) {
+                $clearDirty = $pdo->prepare("INSERT INTO cainiao_config_delivery_meta (key_name,key_value)
+                    VALUES ('distribution_dirty','0')
+                    ON DUPLICATE KEY UPDATE key_value='0'");
+                $clearDirty->execute();
+            }
+
+            try {
+                $result = pushAllConfigsToBucketsUnlocked($pdo);
+            } catch (Throwable $e) {
+                if ($dirtyAvailable) {
+                    try {
+                        $restoreDirty = $pdo->prepare("INSERT INTO cainiao_config_delivery_meta (key_name,key_value)
+                            VALUES ('distribution_dirty','1')
+                            ON DUPLICATE KEY UPDATE key_value='1'");
+                        $restoreDirty->execute();
+                    } catch (Throwable $ignored) {}
+                }
+                throw $e;
+            }
+            $passes++;
+
+            if (!$dirtyAvailable) {
+                $dirty = false;
+                break;
+            }
+            $dirtyStmt->execute();
+            $dirty = (string)$dirtyStmt->fetchColumn() === '1';
+            // 单个工作者最多吸收三轮并发修改；仍有新变更时由已等锁工作者继续。
+        } while ($dirty && $passes < 3);
+
+        $result['coalesced_passes'] = $passes;
+        $result['pending_change'] = $dirty ? 1 : 0;
+        return $result;
+    } finally {
+        try {
+            $release = $pdo->prepare('SELECT RELEASE_LOCK(:lock_name)');
+            $release->execute([':lock_name' => $lockName]);
+            $release->fetchColumn();
+        } catch (Throwable $ignored) {
+            // 连接断开时 MySQL 也会自动释放 advisory lock。
+        }
+    }
 }

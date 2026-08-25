@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>配置分发</title>
+  <link rel="stylesheet" href="/element/css/index.css">
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #f5f7fa; color: #1f2937; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+    [v-cloak] { display: none; }
+    .page { padding: 20px; }
+    .header, .panel { border: 1px solid #e5e7eb; border-radius: 10px; background: #fff; }
+    .header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 20px; margin-bottom: 16px; }
+    .title { margin: 0; font-size: 23px; }
+    .subtitle, .muted { color: #6b7280; font-size: 12px; line-height: 1.6; }
+    .subtitle { margin-top: 6px; }
+    .header-actions, .tab-actions, .date-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .switch-box { display: flex; align-items: center; gap: 9px; padding: 8px 12px; border: 1px solid #dbeafe; border-radius: 8px; background: #eff6ff; white-space: nowrap; }
+    .app-input { width: 210px; }
+    .panel { overflow: hidden; }
+    .tabs { padding: 0 18px 18px; }
+    .tab-actions { justify-content: flex-end; margin: 6px 0 14px; }
+    .tab-note { margin: 8px 0 14px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; word-break: break-all; }
+    .bucket-frame { display: block; width: 100%; height: 1180px; min-height: 1100px; border: 0; background: #f5f7fa; }
+    .stats-grid { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 10px; margin: 14px 0; }
+    .stats-card { padding: 12px 14px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fafafa; }
+    .stats-value { margin-top: 4px; font-size: 20px; font-weight: 700; }
+    .section-title { margin: 20px 0 10px; font-size: 15px; }
+    .preview-toolbar { display: flex; justify-content: space-between; gap: 10px; margin: 8px 0 12px; }
+    .preview { min-height: 420px; max-height: 720px; margin: 0; padding: 16px; overflow: auto; border-radius: 8px; background: #111827; color: #e5e7eb; font-size: 12px; line-height: 1.65; white-space: pre-wrap; word-break: break-all; }
+    .form-help { margin-top: 5px; color: #6b7280; font-size: 12px; }
+    @media (max-width: 1100px) { .header { align-items: flex-start; flex-direction: column; } .stats-grid { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 720px) { .page { padding: 10px; } .header-actions, .date-actions { align-items: stretch; flex-direction: column; width: 100%; } .app-input { width: 100%; } .stats-grid { grid-template-columns: repeat(2, 1fr); } .bucket-frame { height: 1250px; } }
+  </style>
+</head>
+<body>
+<div id="app" v-cloak class="page">
+  <!-- 页面顶部统一控制配置刷新、APPID 过滤和原有抗污染总开关。 -->
+  <section class="header">
+    <div>
+      <h1 class="title">配置分发</h1>
+      <div class="subtitle">统一管理配置桶、API 域名、DoH、UDP DNS，并查看新壳的真实网络路径统计。</div>
+    </div>
+    <div class="header-actions">
+      <div class="switch-box">
+        <span>抗污染解析</span>
+        <el-switch v-model="dnsPoolEnabled" :loading="dnsPoolSaving" :disabled="dnsPoolSaving" @change="updateDnsPool"></el-switch>
+      </div>
+      <el-input v-model="appId" class="app-input" clearable placeholder="APPID，留空查看全部" @keyup.enter="refreshAll"></el-input>
+      <el-button :loading="loading" @click="refreshAll">刷新</el-button>
+      <el-button type="primary" :loading="previewLoading" @click="previewConfig">预览配置</el-button>
+    </div>
+  </section>
+
+  <section class="panel" v-loading="loading">
+    <el-tabs v-model="activeTab" class="tabs">
+      <!-- 复用已验收的存储桶管理页，避免复制桶凭据和文件盘点逻辑。 -->
+      <el-tab-pane label="配置桶" name="bucket">
+        <iframe :key="bucketFrameKey" class="bucket-frame" src="/pages/admin/bucket.html" title="存储桶管理"></iframe>
+      </el-tab-pane>
+
+      <el-tab-pane label="API 域名池" name="domain">
+        <div class="tab-actions"><el-button type="primary" @click="openEditor('domain')">新增 API 域名</el-button></div>
+        <el-table :data="domains" border size="small" empty-text="暂无 API 域名">
+          <el-table-column prop="name" label="名称" width="170"></el-table-column>
+          <el-table-column label="用途" width="95"><template #default="scope"><el-tag size="small">{{ scopeLabel(scope.row.usage_scope) }}</el-tag></template></el-table-column>
+          <el-table-column prop="base_url" label="Base URL" min-width="310" show-overflow-tooltip></el-table-column>
+          <el-table-column prop="priority" label="优先级" width="90" align="right"></el-table-column>
+          <el-table-column label="请求统计" width="230"><template #default="scope"><div>今日 {{ number(scope.row.today_count) }} / 累计 {{ number(scope.row.total_count) }}</div><div class="muted">成功 {{ number(scope.row.ok_count) }} · 失败 {{ number(scope.row.fail_count) }}</div></template></el-table-column>
+          <el-table-column label="最近命中" width="170"><template #default="scope">{{ timeText(scope.row.last_seen_at) }}</template></el-table-column>
+          <el-table-column label="状态" width="90"><template #default="scope"><el-switch v-model="scope.row.enabled" :active-value="1" :inactive-value="0" :loading="rowBusy('domain', scope.row.id)" @change="value => toggleEnabled('domain', scope.row, value)"></el-switch></template></el-table-column>
+          <el-table-column label="操作" width="140" fixed="right"><template #default="scope"><el-button link type="primary" @click="openEditor('domain', scope.row)">编辑</el-button><el-button link type="danger" :loading="rowBusy('delete-domain', scope.row.id)" @click="deleteRow('domain', scope.row)">删除</el-button></template></el-table-column>
+        </el-table>
+      </el-tab-pane>
+
+      <el-tab-pane label="DNS 路径统计" name="path">
+        <div class="date-actions">
+          <el-date-picker v-model="dateRange" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" unlink-panels></el-date-picker>
+          <el-button type="primary" @click="loadData(false)">查询路径</el-button>
+        </div>
+        <el-alert class="tab-note" :title="pathNotice" type="info" :closable="false" show-icon></el-alert>
+        <div class="stats-grid">
+          <div class="stats-card"><div class="muted">所选范围</div><div class="stats-value">{{ metric(pathTotals, 'range') }}</div></div>
+          <div class="stats-card"><div class="muted">今日请求</div><div class="stats-value">{{ metric(pathTotals, 'today') }}</div></div>
+          <div class="stats-card"><div class="muted">今日成功 / 失败</div><div class="stats-value">{{ metric(pathTotals, 'ok') }} / {{ metric(pathTotals, 'fail') }}</div></div>
+          <div class="stats-card"><div class="muted">异常候选</div><div class="stats-value">{{ metric(pathTotals, 'rejected') }}</div></div>
+          <div class="stats-card"><div class="muted">疑似救回</div><div class="stats-value">{{ metric(pathTotals, 'rescued') }}</div></div>
+          <div class="stats-card"><div class="muted">最近命中</div><div class="stats-value" style="font-size:13px">{{ timeText(pathTotals.last_seen_at) }}</div></div>
+        </div>
+        <h3 class="section-title">路径汇总</h3>
+        <el-table :data="pathSummary" border size="small" empty-text="等待新版壳上报路径数据">
+          <el-table-column label="实际路径" min-width="145"><template #default="scope"><el-tag :type="modeTag(scope.row.dns_mode)">{{ modeLabel(scope.row.dns_mode) }}</el-tag></template></el-table-column>
+          <el-table-column label="范围请求" width="110" align="right"><template #default="scope">{{ metric(scope.row, 'range') }}</template></el-table-column>
+          <el-table-column label="今日请求" width="110" align="right"><template #default="scope">{{ metric(scope.row, 'today') }}</template></el-table-column>
+          <el-table-column label="今日成功 / 失败" width="150" align="right"><template #default="scope">{{ metric(scope.row, 'ok') }} / {{ metric(scope.row, 'fail') }}</template></el-table-column>
+          <el-table-column label="近 7 日" width="110" align="right"><template #default="scope">{{ metric(scope.row, 'last7') }}</template></el-table-column>
+          <el-table-column label="异常 / 救回" width="135" align="right"><template #default="scope">{{ metric(scope.row, 'rejected') }} / {{ metric(scope.row, 'rescued') }}</template></el-table-column>
+          <el-table-column label="最近命中" width="170"><template #default="scope">{{ timeText(scope.row.last_seen_at) }}</template></el-table-column>
+        </el-table>
+        <h3 class="section-title">解析来源与目标入口</h3>
+        <el-table :data="pathRows" border size="small" empty-text="暂无路径明细" max-height="560">
+          <el-table-column label="路径" width="125"><template #default="scope"><el-tag size="small" :type="modeTag(scope.row.dns_mode)">{{ modeLabel(scope.row.dns_mode) }}</el-tag></template></el-table-column>
+          <el-table-column prop="dns_provider" label="解析来源" min-width="150"><template #default="scope">{{ scope.row.dns_provider || '-' }}</template></el-table-column>
+          <el-table-column label="目标入口" min-width="230"><template #default="scope"><div>{{ scope.row.domain_name || scope.row.target_host || '内置/STATIC' }}</div><div class="muted">{{ scope.row.target_host || '-' }}<span v-if="scope.row.domain_pool_id"> · 池 #{{ scope.row.domain_pool_id }}</span></div></template></el-table-column>
+          <el-table-column label="应用" min-width="150"><template #default="scope"><div>APPID {{ scope.row.app_id || '-' }}</div><div class="muted">{{ scope.row.package_name || '-' }}</div></template></el-table-column>
+          <el-table-column label="用途" width="85"><template #default="scope">{{ scopeLabel(scope.row.scope) }}</template></el-table-column>
+          <el-table-column label="范围 / 今日" width="125" align="right"><template #default="scope">{{ metric(scope.row, 'range') }} / {{ metric(scope.row, 'today') }}</template></el-table-column>
+          <el-table-column label="成功 / 失败" width="125" align="right"><template #default="scope">{{ metric(scope.row, 'ok') }} / {{ metric(scope.row, 'fail') }}</template></el-table-column>
+          <el-table-column label="异常 / 救回" width="125" align="right"><template #default="scope">{{ metric(scope.row, 'rejected') }} / {{ metric(scope.row, 'rescued') }}</template></el-table-column>
+          <el-table-column label="最近命中" width="170"><template #default="scope">{{ timeText(scope.row.last_seen_at) }}</template></el-table-column>
+        </el-table>
+      </el-tab-pane>
+
+      <el-tab-pane label="DoH 池" name="doh">
+        <div class="tab-actions">
+          <el-select v-model="dohPreset" clearable filterable placeholder="选择常用 DoH" style="width:260px"><el-option v-for="(item,index) in presets.doh" :key="item.url" :label="item.name" :value="index"></el-option></el-select>
+          <el-button @click="applyPreset('doh')">填入预设</el-button><el-button type="primary" @click="openEditor('doh')">新增 DoH</el-button><el-button :loading="importing.doh" @click="importCommon('doh')">导入常用</el-button>
+        </div>
+        <el-table :data="dohRows" border size="small" empty-text="暂无 DoH 节点">
+          <el-table-column prop="name" label="名称" width="190"></el-table-column><el-table-column prop="url" label="URL" min-width="350" show-overflow-tooltip></el-table-column><el-table-column prop="priority" label="优先级" width="90" align="right"></el-table-column>
+          <el-table-column label="状态" width="90"><template #default="scope"><el-switch v-model="scope.row.enabled" :active-value="1" :inactive-value="0" :loading="rowBusy('doh', scope.row.id)" @change="value => toggleEnabled('doh', scope.row, value)"></el-switch></template></el-table-column>
+          <el-table-column label="操作" width="140"><template #default="scope"><el-button link type="primary" @click="openEditor('doh', scope.row)">编辑</el-button><el-button link type="danger" :loading="rowBusy('delete-doh', scope.row.id)" @click="deleteRow('doh', scope.row)">删除</el-button></template></el-table-column>
+        </el-table>
+      </el-tab-pane>
+
+      <el-tab-pane label="DNS 池" name="dns">
+        <div class="tab-actions">
+          <el-select v-model="dnsPreset" clearable filterable placeholder="选择常用 DNS" style="width:260px"><el-option v-for="(item,index) in presets.dns" :key="item.ip" :label="item.name" :value="index"></el-option></el-select>
+          <el-button @click="applyPreset('dns')">填入预设</el-button><el-button type="primary" @click="openEditor('dns')">新增 DNS</el-button><el-button :loading="importing.dns" @click="importCommon('dns')">导入常用</el-button>
+        </div>
+        <el-table :data="dnsRows" border size="small" empty-text="暂无 DNS 节点">
+          <el-table-column prop="name" label="名称" width="190"></el-table-column><el-table-column prop="ip" label="IP" min-width="220"></el-table-column><el-table-column prop="priority" label="优先级" width="90" align="right"></el-table-column>
+          <el-table-column label="状态" width="90"><template #default="scope"><el-switch v-model="scope.row.enabled" :active-value="1" :inactive-value="0" :loading="rowBusy('dns', scope.row.id)" @change="value => toggleEnabled('dns', scope.row, value)"></el-switch></template></el-table-column>
+          <el-table-column label="操作" width="140"><template #default="scope"><el-button link type="primary" @click="openEditor('dns', scope.row)">编辑</el-button><el-button link type="danger" :loading="rowBusy('delete-dns', scope.row.id)" @click="deleteRow('dns', scope.row)">删除</el-button></template></el-table-column>
+        </el-table>
+      </el-tab-pane>
+
+      <el-tab-pane label="配置预览" name="preview">
+        <div class="preview-toolbar"><div class="muted">{{ appId ? `APPID ${appId} 最终配置` : '全局分发配置' }}</div><el-button :disabled="!previewText" @click="copyPreview">复制 JSON</el-button></div>
+        <pre class="preview">{{ previewText || '点击顶部“预览配置”加载 JSON。' }}</pre>
+      </el-tab-pane>
+    </el-tabs>
+  </section>
+
+  <!-- API 域名、DoH 和 DNS 共用编辑对话框，字段由类型决定。 -->
+  <el-dialog v-model="editorVisible" :title="editorTitle" width="620px" destroy-on-close :close-on-click-modal="false">
+    <el-form label-width="110px">
+      <el-form-item label="名称"><el-input v-model="editor.name" maxlength="100" show-word-limit></el-input></el-form-item>
+      <template v-if="editorType === 'domain'">
+        <el-form-item label="Base URL"><el-input v-model="editor.base_url" placeholder="https://*.example.com/shell.php"></el-input></el-form-item>
+        <el-form-item label="用途"><el-select v-model="editor.usage_scope" style="width:100%"><el-option label="全部" value="all"></el-option><el-option label="配置" value="config"></el-option><el-option label="上报" value="report"></el-option><el-option label="点击" value="click"></el-option></el-select></el-form-item>
+      </template>
+      <el-form-item v-else-if="editorType === 'doh'" label="DoH URL"><el-input v-model="editor.url" placeholder="https://doh.example.com/dns-query"></el-input><div class="form-help">DoH 查询只使用 HTTPS。</div></el-form-item>
+      <el-form-item v-else label="DNS IP"><el-input v-model="editor.ip" placeholder="1.1.1.1"></el-input><div class="form-help">当前壳使用公网 IPv4 UDP DNS。</div></el-form-item>
+      <el-form-item label="优先级"><el-input-number v-model="editor.priority" :min="-10000" :max="10000"></el-input-number><span class="form-help" style="margin-left:10px">数值越大越靠前</span></el-form-item>
+      <el-form-item label="状态"><el-switch v-model="editor.enabled" :active-value="1" :inactive-value="0" active-text="启用" inactive-text="停用"></el-switch></el-form-item>
+    </el-form>
+    <template #footer><el-button @click="editorVisible=false">取消</el-button><el-button type="primary" :loading="editorSaving" @click="saveEditor">保存</el-button></template>
+  </el-dialog>
+</div>
+
+<script>
+const { createApp, ref, reactive, computed, onMounted } = Vue;
+const { ElMessage, ElMessageBox } = ElementPlus;
+
+createApp({
+  setup() {
+    const API = '/api/index.php?module=config_delivery&method=';
+    const activeTab = ref('bucket');
+    const loading = ref(false);
+    const appId = ref('');
+    const bucketFrameKey = ref(0);
+    const dnsPoolEnabled = ref(false);
+    const dnsPoolSaving = ref(false);
+    const domains = ref([]);
+    const dohRows = ref([]);
+    const dnsRows = ref([]);
+    const pathStats = ref({ summary: [], rows: [], totals: {} });
+    const presets = reactive({ doh: [], dns: [] });
+    const previewText = ref('');
+    const previewLoading = ref(false);
+    const dohPreset = ref(null);
+    const dnsPreset = ref(null);
+    const importing = reactive({ doh: false, dns: false });
+    const busyRows = reactive({});
+    const editorVisible = ref(false);
+    const editorSaving = ref(false);
+    const editorType = ref('domain');
+    const editor = reactive({ id: 0, name: '', base_url: '', usage_scope: 'config', url: '', ip: '', priority: 0, enabled: 1 });
+
+    /** 生成东八区日期，确保统计筛选与服务端北京时间口径一致。 */
+    function beijingDate(offsetDays) {
+      return new Date(Date.now() + 8 * 3600000 + offsetDays * 86400000).toISOString().slice(0, 10);
+    }
+    const dateRange = ref([beijingDate(-6), beijingDate(0)]);
+
+    /** 统一调用配置分发管理 API，并把业务错误转换成页面可读异常。 */
+    async function api(method, body) {
+      const response = await fetch(API + encodeURIComponent(method), {
+        method: 'POST',
+        cache: 'no-store',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {})
+      });
+      let json;
+      try { json = await response.json(); } catch (error) { throw new Error('接口响应不是有效 JSON'); }
+      if (!response.ok || Number(json.code) !== 200) throw new Error(json.message || `请求失败：HTTP ${response.status}`);
+      return json.data || {};
+    }
+
+    /** 将数据库 tinyint 或布尔值规范成 Element Plus 使用的 0/1。 */
+    function enabledValue(value) { return value === true || Number(value) === 1 ? 1 : 0; }
+    function rowsWithEnabled(rows) { return Array.isArray(rows) ? rows.map(row => ({ ...row, enabled: enabledValue(row.enabled) })) : []; }
+    function normalizedAppId() { const value = String(appId.value || '').trim(); return /^\d+$/.test(value) && Number(value) > 0 ? Number(value) : 0; }
+
+    /** 加载页面全部池配置与按 APPID、日期过滤的路径统计。 */
+    async function loadData(silent) {
+      if (!silent) loading.value = true;
+      try {
+        const range = Array.isArray(dateRange.value) ? dateRange.value : [];
+        const data = await api('getConfigDelivery', { app_id: normalizedAppId(), start_date: range[0] || '', end_date: range[1] || '' });
+        dnsPoolEnabled.value = enabledValue(data.dns_pool_enabled) === 1;
+        domains.value = rowsWithEnabled(data.domains);
+        dohRows.value = rowsWithEnabled(data.doh);
+        dnsRows.value = rowsWithEnabled(data.dns);
+        pathStats.value = data.dns_path_stats && typeof data.dns_path_stats === 'object' ? data.dns_path_stats : { summary: [], rows: [], totals: {} };
+        presets.doh = Array.isArray(data.presets && data.presets.doh) ? data.presets.doh : [];
+        presets.dns = Array.isArray(data.presets && data.presets.dns) ? data.presets.dns : [];
+      } catch (error) {
+        ElMessage.error(error.message || '配置分发加载失败');
+      } finally {
+        if (!silent) loading.value = false;
+      }
+    }
+
+    /** 顶部刷新同时重载独立的存储桶 iframe。 */
+    async function refreshAll() { bucketFrameKey.value += 1; await loadData(false); }
+
+    /** 保存原有 dns_pool 总开关，失败时恢复页面上的旧状态。 */
+    async function updateDnsPool(value) {
+      const previous = !Boolean(value);
+      dnsPoolSaving.value = true;
+      try {
+        const data = await api('updateDnsPool', { enabled: Boolean(value) });
+        dnsPoolEnabled.value = data.enabled === undefined ? Boolean(value) : Boolean(data.enabled);
+        ElMessage.success(data.message || '抗污染设置已保存');
+      } catch (error) {
+        dnsPoolEnabled.value = previous;
+        ElMessage.error(error.message || '抗污染设置保存失败');
+      } finally { dnsPoolSaving.value = false; }
+    }
+
+    const editorTitle = computed(() => `${editor.id ? '编辑' : '新增'}${editorType.value === 'domain' ? ' API 域名' : editorType.value === 'doh' ? ' DoH' : ' DNS'}`);
+
+    /** 打开新增或编辑对话框，并只复制当前类型需要的字段。 */
+    function openEditor(type, row) {
+      const source = row || {};
+      editorType.value = type;
+      Object.assign(editor, { id: Number(source.id || 0), name: String(source.name || ''), base_url: String(source.base_url || ''), usage_scope: String(source.usage_scope || 'config'), url: String(source.url || ''), ip: String(source.ip || ''), priority: Number(source.priority || 0), enabled: row ? enabledValue(source.enabled) : 1 });
+      editorVisible.value = true;
+    }
+
+    /** 在提交前完成页面侧必填校验，详细格式仍由服务端统一裁决。 */
+    function editorError() {
+      if (!String(editor.name || '').trim()) return '请填写名称';
+      if (editorType.value === 'domain' && !String(editor.base_url || '').trim()) return '请填写 API Base URL';
+      if (editorType.value === 'doh' && !String(editor.url || '').trim()) return '请填写 DoH URL';
+      if (editorType.value === 'dns' && !String(editor.ip || '').trim()) return '请填写 DNS IP';
+      return '';
+    }
+
+    /** 新增或更新当前域名、DoH、DNS 行。 */
+    async function saveEditor() {
+      const validation = editorError();
+      if (validation) return ElMessage.warning(validation);
+      const methods = { domain: 'saveApiDomain', doh: 'saveDoh', dns: 'saveDns' };
+      const payload = editorType.value === 'domain'
+        ? { id: editor.id, name: editor.name, base_url: editor.base_url, usage_scope: editor.usage_scope, priority: editor.priority, enabled: editor.enabled }
+        : editorType.value === 'doh'
+          ? { id: editor.id, name: editor.name, url: editor.url, priority: editor.priority, enabled: editor.enabled }
+          : { id: editor.id, name: editor.name, ip: editor.ip, priority: editor.priority, enabled: editor.enabled };
+      editorSaving.value = true;
+      try {
+        const data = await api(methods[editorType.value], payload);
+        ElMessage.success(data.message || '保存成功');
+        editorVisible.value = false;
+        await loadData(true);
+      } catch (error) { ElMessage.error(error.message || '保存失败'); }
+      finally { editorSaving.value = false; }
+    }
+
+    function rowKey(type, id) { return `${type}:${id}`; }
+    function rowBusy(type, id) { return Boolean(busyRows[rowKey(type, id)]); }
+    function setRowBusy(type, id, value) { busyRows[rowKey(type, id)] = Boolean(value); }
+    function rowPayload(type, row) {
+      if (type === 'domain') return { id: row.id, name: row.name, base_url: row.base_url, usage_scope: row.usage_scope, priority: row.priority, enabled: row.enabled };
+      if (type === 'doh') return { id: row.id, name: row.name, url: row.url, priority: row.priority, enabled: row.enabled };
+      return { id: row.id, name: row.name, ip: row.ip, priority: row.priority, enabled: row.enabled };
+    }
+
+    /** 点击开关后直接保存整行；请求失败时把开关回滚。 */
+    async function toggleEnabled(type, row, value) {
+      if (rowBusy(type, row.id)) return;
+      const oldValue = enabledValue(value) ? 0 : 1;
+      const methods = { domain: 'saveApiDomain', doh: 'saveDoh', dns: 'saveDns' };
+      setRowBusy(type, row.id, true);
+      try {
+        row.enabled = enabledValue(value);
+        const data = await api(methods[type], rowPayload(type, row));
+        ElMessage.success(data.message || (row.enabled ? '已启用' : '已停用'));
+      } catch (error) {
+        row.enabled = oldValue;
+        ElMessage.error(error.message || '状态保存失败');
+      } finally { setRowBusy(type, row.id, false); }
+    }
+
+    /** 删除前显示对象名称和影响说明，确认后调用对应删除接口。 */
+    async function deleteRow(type, row) {
+      const labels = { domain: 'API 域名', doh: 'DoH 节点', dns: 'DNS 节点' };
+      const confirmed = await ElMessageBox.confirm(`确定删除${labels[type]}“${row.name || row.id}”吗？保存后会刷新远程配置。`, '删除确认', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }).then(() => true).catch(() => false);
+      if (!confirmed) return;
+      const methods = { domain: 'deleteApiDomain', doh: 'deleteDoh', dns: 'deleteDns' };
+      const busyType = `delete-${type}`;
+      setRowBusy(busyType, row.id, true);
+      try {
+        const data = await api(methods[type], { id: row.id });
+        ElMessage.success(data.message || '删除成功');
+        await loadData(true);
+      } catch (error) { ElMessage.error(error.message || '删除失败'); }
+      finally { setRowBusy(busyType, row.id, false); }
+    }
+
+    /** 将服务端预设填入编辑框，管理员确认后再落库。 */
+    function applyPreset(type) {
+      const selected = type === 'doh' ? dohPreset.value : dnsPreset.value;
+      const list = type === 'doh' ? presets.doh : presets.dns;
+      if (selected === null || selected === undefined || selected === '') return ElMessage.warning(`请选择常用 ${type === 'doh' ? 'DoH' : 'DNS'}`);
+      const index = Number(selected);
+      if (!Number.isInteger(index) || !list[index]) return ElMessage.warning(`请选择常用 ${type === 'doh' ? 'DoH' : 'DNS'}`);
+      const item = list[index];
+      openEditor(type, { name: item.name, url: item.url, ip: item.ip, priority: (list.length - index) * 10, enabled: 1 });
+    }
+
+    /** 一次导入服务端维护的全部常用节点，已有节点会重新启用。 */
+    async function importCommon(type) {
+      const label = type === 'doh' ? 'DoH' : 'DNS';
+      const confirmed = await ElMessageBox.confirm(`导入全部常用 ${label} 节点？已有同地址节点会更新并启用。`, '导入确认', { type: 'info' }).then(() => true).catch(() => false);
+      if (!confirmed) return;
+      importing[type] = true;
+      try {
+        const data = await api('importCommon', { type });
+        ElMessage.success(data.message || '导入完成');
+        await loadData(true);
+      } catch (error) { ElMessage.error(error.message || '导入失败'); }
+      finally { importing[type] = false; }
+    }
+
+    /** 请求指定 APPID 的最终配置并切换到 JSON 预览页签。 */
+    async function previewConfig() {
+      const raw = String(appId.value || '').trim();
+      if (raw && !normalizedAppId()) return ElMessage.warning('APPID 必须是正整数');
+      previewLoading.value = true;
+      try {
+        const data = await api('previewConfig', { app_id: normalizedAppId() });
+        previewText.value = JSON.stringify(data, null, 2);
+        activeTab.value = 'preview';
+      } catch (error) { ElMessage.error(error.message || '配置预览失败'); }
+      finally { previewLoading.value = false; }
+    }
+
+    /** 使用浏览器剪贴板复制当前 JSON。 */
+    async function copyPreview() {
+      try { await navigator.clipboard.writeText(previewText.value); ElMessage.success('JSON 已复制'); }
+      catch (error) { ElMessage.error('JSON 复制未成功'); }
+    }
+
+    const pathSummary = computed(() => Array.isArray(pathStats.value.summary) ? pathStats.value.summary : []);
+    const pathRows = computed(() => Array.isArray(pathStats.value.rows) ? pathStats.value.rows : []);
+    const pathTotals = computed(() => pathStats.value.totals && typeof pathStats.value.totals === 'object' ? pathStats.value.totals : {});
+    const pathNotice = computed(() => pathStats.value.notice || '路径统计从新壳版本 153 开始产生；旧壳历史请求不会补记。');
+
+    /** 同时兼容云注入字段和参考系统字段，空数据统一显示 0。 */
+    function metric(row, key) {
+      const aliases = { range: ['range_count', 'total_requests', 'total_count', 'request_count'], today: ['today_count', 'today_requests'], ok: ['today_ok', 'today_ok_requests', 'ok_count'], fail: ['today_fail', 'today_fail_requests', 'fail_count'], last7: ['last7_count', 'seven_day_requests'], rejected: ['rejected_count', 'today_rejected_count'], rescued: ['rescued_count', 'today_rescued_requests'] };
+      const source = row || {};
+      for (const name of aliases[key] || [key]) if (source[name] !== undefined && source[name] !== null && source[name] !== '') return number(source[name]);
+      return '0';
+    }
+    function number(value) { const parsed = Number(value || 0); return Number.isFinite(parsed) ? parsed.toLocaleString('zh-CN') : '0'; }
+    function timeText(value) { return value ? String(value).replace('T', ' ').replace(/\.000Z$/, '') : '-'; }
+    function scopeLabel(value) { return ({ all: '全部', config: '配置', report: '上报', click: '点击' })[String(value || '').toLowerCase()] || value || '-'; }
+    function modeLabel(value) { return ({ doh: 'DoH 直连', udp: 'UDP DNS', cache: '已验证缓存', system: '系统 DNS', unknown: '路径未上报' })[String(value || '').toLowerCase()] || value || '路径未上报'; }
+    function modeTag(value) { return ({ doh: 'success', udp: 'warning', cache: 'primary', system: 'info', unknown: 'info' })[String(value || '').toLowerCase()] || 'info'; }
+
+    onMounted(() => loadData(false));
+    return { activeTab, loading, appId, bucketFrameKey, dnsPoolEnabled, dnsPoolSaving, domains, dohRows, dnsRows, pathSummary, pathRows, pathTotals, pathNotice, presets, previewText, previewLoading, dohPreset, dnsPreset, importing, editorVisible, editorSaving, editorType, editor, editorTitle, dateRange, loadData, refreshAll, updateDnsPool, openEditor, saveEditor, toggleEnabled, deleteRow, rowBusy, applyPreset, importCommon, previewConfig, copyPreview, metric, number, timeText, scopeLabel, modeLabel, modeTag };
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/../api/utils/BucketFeature.php';
+require_once __DIR__ . '/../api/utils/ConfigDelivery.php';
 
 // 表前缀配置
 $tablePrefix = 'cainiao_';
@@ -1764,6 +1765,7 @@ function installDatabase(PDO $pdo)
                 '_icon' => 'Tools',
                 '系统信息' => 'admin/system',
                 '存储桶管理' => 'admin/bucket',
+                '配置分发' => 'admin/config_delivery',
                 '安卓客户端' => 'admin/android'
             ],
         ];
@@ -1779,6 +1781,8 @@ function installDatabase(PDO $pdo)
 
         // 配置分发桶与命中统计表属于鲜装必备结构，不再仅依赖线上手工 SQL。
         ensureBucketFeatureSchema($pdo);
+        // API/DoH/DNS 节点池和路径统计同样属于鲜装必备结构。
+        ensureConfigDeliverySchema($pdo);
                 
         
         $settingTable = $tablePrefix . 'system_setting';
@@ -2168,10 +2172,15 @@ function installDatabase(PDO $pdo)
         file_put_contents($configFile, $configContent);
         $lockFile = $configDir . '/config.lock';
         file_put_contents($lockFile, 'installed:' . date('Y-m-d H:i:s'));
-        $pdo->commit();
+        // MySQL DDL 会隐式提交；只在事务仍活跃时执行显式提交。
+        if ($pdo->inTransaction()) {
+            $pdo->commit();
+        }
         return ['code' => 200, 'message' => '数据库结构安装成功'];
     } catch (Exception $e) {
-        $pdo->rollBack();
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
         return ['code' => 500, 'message' => '安装失败：' . $e->getMessage()];
     }
 }

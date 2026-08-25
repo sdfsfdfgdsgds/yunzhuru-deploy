@@ -8,6 +8,7 @@ require_once __DIR__ . '/PopupImageAssetHelper.php';
 require_once __DIR__ . '/ClickParamAssetHelper.php';
 require_once __DIR__ . '/DeletedApp.php';
 require_once __DIR__ . '/BucketFeature.php';
+require_once __DIR__ . '/ConfigDelivery.php';
 
 if (!function_exists('fetchCol')) {
     // 通用函数：返回单列结果
@@ -373,7 +374,9 @@ if (!function_exists('getResponseData')) {
             "stat_url" => bucketPublicApiUrl(),
         ];
 
-        return $response;
+        // 节点池是全局分发配置：新壳会缓存并用于下一轮 API/DoH/DNS 请求，
+        // 旧壳会自然忽略未识别字段。老数据库尚未迁移时该函数会回退内置池。
+        return array_merge($response, configDeliveryPublicPools($pdo));
     }
 }
 

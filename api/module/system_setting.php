@@ -95,8 +95,14 @@ function updateSetting(PDO $pdo, array $input) {
     }
 
     if ($dnsPoolChanged) {
-        clearRemoteConfigCache();
-        pushAllBucketConfigsAsync();
+        // 总开关与节点池共用同一失效链路：同时清 Redis DB0 配置键、
+        // 磁盘 JSON 并去重触发全量桶同步，避免仅删磁盘后 Redis 继续下发旧开关。
+        if (function_exists('configDeliveryInvalidateAndSync')) {
+            configDeliveryInvalidateAndSync($pdo);
+        } else {
+            clearRemoteConfigCache();
+            pushAllBucketConfigsAsync();
+        }
     }
 
     return ['message' => '设置已保存'];

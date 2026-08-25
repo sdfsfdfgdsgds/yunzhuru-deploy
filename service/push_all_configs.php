@@ -10,7 +10,8 @@ require_once __DIR__ . '/../api/utils/Auth.php';
 require_once __DIR__ . '/../api/utils/BucketPush.php';
 
 try {
-    $result = pushAllConfigsToBuckets($pdo);
+    // 全局配置保存可在短时间连续触发，false 表示按 dirty 标记合并重复任务。
+    $result = pushAllConfigsToBuckets($pdo, false);
     error_log('[push_all_configs.php] 推送完成: ' . json_encode($result, JSON_UNESCAPED_UNICODE));
 } catch (Throwable $e) {
     error_log('[push_all_configs.php] 推送失败: ' . $e->getMessage());
