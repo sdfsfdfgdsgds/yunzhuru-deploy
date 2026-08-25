@@ -357,7 +357,8 @@ if (!function_exists('bucketMigratePlaintextCredentials')) {
         if ((string)(getenv('BUCKET_CREDENTIAL_KEY') ?: '') === '') return;
         $rows = $pdo->query('SELECT id, login_account, login_password, access_key, secret_key FROM cainiao_s3_bucket')
             ->fetchAll(PDO::FETCH_ASSOC);
-        $update = $pdo->prepare('UPDATE cainiao_s3_bucket SET login_account=:login_account, login_password=:login_password, access_key=:access_key, secret_key=:secret_key WHERE id=:id');
+        // 凭据存储形式迁移不是管理员编辑，保留原有业务更新时间。
+        $update = $pdo->prepare('UPDATE cainiao_s3_bucket SET login_account=:login_account, login_password=:login_password, access_key=:access_key, secret_key=:secret_key, updated_at=updated_at WHERE id=:id');
         foreach ($rows as $row) {
             $changed = false;
             $values = [':id' => (int)$row['id']];
