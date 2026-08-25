@@ -411,8 +411,8 @@ if (!function_exists('ensureBucketFeatureSchema')) {
           `id` int(11) NOT NULL AUTO_INCREMENT,
           `name` varchar(100) NOT NULL,
           `provider` varchar(20) NOT NULL DEFAULT 's3',
-          `login_account` varchar(1024) NOT NULL DEFAULT '',
-          `login_password` varchar(2048) NOT NULL DEFAULT '',
+          `login_account` varchar(2048) NOT NULL DEFAULT '',
+          `login_password` varchar(4096) NOT NULL DEFAULT '',
           `note` varchar(512) NOT NULL DEFAULT '',
           `access_key` varchar(1024) NOT NULL,
           `secret_key` varchar(2048) NOT NULL,
@@ -429,16 +429,16 @@ if (!function_exists('ensureBucketFeatureSchema')) {
           PRIMARY KEY (`id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='配置分发桶'");
 
-        bucketEnsureMysqlColumn($pdo, 'cainiao_s3_bucket', 'login_account', "varchar(1024) NOT NULL DEFAULT '' AFTER `provider`");
-        bucketEnsureMysqlColumn($pdo, 'cainiao_s3_bucket', 'login_password', "varchar(2048) NOT NULL DEFAULT '' AFTER `login_account`");
+        bucketEnsureMysqlColumn($pdo, 'cainiao_s3_bucket', 'login_account', "varchar(2048) NOT NULL DEFAULT '' AFTER `provider`");
+        bucketEnsureMysqlColumn($pdo, 'cainiao_s3_bucket', 'login_password', "varchar(4096) NOT NULL DEFAULT '' AFTER `login_account`");
         bucketEnsureMysqlColumn($pdo, 'cainiao_s3_bucket', 'note', "varchar(512) NOT NULL DEFAULT '' AFTER `login_password`");
         bucketEnsureMysqlColumn($pdo, 'cainiao_s3_bucket', 'inject', "tinyint(1) NOT NULL DEFAULT 1 AFTER `enabled`");
         bucketEnsureMysqlColumn($pdo, 'cainiao_s3_bucket', 'last_push_at', "datetime DEFAULT NULL AFTER `inject`");
         bucketEnsureMysqlColumn($pdo, 'cainiao_s3_bucket', 'last_push_result', "text AFTER `last_push_at`");
 
-        // 旧表的凭据字段较短，按需扩容后才可存放 GCM 密文。
-        bucketEnsureMysqlVarcharLength($pdo, 'cainiao_s3_bucket', 'login_account', 1024, "NOT NULL DEFAULT ''");
-        bucketEnsureMysqlVarcharLength($pdo, 'cainiao_s3_bucket', 'login_password', 2048, "NOT NULL DEFAULT ''");
+        // 用户名和密码按 Unicode 字符限制；列容量需覆盖四字节字符经 GCM 与 Base64 包装后的最坏情况。
+        bucketEnsureMysqlVarcharLength($pdo, 'cainiao_s3_bucket', 'login_account', 2048, "NOT NULL DEFAULT ''");
+        bucketEnsureMysqlVarcharLength($pdo, 'cainiao_s3_bucket', 'login_password', 4096, "NOT NULL DEFAULT ''");
         bucketEnsureMysqlVarcharLength($pdo, 'cainiao_s3_bucket', 'access_key', 1024, 'NOT NULL');
         bucketEnsureMysqlVarcharLength($pdo, 'cainiao_s3_bucket', 'secret_key', 2048, 'NOT NULL');
         bucketEnsureMysqlVarcharLength($pdo, 'cainiao_s3_bucket', 'endpoint', 512, 'NOT NULL');

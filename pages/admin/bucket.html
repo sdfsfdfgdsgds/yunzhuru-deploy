@@ -1086,6 +1086,9 @@ createApp({
     // 只有用户在输入框中实际编辑才标记 dirty，程序回填查看值不标记。
     function markCredentialDirty(field) {
       if (!Object.prototype.hasOwnProperty.call(credentialDirty, field)) return;
+      // 用户输入后立即使同字段的在途查看请求失效，避免旧值迟到覆盖新输入。
+      credentialRequestGeneration[field] += 1;
+      credentialLoading[field] = false;
       credentialDirty[field] = true;
       if (Object.prototype.hasOwnProperty.call(credentialCleared, field)) {
         credentialCleared[field] = false;
@@ -1114,7 +1117,8 @@ createApp({
         credentialVisible[field] = false;
         return;
       }
-      if (!isEdit.value || credentialLoaded[field]) {
+      // 新建值、已查看值和本地刚编辑的值都只切换显隐，不再读取服务端旧值。
+      if (!isEdit.value || credentialLoaded[field] || credentialDirty[field]) {
         credentialVisible[field] = !credentialVisible[field];
         return;
       }

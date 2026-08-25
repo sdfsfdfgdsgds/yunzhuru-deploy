@@ -7,8 +7,8 @@ CREATE TABLE IF NOT EXISTS `cainiao_s3_bucket` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `name` varchar(100) NOT NULL COMMENT '后台显示名称',
   `provider` varchar(20) NOT NULL DEFAULT 's3' COMMENT 'b2/s3/r2',
-  `login_account` varchar(1024) NOT NULL DEFAULT '' COMMENT '云厂商网页登录帐号，应用层AES-256-GCM',
-  `login_password` varchar(2048) NOT NULL DEFAULT '' COMMENT '云厂商网页登录密码，应用层AES-256-GCM',
+  `login_account` varchar(2048) NOT NULL DEFAULT '' COMMENT '云厂商网页登录帐号，应用层AES-256-GCM',
+  `login_password` varchar(4096) NOT NULL DEFAULT '' COMMENT '云厂商网页登录密码，应用层AES-256-GCM',
   `note` varchar(512) NOT NULL DEFAULT '' COMMENT '管理备注',
   `access_key` varchar(1024) NOT NULL COMMENT 'S3 Access Key，应用层AES-256-GCM',
   `secret_key` varchar(2048) NOT NULL COMMENT 'S3 Secret Key，应用层AES-256-GCM',
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS `cainiao_s3_bucket` (
 -- 因此先查 information_schema，再通过 PREPARE 执行单列 DDL。
 SET @bucket_ddl = (
   SELECT IF(COUNT(*) = 0,
-    'ALTER TABLE `cainiao_s3_bucket` ADD COLUMN `login_account` varchar(1024) NOT NULL DEFAULT '''' COMMENT ''云厂商网页登录帐号，应用层AES-256-GCM'' AFTER `provider`',
+    'ALTER TABLE `cainiao_s3_bucket` ADD COLUMN `login_account` varchar(2048) NOT NULL DEFAULT '''' COMMENT ''云厂商网页登录帐号，应用层AES-256-GCM'' AFTER `provider`',
     'DO 1')
   FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cainiao_s3_bucket' AND COLUMN_NAME = 'login_account'
@@ -38,7 +38,7 @@ PREPARE bucket_stmt FROM @bucket_ddl; EXECUTE bucket_stmt; DEALLOCATE PREPARE bu
 
 SET @bucket_ddl = (
   SELECT IF(COUNT(*) = 0,
-    'ALTER TABLE `cainiao_s3_bucket` ADD COLUMN `login_password` varchar(2048) NOT NULL DEFAULT '''' COMMENT ''云厂商网页登录密码，应用层AES-256-GCM'' AFTER `login_account`',
+    'ALTER TABLE `cainiao_s3_bucket` ADD COLUMN `login_password` varchar(4096) NOT NULL DEFAULT '''' COMMENT ''云厂商网页登录密码，应用层AES-256-GCM'' AFTER `login_account`',
     'DO 1')
   FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cainiao_s3_bucket' AND COLUMN_NAME = 'login_password'
@@ -83,8 +83,8 @@ PREPARE bucket_stmt FROM @bucket_ddl; EXECUTE bucket_stmt; DEALLOCATE PREPARE bu
 
 -- 只在旧字段容量不足时扩容，避免重复迁移每次都取元数据锁。
 SET @bucket_ddl = (
-  SELECT IF(COALESCE(MAX(CHARACTER_MAXIMUM_LENGTH), 0) < 1024,
-    'ALTER TABLE `cainiao_s3_bucket` MODIFY COLUMN `login_account` varchar(1024) NOT NULL DEFAULT '''' COMMENT ''云厂商网页登录帐号，应用层AES-256-GCM''',
+  SELECT IF(COALESCE(MAX(CHARACTER_MAXIMUM_LENGTH), 0) < 2048,
+    'ALTER TABLE `cainiao_s3_bucket` MODIFY COLUMN `login_account` varchar(2048) NOT NULL DEFAULT '''' COMMENT ''云厂商网页登录帐号，应用层AES-256-GCM''',
     'DO 1')
   FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cainiao_s3_bucket' AND COLUMN_NAME = 'login_account'
@@ -92,8 +92,8 @@ SET @bucket_ddl = (
 PREPARE bucket_stmt FROM @bucket_ddl; EXECUTE bucket_stmt; DEALLOCATE PREPARE bucket_stmt;
 
 SET @bucket_ddl = (
-  SELECT IF(COALESCE(MAX(CHARACTER_MAXIMUM_LENGTH), 0) < 2048,
-    'ALTER TABLE `cainiao_s3_bucket` MODIFY COLUMN `login_password` varchar(2048) NOT NULL DEFAULT '''' COMMENT ''云厂商网页登录密码，应用层AES-256-GCM''',
+  SELECT IF(COALESCE(MAX(CHARACTER_MAXIMUM_LENGTH), 0) < 4096,
+    'ALTER TABLE `cainiao_s3_bucket` MODIFY COLUMN `login_password` varchar(4096) NOT NULL DEFAULT '''' COMMENT ''云厂商网页登录密码，应用层AES-256-GCM''',
     'DO 1')
   FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cainiao_s3_bucket' AND COLUMN_NAME = 'login_password'
