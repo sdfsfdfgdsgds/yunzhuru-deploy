@@ -459,6 +459,54 @@ function getMyAppList(PDO $pdo, array $input)
 
 
 
+/**
+ * 读取某个应用最近成功制品的固定桶配置文件详情。
+ *
+ * 桶列表和对象键全部由服务端快照决定；普通账号仅能查看自己的应用。
+ * 该接口只在打开详情弹窗时调用，不影响应用列表的数据库批量查询性能。
+ */
+function getAppStaticBucketFiles(PDO $pdo, array $input)
+{
+    $user = Auth::check($pdo);
+    $appId = isset($input['app_id']) && is_numeric($input['app_id']) ? (int)$input['app_id'] : 0;
+    if ($appId <= 0) {
+        throw new InvalidArgumentException('应用 ID 格式错误');
+    }
+
+    ensureApkDeleteMarkerTable($pdo);
+    $stmt = $pdo->prepare("SELECT a.id, a.user_id, a.name
+        FROM cainiao_apk a
+        LEFT JOIN cainiao_apk_deleted d ON d.apk_id=a.id
+        WHERE a.id=:id AND d.apk_id IS NULL
+        LIMIT 1");
+    $stmt->execute([':id' => $appId]);
+    $app = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$app || (($user['role'] ?? '') !== 'admin' && (int)$app['user_id'] !== (int)$user['id'])) {
+        throw new RuntimeException('应用不存在或当前账号无权查看');
+    }
+
+    ensureBucketFeatureSchema($pdo);
+    $rows = [[
+        'id' => $appId,
+        'apk_id' => $appId,
+        'name' => (string)$app['name'],
+    ]];
+    bucketAttachLatestAppSnapshots($pdo, $rows);
+    $snapshot = $rows[0]['static_injected_buckets'] ?? [];
+    $snapshot['items'] = bucketLoadAppFileMetadata(
+        $appId,
+        is_array($snapshot['items'] ?? null) ? $snapshot['items'] : []
+    );
+    $snapshot['count'] = count($snapshot['items']);
+
+    return [
+        'message' => '应用桶文件信息已刷新',
+        'app_id' => $appId,
+        'checked_at' => (new DateTimeImmutable('now', new DateTimeZone('Asia/Shanghai')))->format('Y-m-d H:i:s'),
+        'static_injected_buckets' => $snapshot,
+    ];
+}
+
 //获取复用应用的配置列表
 function getMyReuseAppList(PDO $pdo, array $input)
 {

@@ -72,39 +72,6 @@ function bucketScheduleFullSync(): bool {
     return $exitCode === 0 && !empty($output) && ctype_digit(trim((string)end($output)));
 }
 
-/** 生成公开对象 URL，并按路径段编码对象名。 */
-function bucketPublicObjectUrl(string $domain, string $objectKey): string {
-    $domain = bucketSafeStoredPublicUrl($domain);
-    if ($domain === '') return '';
-    $segments = array_map('rawurlencode', explode('/', ltrim($objectKey, '/')));
-    return rtrim($domain, '/') . '/' . implode('/', $segments);
-}
-
-/** 解析公开 URL；只有全部 DNS 结果都是公网地址时才返回 IP 列表。 */
-function bucketPublicUrlSafeIps(string $url): array {
-    $host = strtolower(trim((string)(parse_url($url, PHP_URL_HOST) ?: ''), '[]'));
-    if ($host === '') return [];
-
-    $ips = [];
-    if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
-        $ips[] = $host;
-    } else {
-        foreach ((array)@gethostbynamel($host) as $ip) $ips[$ip] = $ip;
-        if (function_exists('dns_get_record') && defined('DNS_AAAA')) {
-            foreach ((array)@dns_get_record($host, DNS_AAAA) as $record) {
-                if (!empty($record['ipv6'])) $ips[$record['ipv6']] = $record['ipv6'];
-            }
-        }
-    }
-    if (empty($ips)) return [];
-    foreach ($ips as $ip) {
-        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
-            return [];
-        }
-    }
-    return array_values(array_unique($ips));
-}
-
 /** 对一个具体对象做公开读取检查；该结果不计入壳端命中统计。 */
 function bucketCheckPublicObject(string $url): array {
     if ($url === '' || !function_exists('curl_init')) {
@@ -182,7 +149,7 @@ function bucketFileStatsMap(PDO $pdo, int $bucketId): array {
  * 有显式 bucket_ids 的成功任务沿用任务选择；没有显式选择的旧任务沿用 BucketPush
  * 的兼容合同，即当前所有 enabled 桶都应存在该应用配置。
  */
-function bucketExpectedApps(PDO $pdo, array $bucketRow): array {
+function bucketExpectedApps(PDO $pdo, array $bucketRow, bool $internalOnly = true): array {
     ensureApkDeleteMarkerTable($pdo);
     $stmt = $pdo->query("SELECT a.id, a.name, a.package, t.bucket_ids
         FROM cainiao_apk a

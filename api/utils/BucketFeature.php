@@ -199,6 +199,274 @@ if (!function_exists('bucketSafeStoredPublicUrl')) {
     }
 }
 
+if (!function_exists('bucketPublicObjectUrl')) {
+    /**
+     * 基于公开根地址生成对象直连，对每个路径段分别做 RFC 3986 编码。
+     *
+     * 该方法同时服务桶文件盘点和应用制品快照，确保两个页面
+     * 使用同一套 URL 拼接与安全过滤规则。
+     */
+    function bucketPublicObjectUrl(string $domain, string $objectKey): string {
+        $domain = bucketSafeStoredPublicUrl($domain);
+        if ($domain === '') return '';
+        $segments = array_map('rawurlencode', explode('/', ltrim($objectKey, '/')));
+        return rtrim($domain, '/') . '/' . implode('/', $segments);
+    }
+}
+
+if (!function_exists('bucketAppConfigObjectKey')) {
+    /** 返回壳端约定的单应用加密配置对象路径。 */
+    function bucketAppConfigObjectKey(int $appId): string {
+        return $appId > 0 ? "config/{$appId}.enc" : '';
+    }
+}
+
+if (!function_exists('bucketFormatObjectLastModified')) {
+    /** 将 S3 LastModified 的 UTC/ISO-8601 时间统一转换为北京时间。 */
+    function bucketFormatObjectLastModified(?string $value): string {
+        $value = trim((string)$value);
+        if ($value === '') return '';
+        try {
+            return (new DateTimeImmutable($value))
+                ->setTimezone(new DateTimeZone('Asia/Shanghai'))
+                ->format('Y-m-d H:i:s');
+        } catch (Throwable $ignored) {
+            return '';
+        }
+    }
+}
+
+if (!function_exists('bucketAttachAppFileFields')) {
+    /**
+     * 为快照桶条目增加本应用文件地址和稳定的元数据结构。
+     *
+     * 列表接口只拼接公开 URL，不访问远程对象存储；真实文件时间
+     * 由详情弹窗的窄接口按需查询，避免应用列表产生 N x M 远程 I/O。
+     */
+    function bucketAttachAppFileFields(array $items, int $appId): array {
+        $objectKey = bucketAppConfigObjectKey($appId);
+        foreach ($items as &$item) {
+            if (!is_array($item)) $item = [];
+            $fileUrl = $objectKey !== ''
+                ? bucketPublicObjectUrl((string)($item['domain'] ?? ''), $objectKey)
+                : '';
+            $item['app_file_key'] = $objectKey;
+            $item['app_file_url'] = $fileUrl;
+            $item['app_file_present'] = null;
+            $item['app_file_status'] = $fileUrl !== '' && $objectKey !== '' ? 'unchecked' : 'unavailable';
+            $item['app_file_last_modified'] = '';
+            $item['app_file_updated_at'] = '';
+            $item['app_file_size'] = 0;
+            $item['app_file_http_code'] = 0;
+            $item['app_file_metadata_source'] = '';
+        }
+        unset($item);
+        return $items;
+    }
+}
+
+if (!function_exists('bucketPublicUrlSafeIps')) {
+    /** 解析公开 URL；只有全部 DNS 结果都是公网地址时才返回 IP 列表。 */
+    function bucketPublicUrlSafeIps(string $url): array {
+        $host = strtolower(trim((string)(parse_url($url, PHP_URL_HOST) ?: ''), '[]'));
+        if ($host === '') return [];
+
+        $ips = [];
+        if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
+            $ips[] = $host;
+        } else {
+            foreach ((array)@gethostbynamel($host) as $ip) $ips[$ip] = $ip;
+            if (function_exists('dns_get_record') && defined('DNS_AAAA')) {
+                foreach ((array)@dns_get_record($host, DNS_AAAA) as $record) {
+                    if (!empty($record['ipv6'])) $ips[$record['ipv6']] = $record['ipv6'];
+                }
+            }
+        }
+        if (empty($ips)) return [];
+        foreach ($ips as $ip) {
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+                return [];
+            }
+        }
+        return array_values(array_unique($ips));
+    }
+}
+
+if (!function_exists('bucketPublicObjectHeaderTime')) {
+    /** 从标准 Last-Modified 或 B2 上传毫秒时间中提取真实对象时间。 */
+    function bucketPublicObjectHeaderTime(array $headers): array {
+        $lastModified = trim((string)($headers['last-modified'] ?? ''));
+        if ($lastModified !== '') {
+            return [
+                'raw' => $lastModified,
+                'display' => bucketFormatObjectLastModified($lastModified),
+            ];
+        }
+
+        $uploadMilliseconds = trim((string)($headers['x-bz-upload-timestamp'] ?? ''));
+        if ($uploadMilliseconds !== '' && preg_match('/^\d{11,16}$/', $uploadMilliseconds)) {
+            try {
+                $seconds = intdiv((int)$uploadMilliseconds, 1000);
+                $display = (new DateTimeImmutable('@' . $seconds))
+                    ->setTimezone(new DateTimeZone('Asia/Shanghai'))
+                    ->format('Y-m-d H:i:s');
+                return ['raw' => $uploadMilliseconds, 'display' => $display];
+            } catch (Throwable $ignored) {
+            }
+        }
+        return ['raw' => '', 'display' => ''];
+    }
+}
+
+if (!function_exists('bucketPublicObjectHeaderSize')) {
+    /** 从 Range GET 响应中提取完整对象大小。 */
+    function bucketPublicObjectHeaderSize(array $headers): int {
+        $contentRange = trim((string)($headers['content-range'] ?? ''));
+        if ($contentRange !== '' && preg_match('#/(\d+)$#', $contentRange, $match)) {
+            return max(0, (int)$match[1]);
+        }
+        foreach (['x-bz-content-length', 'x-amz-meta-content-length'] as $headerName) {
+            $value = trim((string)($headers[$headerName] ?? ''));
+            if ($value !== '' && ctype_digit($value)) return max(0, (int)$value);
+        }
+        return 0;
+    }
+}
+
+if (!function_exists('bucketLoadAppFileMetadata')) {
+    /**
+     * 并发读取本应用每个“实际展示 URL”的公开对象元数据。
+     *
+     * 所有连接都经过公网 IP 校验和 DNS 固定，禁止重定向；最多检查 12 个桶，
+     * 单连接 6 秒、整批 7 秒预算。时间与地址来自同一 HTTP 对象，
+     * 不使用可能已被修改的当前 Endpoint/Bucket 凭据反查历史地址。
+     */
+    function bucketLoadAppFileMetadata(int $appId, array $items): array {
+        $items = bucketAttachAppFileFields($items, $appId);
+        if (empty($items) || !function_exists('curl_multi_init')) return $items;
+
+        $multi = curl_multi_init();
+        $requests = [];
+        $maxFiles = 12;
+        $scheduled = 0;
+        // 总预算从 DNS 预解析前开始计算，避免多个异常域名把请求时间线性放大。
+        $deadline = microtime(true) + 7.0;
+        foreach ($items as $index => &$item) {
+            if (microtime(true) >= $deadline) {
+                $item['app_file_status'] = 'check_timeout';
+                continue;
+            }
+            if ($scheduled >= $maxFiles) {
+                $item['app_file_status'] = 'not_checked_limit';
+                continue;
+            }
+            $url = bucketSafeStoredPublicUrl((string)($item['app_file_url'] ?? ''));
+            if ($url === '') {
+                $item['app_file_status'] = 'unavailable';
+                continue;
+            }
+            $safeIps = bucketPublicUrlSafeIps($url);
+            if (microtime(true) >= $deadline) {
+                $item['app_file_status'] = 'check_timeout';
+                continue;
+            }
+            if (empty($safeIps)) {
+                $item['app_file_status'] = 'unsafe_address';
+                continue;
+            }
+
+            $host = trim((string)(parse_url($url, PHP_URL_HOST) ?: ''), '[]');
+            $port = (int)(parse_url($url, PHP_URL_PORT) ?: 443);
+            $pinnedIp = (string)$safeIps[0];
+            if (strpos($pinnedIp, ':') !== false) $pinnedIp = '[' . $pinnedIp . ']';
+            $capture = (object)['headers' => []];
+            $handle = curl_init($url);
+            $options = [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_CONNECTTIMEOUT => 3,
+                CURLOPT_TIMEOUT => 6,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_SSL_VERIFYHOST => 2,
+                CURLOPT_HTTPGET => true,
+                CURLOPT_RANGE => '0-0',
+                CURLOPT_HTTPHEADER => ['Cache-Control: no-cache', 'Pragma: no-cache'],
+                CURLOPT_USERAGENT => 'yunzhuru-app-file-check/1.0',
+                CURLOPT_RESOLVE => ["{$host}:{$port}:{$pinnedIp}"],
+                CURLOPT_HEADERFUNCTION => static function ($curlHandle, string $line) use ($capture): int {
+                    $length = strlen($line);
+                    $trimmed = trim($line);
+                    if ($trimmed === '') return $length;
+                    if (stripos($trimmed, 'HTTP/') === 0) {
+                        $capture->headers = [];
+                        return $length;
+                    }
+                    $separator = strpos($line, ':');
+                    if ($separator !== false) {
+                        $name = strtolower(trim(substr($line, 0, $separator)));
+                        $value = trim(substr($line, $separator + 1));
+                        if ($name !== '') $capture->headers[$name] = $value;
+                    }
+                    return $length;
+                },
+            ];
+            if (defined('CURLOPT_PROTOCOLS') && defined('CURLPROTO_HTTPS')) {
+                $options[CURLOPT_PROTOCOLS] = CURLPROTO_HTTPS;
+            }
+            curl_setopt_array($handle, $options);
+            curl_multi_add_handle($multi, $handle);
+            $requests[] = [
+                'index' => $index,
+                'handle' => $handle,
+                'capture' => $capture,
+            ];
+            $scheduled++;
+        }
+        unset($item);
+
+        $running = 0;
+        do {
+            do {
+                $multiCode = curl_multi_exec($multi, $running);
+            } while ($multiCode === CURLM_CALL_MULTI_PERFORM);
+            if ($running <= 0 || $multiCode !== CURLM_OK || microtime(true) >= $deadline) break;
+            $remaining = max(0.01, min(0.20, $deadline - microtime(true)));
+            if (curl_multi_select($multi, $remaining) === -1) usleep(10000);
+        } while (true);
+        $budgetExpired = $running > 0 && microtime(true) >= $deadline;
+
+        foreach ($requests as $request) {
+            $index = (int)$request['index'];
+            $handle = $request['handle'];
+            $headers = (array)$request['capture']->headers;
+            $httpCode = (int)curl_getinfo($handle, CURLINFO_HTTP_CODE);
+            $items[$index]['app_file_http_code'] = $httpCode;
+            $items[$index]['app_file_metadata_source'] = 'public_url';
+            if ($httpCode >= 200 && $httpCode < 300) {
+                $time = bucketPublicObjectHeaderTime($headers);
+                $items[$index]['app_file_present'] = 1;
+                $items[$index]['app_file_status'] = 'present';
+                $items[$index]['app_file_last_modified'] = (string)$time['raw'];
+                $items[$index]['app_file_updated_at'] = (string)$time['display'];
+                $items[$index]['app_file_size'] = bucketPublicObjectHeaderSize($headers);
+            } elseif ($httpCode === 404) {
+                $items[$index]['app_file_present'] = 0;
+                $items[$index]['app_file_status'] = 'missing';
+            } elseif ($httpCode === 401 || $httpCode === 403) {
+                $items[$index]['app_file_status'] = 'restricted';
+            } elseif ($httpCode === 0 && $budgetExpired) {
+                $items[$index]['app_file_status'] = 'check_timeout';
+            } else {
+                $items[$index]['app_file_status'] = 'check_failed';
+            }
+            curl_multi_remove_handle($multi, $handle);
+            curl_close($handle);
+        }
+        curl_multi_close($multi);
+        return $items;
+    }
+}
+
 if (!function_exists('bucketInferRegion')) {
     /** 从官方 Endpoint 推导 B2/S3 Region，R2 固定为 auto。 */
     function bucketInferRegion(string $provider, string $endpoint): string {
@@ -980,6 +1248,8 @@ if (!function_exists('bucketSnapshotApplyRecord')) {
             }
         }
         $items = bucketNormalizePublicSnapshotRows($snapshotItems, $currentRows);
+        $appId = (int)($snapshot['apk_id'] ?? $row['apk_id'] ?? $row['id'] ?? 0);
+        $items = bucketAttachAppFileFields($items, $appId);
         $snapshotDomains = [];
         foreach ($snapshotItems as $snapshotItem) {
             $domain = (string)($snapshotItem['domain'] ?? '');
@@ -1093,7 +1363,7 @@ if (!function_exists('bucketBackfillLegacySnapshots')) {
      * legacy_inferred/unknown，replacement_count 保持 0，不会伪装成 worker 验证快照。
      * 表与任务无外键，回填后任务过期清理不会删除快照。
      */
-    function bucketBackfillLegacySnapshots(PDO $pdo, array $taskIds = []): array {
+    function bucketBackfillLegacySnapshots(PDO $pdo, array $taskIds = [], bool $internalOnly = true): array {
         static $done = [];
         $key = spl_object_hash($pdo);
         $normalizedTaskIds = [];
@@ -1245,6 +1515,8 @@ if (!function_exists('bucketSnapshotApplyLegacySelection')) {
             $state = $source === 'legacy_inferred' ? 'legacy_inferred' : 'unknown';
             $status = $taskStatus === '编译成功' ? 'success' : $taskStatus;
         }
+        $appId = (int)($row['apk_id'] ?? $row['id'] ?? 0);
+        $buckets = bucketAttachAppFileFields($buckets, $appId);
         $payload = [
             'state' => $state,
             'source' => $source,
@@ -1281,7 +1553,7 @@ if (!function_exists('bucketAttachTaskSnapshots')) {
      * 为任务列表批量附加 static_injected_buckets，整个列表最多三次查询。
      * 快照缺失时，显式 bucket_ids 标为 legacy_inferred；全局回退标为 unknown。
      */
-    function bucketAttachTaskSnapshots(PDO $pdo, array &$list): void {
+    function bucketAttachTaskSnapshots(PDO $pdo, array &$list, bool $internalOnly = true): void {
         if (empty($list)) return;
         $taskIndexes = [];
         foreach ($list as $index => &$row) {
@@ -1352,7 +1624,7 @@ if (!function_exists('bucketAttachLatestAppSnapshots')) {
      * 为应用列表批量附加最近成功制品的静态桶快照。
      * 新表没有数据时仅回退最近一条仍保留的成功任务，不对多任务做并集。
      */
-    function bucketAttachLatestAppSnapshots(PDO $pdo, array &$list): void {
+    function bucketAttachLatestAppSnapshots(PDO $pdo, array &$list, bool $internalOnly = true): void {
         if (empty($list)) return;
         $appIndexes = [];
         foreach ($list as $index => &$row) {

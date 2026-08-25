@@ -57,6 +57,14 @@ if (!function_exists($method)) {
 }
 // 使用反射检查参数
 $refFunc = new ReflectionFunction($method);
+$declaredFile = $refFunc->getFileName();
+$resolvedModulePath = realpath($modulePath);
+// 路由只允许调用当前 module 文件内声明的方法，避免已加载的
+// utils 内部 helper 被函数名猜测成为外部 API。
+if ($declaredFile === false || $resolvedModulePath === false || realpath($declaredFile) !== $resolvedModulePath) {
+    echo json_encode(['code' => 404, 'message' => '方法不属于当前模块'], 320);
+    exit;
+}
 $params = $refFunc->getParameters();
 
 // 参数数量必须为 2

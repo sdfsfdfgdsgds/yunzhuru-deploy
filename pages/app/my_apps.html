@@ -84,7 +84,7 @@
       white-space: nowrap;
     }
     .static-bucket-dialog {
-      width: min(860px, 94vw) !important;
+      width: min(1360px, 96vw) !important;
     }
     .static-bucket-dialog .el-dialog__body {
       max-height: 72vh;
@@ -721,7 +721,7 @@
       </template>
     </el-dialog>
 
-    <!-- 最近成功制品的固定桶来自后端制品证据，仅展示公开地址，不包含任何桶凭据。 -->
+    <!-- 最近成功制品的固定桶来自后端制品证据，展示公开根地址、本应用文件地址与对象时间，不包含任何桶凭据。 -->
     <el-dialog
       v-model="staticBucketDialogVisible"
       class="static-bucket-dialog"
@@ -753,19 +753,30 @@
         </el-descriptions-item>
       </el-descriptions>
 
+      <el-alert
+        v-if="staticBucketFileError"
+        :title="staticBucketFileError"
+        type="warning"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 12px;">
+      </el-alert>
+
       <el-table
         v-if="activeStaticBucketSnapshot.items.length"
+        v-loading="staticBucketFileLoading"
+        element-loading-text="正在读取各桶文件的最新时间"
         :data="activeStaticBucketSnapshot.items"
         border
         size="small">
         <el-table-column label="ID" prop="id" width="66"></el-table-column>
-        <el-table-column label="注入时桶名称 / 类型" min-width="190">
+        <el-table-column label="注入时桶名称 / 类型" min-width="180">
           <template #default="scope">
             <div>{{ scope.row.name || ('桶 #' + scope.row.id) }}</div>
             <div class="static-bucket-secondary">{{ staticBucketProviderLabel(scope.row) }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="注入时公开地址" min-width="290">
+        <el-table-column label="注入时公开地址" min-width="250">
           <template #default="scope">
             <el-link
               v-if="safeStaticBucketUrl(scope.row.domain)"
@@ -779,7 +790,27 @@
             <span v-else class="static-bucket-mono">{{ scope.row.domain || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="当前状态" min-width="178">
+        <el-table-column label="本应用文件地址" min-width="360">
+          <template #default="scope">
+            <el-link
+              v-if="safeStaticBucketUrl(scope.row.app_file_url)"
+              class="static-bucket-mono"
+              type="primary"
+              :href="safeStaticBucketUrl(scope.row.app_file_url)"
+              target="_blank"
+              rel="noopener noreferrer">
+              {{ scope.row.app_file_url }}
+            </el-link>
+            <span v-else class="static-bucket-mono">{{ scope.row.app_file_url || '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="文件最新更新时间" width="190">
+          <template #default="scope">
+            <div>{{ scope.row.app_file_updated_at || staticBucketFileStatusLabel(scope.row) }}</div>
+            <div v-if="scope.row.app_file_updated_at" class="static-bucket-secondary">北京时间</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="当前状态" min-width="170">
           <template #default="scope">
             <el-tag size="small" effect="plain" :type="staticBucketCurrentStateType(scope.row)">
               {{ staticBucketCurrentStateLabel(scope.row) }}
@@ -833,6 +864,9 @@
           none: { label: '尚无成功制品', type: 'info', alert: 'info' },
         });
         const staticBucketDialogVisible = ref(false);
+        const staticBucketFileLoading = ref(false);
+        const staticBucketFileError = ref('');
+        let staticBucketFileRequestId = 0;
         const activeStaticBucketOwner = reactive({ id: 0, name: '' });
         const activeStaticBucketSnapshot = reactive(normalizeStaticBucketSnapshot(null));
 
@@ -849,6 +883,17 @@
               provider: String(row.provider || ''),
               provider_label: String(row.provider_label || ''),
               domain: String(row.domain || ''),
+              app_file_key: String(row.app_file_key || ''),
+              app_file_url: String(row.app_file_url || ''),
+              app_file_present: row.app_file_present === 1 || row.app_file_present === '1'
+                ? 1
+                : (row.app_file_present === 0 || row.app_file_present === '0' ? 0 : null),
+              app_file_status: String(row.app_file_status || 'unchecked'),
+              app_file_last_modified: String(row.app_file_last_modified || ''),
+              app_file_updated_at: String(row.app_file_updated_at || ''),
+              app_file_size: Number(row.app_file_size) > 0 ? Number(row.app_file_size) : 0,
+              app_file_http_code: Number(row.app_file_http_code) > 0 ? Number(row.app_file_http_code) : 0,
+              app_file_metadata_source: String(row.app_file_metadata_source || ''),
               current_state: String(row.current_state || ''),
               current_name: String(row.current_name || ''),
               current_domain: String(row.current_domain || ''),
@@ -975,6 +1020,51 @@
           return 'info';
         }
 
+        function staticBucketFileStatusLabel(item) {
+          const status = String((item && item.app_file_status) || '').toLowerCase();
+          const httpCode = Number(item && item.app_file_http_code) || 0;
+          if (status === 'restricted') return '公开读取受限' + (httpCode ? '（HTTP ' + httpCode + '）' : '');
+          if (status === 'missing') return '文件不存在' + (httpCode ? '（HTTP ' + httpCode + '）' : '');
+          const labels = {
+            present: '对象存在，未返回时间',
+            check_failed: '文件时间读取失败',
+            check_timeout: '公开地址读取超时',
+            not_checked_limit: '本次未检查',
+            unsafe_address: '公开地址校验失败',
+            unavailable: '文件地址未记录',
+            unchecked: staticBucketFileLoading.value ? '正在读取…' : '待读取',
+          };
+          return labels[status] || '文件时间未返回';
+        }
+
+        /** 打开弹窗后只查当前应用和快照桶，不扫描其他应用对象。 */
+        async function loadStaticBucketFiles(appId) {
+          const requestId = ++staticBucketFileRequestId;
+          staticBucketFileLoading.value = true;
+          staticBucketFileError.value = '';
+          try {
+            const response = await fetch('/api/index.php?module=app&method=getAppStaticBucketFiles', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ app_id: appId }),
+            });
+            const json = await response.json();
+            if (json.code !== 200 || !json.data || !json.data.static_injected_buckets) {
+              throw new Error(json.message || '文件信息读取失败');
+            }
+            if (requestId !== staticBucketFileRequestId || Number(activeStaticBucketOwner.id) !== appId) return;
+            replaceReactiveObject(
+              activeStaticBucketSnapshot,
+              normalizeStaticBucketSnapshot(json.data.static_injected_buckets)
+            );
+          } catch (error) {
+            if (requestId !== staticBucketFileRequestId || Number(activeStaticBucketOwner.id) !== appId) return;
+            staticBucketFileError.value = '各桶的完整文件地址已保留；最新时间读取失败，请关闭后重新打开。';
+          } finally {
+            if (requestId === staticBucketFileRequestId) staticBucketFileLoading.value = false;
+          }
+        }
+
         function openStaticBucketDetails(row) {
           replaceReactiveObject(activeStaticBucketOwner, {
             id: Number(row && row.id) || 0,
@@ -982,6 +1072,8 @@
           });
           replaceReactiveObject(activeStaticBucketSnapshot, normalizeStaticBucketSnapshot(row && row.static_injected_buckets));
           staticBucketDialogVisible.value = true;
+          staticBucketFileError.value = '';
+          if (activeStaticBucketOwner.id > 0) loadStaticBucketFiles(Number(activeStaticBucketOwner.id));
         }
 
         // ===== URL 注入（管理员专用） =====
@@ -2069,6 +2161,8 @@ onMounted(() => {
           urlInjectForm,
           submitUrlInject,
           staticBucketDialogVisible,
+          staticBucketFileLoading,
+          staticBucketFileError,
           activeStaticBucketOwner,
           activeStaticBucketSnapshot,
           staticBucketStateLabel,
@@ -2088,6 +2182,7 @@ onMounted(() => {
           staticBucketCurrentChanged,
           staticBucketCurrentStateLabel,
           staticBucketCurrentStateType,
+          staticBucketFileStatusLabel,
           openStaticBucketDetails,
 
 
