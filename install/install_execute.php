@@ -25,7 +25,7 @@ function installDatabase(PDO $pdo)
 
         $appStoreFields = [
             'name'           => "VARCHAR(100) NOT NULL DEFAULT '' COMMENT '应用名称'",
-            'subtitle'       => "VARCHAR(100) DEFAULT NULL DEFAULT '' COMMENT '应用说明，用于副标题显示'",
+            'subtitle'       => "VARCHAR(100) DEFAULT NULL COMMENT '应用说明，用于副标题显示'",
             'version'        => "VARCHAR(100) DEFAULT NULL COMMENT '底包版本'",
             'download1_text' => "VARCHAR(1024) NOT NULL COMMENT '下载地址1名称'",
             'download1_url'  => "VARCHAR(1024) NOT NULL COMMENT '下载地址1url'",
@@ -505,6 +505,39 @@ function installDatabase(PDO $pdo)
         addForeignKeyIfNotExist($pdo, $taskTable, 'template_id', $templateTable, 'id');
         addForeignKeyIfNotExist($pdo, $taskTable, 'apk_id', $apkTable, 'id');
         addForeignKeyIfNotExist($pdo, $taskTable, 'sign_id', $signTable, 'id');
+
+        // --------------------
+        // 6.1 注入制品固定种子桶快照
+        // --------------------
+        // 注入任务会按保留天数清理，快照需要继续回答历史 APK 实际写入的桶。
+        // 因此只保留 task_id + attempt_no 唯一关联，不创建会随任务删除的外键。
+        $bucketSnapshotTable = $tablePrefix . 'inject_bucket_snapshot';
+        $pdo->exec("CREATE TABLE IF NOT EXISTS `$bucketSnapshotTable` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `task_id` INT NOT NULL COMMENT '注入任务ID，任务清理后仍保留',
+            `attempt_no` INT UNSIGNED NOT NULL DEFAULT 1 COMMENT '同一任务的构建尝试序号',
+            `apk_id` INT NOT NULL COMMENT '应用ID',
+            `user_id` INT NOT NULL COMMENT '应用归属用户ID',
+            `status` VARCHAR(24) NOT NULL DEFAULT 'prepared' COMMENT 'prepared/success/failed',
+            `selection_mode` VARCHAR(32) NOT NULL DEFAULT 'global_inject' COMMENT 'explicit_ids/global_inject',
+            `evidence` VARCHAR(32) NOT NULL DEFAULT 'runtime_snapshot' COMMENT 'runtime_snapshot/legacy_inferred/unknown',
+            `buckets_json` JSON NOT NULL COMMENT '注入时桶ID、名称、Provider与公开域名快照，不含凭据',
+            `exact_buckets_csv` MEDIUMTEXT NOT NULL COMMENT '实际用于替换 [#BUCKETS#] 的公开域名串',
+            `replacement_count` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '实际替换的占位符数',
+            `template_id` INT NOT NULL DEFAULT 0 COMMENT '壳模板ID快照',
+            `template_version` VARCHAR(50) NOT NULL DEFAULT '' COMMENT '壳模板版本快照',
+            `artifact_path` VARCHAR(1024) NOT NULL DEFAULT '' COMMENT '成功制品路径快照',
+            `artifact_sha256` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '' COMMENT '成功制品 SHA-256',
+            `prepared_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '桶快照解析时间',
+            `completed_at` DATETIME DEFAULT NULL COMMENT '制品成功时间',
+            `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `uniq_snapshot_task_attempt` (`task_id`,`attempt_no`),
+            KEY `idx_snapshot_apk_status_completed` (`apk_id`,`status`,`completed_at`,`id`),
+            KEY `idx_snapshot_user_completed` (`user_id`,`completed_at`,`id`),
+            KEY `idx_snapshot_status_prepared` (`status`,`prepared_at`),
+            KEY `idx_snapshot_artifact_sha256` (`artifact_sha256`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='注入制品固定种子桶快照'");
         
         
         

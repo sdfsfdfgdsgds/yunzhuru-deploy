@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . '/../api/utils/BucketFeature.php';
+
 /**
  * 注入逻辑核心入口
  * @param PDO $pdo 已连接的 PDO 实例
@@ -32,6 +34,7 @@ function handleInjectionTasks(PDO $pdo, $oss)
             s.cert_password AS keypass,
             tmp.path AS shell_path,
             tmp.className,
+            tmp.version AS template_version,
             u.vip_expire_time
         FROM cainiao_inject_task t
         LEFT JOIN cainiao_apk a ON t.apk_id = a.id
@@ -48,6 +51,10 @@ function handleInjectionTasks(PDO $pdo, $oss)
     if (!$task) {
         return;
     }
+
+    // 重试复用原任务 ID。每轮 worker 开始时清除进程内旧尝试号，
+    // 桶阶段会分配新 attempt；若在桶阶段前失败，终态 helper 也会新建尝试。
+    bucketSnapshotRuntimeAttempt((int)$task['id'], 0);
 
 
     // 检查必要文件路径
@@ -607,25 +614,76 @@ function handleInjectionTasks(PDO $pdo, $oss)
         }
     }
     echo "==================================存储桶域名注入\n";
+    $snapshotBucketRows = [];
+    $snapshotSelectionMode = 'global_inject';
+    $snapshotReplacementCount = 0;
+    $snapshotPrepared = false;
     try {
         // 优先使用任务指定的桶，为空则回退到全局 inject=1
         $taskBucketIds = !empty($task['bucket_ids']) ? json_decode($task['bucket_ids'], true) : null;
         if (is_array($taskBucketIds) && !empty($taskBucketIds)) {
+            $snapshotSelectionMode = 'explicit_ids';
             $placeholders = implode(',', array_fill(0, count($taskBucketIds), '?'));
-            $bucketStmt = $pdo->prepare("SELECT domain FROM cainiao_s3_bucket WHERE id IN ($placeholders) AND enabled = 1 ORDER BY id ASC");
+            // 这是构建制品的唯一桶查询：域名替换和快照共用同一批行，
+            // 避免两次查询之间的管理修改产生“制品与记录不一致”。
+            $bucketStmt = $pdo->prepare("SELECT id, name, provider, domain FROM cainiao_s3_bucket WHERE id IN ($placeholders) AND enabled = 1 ORDER BY id ASC");
             $bucketStmt->execute(array_map('intval', $taskBucketIds));
         } else {
-            $bucketStmt = $pdo->query("SELECT domain FROM cainiao_s3_bucket WHERE inject = 1 ORDER BY id ASC");
+            $bucketStmt = $pdo->query("SELECT id, name, provider, domain FROM cainiao_s3_bucket WHERE inject = 1 ORDER BY id ASC");
         }
-        $bucketDomains = $bucketStmt->fetchAll(PDO::FETCH_COLUMN);
+        $queriedBucketRows = $bucketStmt->fetchAll(PDO::FETCH_ASSOC);
+        $publicSnapshotRows = bucketNormalizePublicSnapshotRows($queriedBucketRows);
+        $snapshotBucketRows = [];
+        $bucketDomains = [];
+        foreach ($publicSnapshotRows as $bucketRow) {
+            $domain = (string)($bucketRow['domain'] ?? '');
+            if ($domain === '') continue;
+            // 只有真正进入 BUCKETS 字符串的行才进入快照，确保页面桶数
+            // 与 APK 实际写入集合逐项一致；旧协议地址仍按原值留证。
+            $bucketDomains[] = $domain;
+            $snapshotBucketRows[] = $bucketRow;
+        }
+        $bucketsStr = implode(',', $bucketDomains);
         if (!empty($bucketDomains)) {
-            $bucketsStr = implode(',', $bucketDomains);
-            replace_config_buckets($de_apk1, $bucketsStr);
-            echo "已注入 " . count($bucketDomains) . " 个存储桶域名\n";
+            $snapshotReplacementCount = replace_config_buckets($de_apk1, $bucketsStr);
+            echo "已解析 " . count($bucketDomains) . " 个存储桶域名，实际替换 {$snapshotReplacementCount} 处占位符\n";
         } else {
             echo "无启用的存储桶，跳过\n";
         }
+        bucketPrepareInjectSnapshot(
+            $pdo,
+            (int)$task['id'],
+            (int)$task['apk_id'],
+            (int)$task['user_id'],
+            $snapshotSelectionMode,
+            $snapshotBucketRows,
+            $snapshotReplacementCount,
+            (int)$task['template_id'],
+            (string)($task['template_version'] ?? ''),
+            $bucketsStr
+        );
+        $snapshotPrepared = true;
     } catch (\Throwable $e) {
+        // 替换或快照某一步异常时仍尽量固化同一次查询证据，
+        // 后续终态会将该记录标成 success/failed，不影响原有注入主链路。
+        if (!$snapshotPrepared) {
+            try {
+                bucketPrepareInjectSnapshot(
+                    $pdo,
+                    (int)$task['id'],
+                    (int)$task['apk_id'],
+                    (int)$task['user_id'],
+                    $snapshotSelectionMode,
+                    $snapshotBucketRows,
+                    $snapshotReplacementCount,
+                    (int)$task['template_id'],
+                    (string)($task['template_version'] ?? ''),
+                    isset($bucketsStr) ? (string)$bucketsStr : ''
+                );
+            } catch (\Throwable $snapshotError) {
+                echo "配置桶快照准备失败: " . $snapshotError->getMessage() . "\n";
+            }
+        }
         echo "存储桶域名注入失败（不影响注入流程）: " . $e->getMessage() . "\n";
     }
     echo "==================================设备码计算方式\n";
@@ -5544,6 +5602,16 @@ function updateTaskStatus(PDO $pdo, int $taskId, string $status)
 
     echo "\n[" . date('Y-m-d H:i:s') . "] 已更新任务 #$taskId 状态为：$status\n";
 
+    // 快照终态与任务终态使用同一个收口，覆盖所有编译、签名、
+    // 下载和注入失败分支。快照写入异常只记日志，不改写主任务结果。
+    if ($status === '编译成功' || stripos($status, '失败') !== false) {
+        try {
+            bucketFinalizeInjectSnapshot($pdo, $taskId, $status);
+        } catch (\Throwable $snapshotError) {
+            echo "[BucketSnapshot] 任务 {$taskId} 终态快照写入失败: " . $snapshotError->getMessage() . "\n";
+        }
+    }
+
     // 编译成功后自动推送配置到存储桶
     if ($status === '编译成功') {
         try {
@@ -6091,10 +6159,13 @@ function replace_config_domains($basePath, $domains) {
     }
 }
 
-// 注入存储桶域名到壳配置（替换 [#BUCKETS#] 占位符）
-function replace_config_buckets($basePath, $buckets) {
+// 注入存储桶域名到壳配置（替换 [#BUCKETS#] 占位符），返回实际替换次数。
+function replace_config_buckets($basePath, $buckets): int {
     $basePath = rtrim($basePath, '/');
+    if (!is_dir($basePath)) return 0;
     $dirs = scandir($basePath);
+    if ($dirs === false) return 0;
+    $replacementCount = 0;
 
     foreach ($dirs as $dir) {
         if ($dir === '.' || $dir === '..') continue;
@@ -6113,15 +6184,24 @@ function replace_config_buckets($basePath, $buckets) {
                 if ($file->getFilename() === $configSmali) {
                     $filePath = $file->getPathname();
                     $content = file_get_contents($filePath);
+                    if ($content === false) {
+                        throw new RuntimeException("读取桶配置占位文件失败: {$filePath}");
+                    }
+                    $occurrences = substr_count($content, '[#BUCKETS#]');
+                    if ($occurrences <= 0) continue;
 
                     $newContent = str_replace('[#BUCKETS#]', $buckets, $content);
-
-                    file_put_contents($filePath, $newContent);
-                    echo "已替换 BUCKETS: $filePath\n";
+                    $written = file_put_contents($filePath, $newContent);
+                    if ($written === false || $written !== strlen($newContent)) {
+                        throw new RuntimeException("写入桶配置占位文件失败: {$filePath}");
+                    }
+                    $replacementCount += $occurrences;
+                    echo "已替换 BUCKETS: $filePath（{$occurrences} 处）\n";
                 }
             }
         }
     }
+    return $replacementCount;
 }
 
 // 开启壳端DNS池过污染（替换 [#DNS#] 占位符）

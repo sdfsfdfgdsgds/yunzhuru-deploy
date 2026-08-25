@@ -392,6 +392,957 @@ if (!function_exists('bucketMigrateLegacyProviderLabels')) {
     }
 }
 
+if (!function_exists('ensureInjectBucketSnapshotSchema')) {
+    /**
+     * 初始化注入制品的配置桶快照表。
+     *
+     * 快照表故意不建立任务、应用或桶外键：注入任务会按保留天数清理，
+     * 桶管理记录也可能被删除，而制品当时写入的公开地址需要独立保留。
+     */
+    function ensureInjectBucketSnapshotSchema(PDO $pdo): void {
+        static $ready = [];
+        $key = spl_object_hash($pdo);
+        if (!empty($ready[$key])) return;
+        if ((string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') {
+            $ready[$key] = true;
+            return;
+        }
+
+        $pdo->exec("CREATE TABLE IF NOT EXISTS `cainiao_inject_bucket_snapshot` (
+          `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+          `task_id` int NOT NULL,
+          `attempt_no` int unsigned NOT NULL DEFAULT 1,
+          `apk_id` int NOT NULL,
+          `user_id` int NOT NULL,
+          `status` varchar(24) NOT NULL DEFAULT 'prepared',
+          `selection_mode` varchar(32) NOT NULL DEFAULT 'global_inject',
+          `evidence` varchar(32) NOT NULL DEFAULT 'runtime_snapshot',
+          `buckets_json` json NOT NULL,
+          `exact_buckets_csv` mediumtext NOT NULL,
+          `replacement_count` int unsigned NOT NULL DEFAULT 0,
+          `template_id` int NOT NULL DEFAULT 0,
+          `template_version` varchar(50) NOT NULL DEFAULT '',
+          `artifact_path` varchar(1024) NOT NULL DEFAULT '',
+          `artifact_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '',
+          `prepared_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          `completed_at` datetime DEFAULT NULL,
+          `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `uniq_snapshot_task_attempt` (`task_id`,`attempt_no`),
+          KEY `idx_snapshot_apk_status_completed` (`apk_id`,`status`,`completed_at`,`id`),
+          KEY `idx_snapshot_user_completed` (`user_id`,`completed_at`,`id`),
+          KEY `idx_snapshot_status_prepared` (`status`,`prepared_at`),
+          KEY `idx_snapshot_artifact_sha256` (`artifact_sha256`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='注入制品静态配置桶快照'");
+
+        $ready[$key] = true;
+    }
+}
+
+if (!function_exists('bucketNormalizePublicSnapshotRows')) {
+    /**
+     * 将同一次桶查询结果归一为可持久的公开快照。
+     * 仅保留 ID、名称、Provider 和公开读域名，任何凭据都不进入快照。
+     */
+    function bucketNormalizePublicSnapshotRows(array $bucketRows, array $currentRows = []): array {
+        $attachCurrentState = func_num_args() >= 2;
+        $normalized = [];
+        $seen = [];
+        foreach ($bucketRows as $row) {
+            if (!is_array($row)) continue;
+            $id = (int)($row['id'] ?? 0);
+            if ($id <= 0 || isset($seen[$id])) continue;
+            $seen[$id] = true;
+            $normalized[] = [
+                'id' => $id,
+                // 快照必须保留构建当时的原值，以后改名或换域名不回写历史。
+                'name' => (string)($row['name'] ?? ''),
+                'provider' => (string)($row['provider'] ?? ''),
+                'domain' => (string)($row['domain'] ?? ''),
+            ];
+        }
+        return $attachCurrentState
+            ? bucketMergeSnapshotCurrentState($normalized, $currentRows)
+            : $normalized;
+    }
+}
+
+if (!function_exists('bucketMergeSnapshotCurrentState')) {
+    /**
+     * 纯函数：在不改写快照 name/provider/domain 的前提下附加当前状态。
+     * 当前桶已删除时标记 deleted；已改名或改域名时只写 current_* 和 changed。
+     */
+    function bucketMergeSnapshotCurrentState(array $snapshotRows, array $currentRows): array {
+        $snapshots = bucketNormalizePublicSnapshotRows($snapshotRows);
+        $currentMap = [];
+        foreach ($currentRows as $rawCurrent) {
+            if (!is_array($rawCurrent)) continue;
+            $normalizedCurrent = bucketNormalizePublicSnapshotRows([$rawCurrent]);
+            if (empty($normalizedCurrent)) continue;
+            $current = $normalizedCurrent[0];
+            $current['enabled'] = array_key_exists('enabled', $rawCurrent)
+                ? ((int)$rawCurrent['enabled'] === 1 ? 1 : 0)
+                : 1;
+            $currentMap[(int)$current['id']] = $current;
+        }
+
+        $result = [];
+        foreach ($snapshots as $snapshot) {
+            $id = (int)$snapshot['id'];
+            $snapshot['provider_label'] = (string)$snapshot['provider'] !== ''
+                ? bucketProviderLabel((string)$snapshot['provider'])
+                : '';
+            if (!isset($currentMap[$id])) {
+                $snapshot['current_name'] = '';
+                $snapshot['current_provider'] = '';
+                $snapshot['current_domain'] = '';
+                $snapshot['current_state'] = 'deleted';
+                $snapshot['state'] = 'deleted';
+                $snapshot['changed'] = 1;
+                $result[] = $snapshot;
+                continue;
+            }
+            $current = $currentMap[$id];
+            $snapshot['current_name'] = (string)$current['name'];
+            $snapshot['current_provider'] = (string)$current['provider'];
+            $snapshot['current_domain'] = (string)$current['domain'];
+            $changed = (
+                (string)$snapshot['name'] !== (string)$current['name']
+                || (string)$snapshot['provider'] !== (string)$current['provider']
+                || (string)$snapshot['domain'] !== (string)$current['domain']
+            ) ? 1 : 0;
+            // 停用会直接影响当前可用性，优先展示；changed 字段
+            // 仍保留改名或换域名信息，页面会同时展示新值。
+            if ((int)$current['enabled'] !== 1) {
+                $currentState = 'disabled';
+            } elseif ($changed === 1) {
+                $currentState = 'changed';
+            } else {
+                $currentState = 'current';
+            }
+            $snapshot['current_state'] = $currentState;
+            $snapshot['state'] = $currentState;
+            $snapshot['changed'] = $changed;
+            $result[] = $snapshot;
+        }
+        return $result;
+    }
+}
+
+if (!function_exists('bucketDecodeLegacyTaskBucketIds')) {
+    /**
+     * 按 worker 的历史判断解析 bucket_ids。
+     * 非空 JSON 数组只能证明“当时选择过”；NULL、[] 和异常 JSON
+     * 会触发当时的全局 inject 回退，具体历史集合没有留存。
+     */
+    function bucketDecodeLegacyTaskBucketIds($rawBucketIds): array {
+        $decoded = is_array($rawBucketIds)
+            ? $rawBucketIds
+            : json_decode((string)$rawBucketIds, true);
+        if (!is_array($decoded) || empty($decoded)) {
+            return [
+                'selection_mode' => 'global_inject',
+                'evidence' => 'unknown',
+                'bucket_ids' => [],
+            ];
+        }
+
+        $ids = [];
+        foreach ($decoded as $value) {
+            $id = (int)$value;
+            if ($id > 0) $ids[$id] = $id;
+        }
+        return [
+            'selection_mode' => 'explicit_ids',
+            'evidence' => 'legacy_inferred',
+            'bucket_ids' => array_values($ids),
+        ];
+    }
+}
+
+if (!function_exists('bucketSnapshotLatestAttempt')) {
+    /** 读取某个任务最新的构建尝试，供重试保留旧成功制品使用。 */
+    function bucketSnapshotLatestAttempt(PDO $pdo, int $taskId): ?array {
+        if ($taskId <= 0) return null;
+        $stmt = $pdo->prepare("SELECT id, task_id, attempt_no, status, completed_at
+            FROM cainiao_inject_bucket_snapshot
+            WHERE task_id=:task_id
+            ORDER BY attempt_no DESC, id DESC
+            LIMIT 1");
+        $stmt->execute([':task_id' => $taskId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return is_array($row) ? $row : null;
+    }
+}
+
+if (!function_exists('bucketSnapshotRuntimeAttempt')) {
+    /**
+     * 记住当前 worker 进程里某任务正在处理的尝试号。
+     * 传入 0 会在新一轮任务开始时清除旧记忆。
+     */
+    function bucketSnapshotRuntimeAttempt(int $taskId, ?int $attemptNo = null): int {
+        static $attempts = [];
+        if ($taskId <= 0) return 0;
+        if ($attemptNo !== null) {
+            if ($attemptNo > 0) {
+                $attempts[$taskId] = $attemptNo;
+            } else {
+                unset($attempts[$taskId]);
+            }
+        }
+        return (int)($attempts[$taskId] ?? 0);
+    }
+}
+
+if (!function_exists('bucketPrepareInjectSnapshot')) {
+    /**
+     * 在修改壳配置时保存运行时快照。同一任务重试会新建尝试号，
+     * 已成功制品保持不变；同一次未完成构建的重入则幂等更新 prepared 记录。
+     */
+    function bucketPrepareInjectSnapshot(
+        PDO $pdo,
+        int $taskId,
+        int $apkId,
+        int $userId,
+        string $selectionMode,
+        array $bucketRows,
+        int $replacementCount,
+        int $templateId = 0,
+        string $templateVersion = '',
+        string $exactBucketsCsv = ''
+    ): int {
+        if ($taskId <= 0 || $apkId <= 0 || $userId <= 0) {
+            throw new InvalidArgumentException('配置桶快照的任务、应用或用户 ID 错误');
+        }
+        ensureInjectBucketSnapshotSchema($pdo);
+        if ((string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') return 0;
+
+        $selectionMode = in_array($selectionMode, ['explicit_ids', 'global_inject'], true)
+            ? $selectionMode
+            : 'global_inject';
+        // 列表必须与真正写入 APK 的行一一对应。旧数据若含非标准
+        // 公开地址仍保留原值；前端只将 HTTP(S) 渲染为可点击链接。
+        $buckets = bucketNormalizePublicSnapshotRows($bucketRows);
+        $bucketsJson = json_encode($buckets, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($bucketsJson === false) {
+            throw new RuntimeException('配置桶公开快照序列化失败');
+        }
+        if (func_num_args() < 10) {
+            $domains = [];
+            foreach ($buckets as $bucket) {
+                if ((string)$bucket['domain'] !== '') $domains[] = (string)$bucket['domain'];
+            }
+            $exactBucketsCsv = implode(',', $domains);
+        }
+
+        $latest = bucketSnapshotLatestAttempt($pdo, $taskId);
+        $attemptNo = $latest && (string)$latest['status'] === 'prepared'
+            ? (int)$latest['attempt_no']
+            : (($latest ? (int)$latest['attempt_no'] : 0) + 1);
+        if ($attemptNo <= 0) $attemptNo = 1;
+
+        $stmt = $pdo->prepare("INSERT INTO cainiao_inject_bucket_snapshot
+            (task_id, attempt_no, apk_id, user_id, status, selection_mode, evidence, buckets_json,
+             exact_buckets_csv, replacement_count, template_id, template_version,
+             artifact_path, artifact_sha256, prepared_at, completed_at)
+            VALUES
+            (:task_id, :attempt_no, :apk_id, :user_id, 'prepared', :selection_mode, 'runtime_snapshot', CAST(:buckets_json AS JSON),
+             :exact_buckets_csv, :replacement_count, :template_id, :template_version,
+             '', '', NOW(), NULL)
+            ON DUPLICATE KEY UPDATE
+              apk_id=VALUES(apk_id), user_id=VALUES(user_id), status='prepared',
+              selection_mode=VALUES(selection_mode), evidence='runtime_snapshot',
+              buckets_json=VALUES(buckets_json), exact_buckets_csv=VALUES(exact_buckets_csv),
+              replacement_count=VALUES(replacement_count), template_id=VALUES(template_id),
+              template_version=VALUES(template_version), artifact_path='', artifact_sha256='',
+              prepared_at=NOW(), completed_at=NULL");
+        $stmt->execute([
+            ':task_id' => $taskId,
+            ':attempt_no' => $attemptNo,
+            ':apk_id' => $apkId,
+            ':user_id' => $userId,
+            ':selection_mode' => $selectionMode,
+            ':buckets_json' => $bucketsJson,
+            ':exact_buckets_csv' => $exactBucketsCsv,
+            ':replacement_count' => max(0, $replacementCount),
+            ':template_id' => max(0, $templateId),
+            ':template_version' => mb_substr($templateVersion, 0, 50, 'UTF-8'),
+        ]);
+        bucketSnapshotRuntimeAttempt($taskId, $attemptNo);
+        return $attemptNo;
+    }
+}
+
+if (!function_exists('bucketSnapshotArtifactEvidence')) {
+    /** 读取注入产物路径并生成 SHA-256；路径只从 release 目录取文件名。 */
+    function bucketSnapshotArtifactEvidence(string $storedPath): array {
+        $storedPath = trim($storedPath);
+        if ($storedPath === '') return ['path' => '', 'sha256' => ''];
+        $fileName = basename(str_replace('\\', '/', $storedPath));
+        $absolutePath = dirname(__DIR__, 2) . '/release/' . $fileName;
+        $sha256 = is_file($absolutePath) ? (string)hash_file('sha256', $absolutePath) : '';
+        return ['path' => $storedPath, 'sha256' => $sha256];
+    }
+}
+
+if (!function_exists('bucketFinalizeInjectSnapshot')) {
+    /**
+     * 为终态任务写入 success/failed 证据。
+     * 如果任务在到达桶查询前就终止，则创建 evidence=unknown 的空快照，
+     * 避免失败任务被错认为“没有记录”。
+     */
+    function bucketFinalizeInjectSnapshot(PDO $pdo, int $taskId, string $taskStatus): void {
+        if ($taskId <= 0) return;
+        $terminalStatus = $taskStatus === '编译成功'
+            ? 'success'
+            : (stripos($taskStatus, '失败') !== false ? 'failed' : '');
+        if ($terminalStatus === '') return;
+
+        ensureInjectBucketSnapshotSchema($pdo);
+        if ((string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') return;
+
+        $stmt = $pdo->prepare("SELECT t.id, t.apk_id, t.user_id, t.template_id, t.bucket_ids,
+                t.injected_apk, COALESCE(tmp.version, '') AS template_version
+            FROM cainiao_inject_task t
+            LEFT JOIN cainiao_template tmp ON tmp.id=t.template_id
+            WHERE t.id=:id LIMIT 1");
+        $stmt->execute([':id' => $taskId]);
+        $task = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$task) return;
+
+        $runtimeAttempt = bucketSnapshotRuntimeAttempt($taskId);
+        $target = null;
+        if ($runtimeAttempt > 0) {
+            $targetStmt = $pdo->prepare("SELECT id, task_id, attempt_no, status, completed_at
+                FROM cainiao_inject_bucket_snapshot
+                WHERE task_id=:task_id AND attempt_no=:attempt_no
+                LIMIT 1");
+            $targetStmt->execute([':task_id' => $taskId, ':attempt_no' => $runtimeAttempt]);
+            $targetRow = $targetStmt->fetch(PDO::FETCH_ASSOC);
+            if (is_array($targetRow)) $target = $targetRow;
+        }
+        if ($target === null) $target = bucketSnapshotLatestAttempt($pdo, $taskId);
+
+        // 有 prepared 记录时终结当前尝试。早期失败尚未到达桶解析阶段时，
+        // 在最新终态之后新建一次 unknown 尝试，不覆盖上一份成功 APK。
+        if ($target === null || ((string)$target['status'] !== 'prepared' && $runtimeAttempt <= 0)) {
+            $attemptNo = (($target ? (int)$target['attempt_no'] : 0) + 1);
+            if ($attemptNo <= 0) $attemptNo = 1;
+            $legacy = bucketDecodeLegacyTaskBucketIds($task['bucket_ids'] ?? null);
+            $emptyJson = '[]';
+            $insert = $pdo->prepare("INSERT INTO cainiao_inject_bucket_snapshot
+                (task_id, attempt_no, apk_id, user_id, status, selection_mode, evidence, buckets_json,
+                 exact_buckets_csv, replacement_count, template_id, template_version,
+                 artifact_path, artifact_sha256, prepared_at, completed_at)
+                VALUES
+                (:task_id, :attempt_no, :apk_id, :user_id, 'prepared', :selection_mode, 'unknown', CAST(:buckets_json AS JSON),
+                 '', 0, :template_id, :template_version, '', '', NOW(), NULL)");
+            $insert->execute([
+                ':task_id' => $taskId,
+                ':attempt_no' => $attemptNo,
+                ':apk_id' => (int)$task['apk_id'],
+                ':user_id' => (int)$task['user_id'],
+                ':selection_mode' => (string)$legacy['selection_mode'],
+                ':buckets_json' => $emptyJson,
+                ':template_id' => (int)$task['template_id'],
+                ':template_version' => mb_substr((string)$task['template_version'], 0, 50, 'UTF-8'),
+            ]);
+            $target = ['attempt_no' => $attemptNo, 'status' => 'prepared'];
+        }
+        $attemptNo = (int)$target['attempt_no'];
+        bucketSnapshotRuntimeAttempt($taskId, $attemptNo);
+
+        $artifact = $terminalStatus === 'success'
+            ? bucketSnapshotArtifactEvidence((string)($task['injected_apk'] ?? ''))
+            : ['path' => '', 'sha256' => ''];
+        $update = $pdo->prepare("UPDATE cainiao_inject_bucket_snapshot
+            SET status=:status, artifact_path=:artifact_path, artifact_sha256=:artifact_sha256,
+                completed_at=NOW()
+            WHERE task_id=:task_id AND attempt_no=:attempt_no");
+        $update->execute([
+            ':status' => $terminalStatus,
+            ':artifact_path' => (string)$artifact['path'],
+            ':artifact_sha256' => (string)$artifact['sha256'],
+            ':task_id' => $taskId,
+            ':attempt_no' => $attemptNo,
+        ]);
+    }
+}
+
+if (!function_exists('bucketStartInjectAttempt')) {
+    /**
+     * 为重试立即创建新的待处理尝试。
+     *
+     * 重试接口会复用原任务 ID；这里先分配 attempt_no，任务列表便会立刻
+     * 展示“待生成”，而上一份 success 快照继续作为应用最近成功制品保留。
+     */
+    function bucketStartInjectAttempt(PDO $pdo, int $taskId): int {
+        if ($taskId <= 0) {
+            throw new InvalidArgumentException('配置桶快照的任务 ID 错误');
+        }
+        ensureInjectBucketSnapshotSchema($pdo);
+        if ((string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') return 0;
+
+        $latest = bucketSnapshotLatestAttempt($pdo, $taskId);
+        if ($latest && (string)$latest['status'] === 'prepared') {
+            return (int)$latest['attempt_no'];
+        }
+
+        // Web 重试请求和常驻 worker 通常属于不同进程；清理本进程缓存
+        // 也让测试、CLI 和未来同进程调度始终指向新尝试。
+        bucketSnapshotRuntimeAttempt($taskId, 0);
+
+        $taskStmt = $pdo->prepare("SELECT t.id, t.apk_id, t.user_id, t.bucket_ids, t.template_id,
+                COALESCE(tmp.version, '') AS template_version
+            FROM cainiao_inject_task t
+            LEFT JOIN cainiao_template tmp ON tmp.id=t.template_id
+            WHERE t.id=:id LIMIT 1");
+        $taskStmt->execute([':id' => $taskId]);
+        $task = $taskStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$task) {
+            throw new RuntimeException('注入任务不存在');
+        }
+
+        $attemptNo = (($latest ? (int)$latest['attempt_no'] : 0) + 1);
+        if ($attemptNo <= 0) $attemptNo = 1;
+        $legacy = bucketDecodeLegacyTaskBucketIds($task['bucket_ids'] ?? null);
+        $insert = $pdo->prepare("INSERT INTO cainiao_inject_bucket_snapshot
+            (task_id, attempt_no, apk_id, user_id, status, selection_mode, evidence, buckets_json,
+             exact_buckets_csv, replacement_count, template_id, template_version,
+             artifact_path, artifact_sha256, prepared_at, completed_at)
+            VALUES
+            (:task_id, :attempt_no, :apk_id, :user_id, 'prepared', :selection_mode, 'unknown', CAST(:buckets_json AS JSON),
+             '', 0, :template_id, :template_version, '', '', NOW(), NULL)");
+        $insert->execute([
+            ':task_id' => $taskId,
+            ':attempt_no' => $attemptNo,
+            ':apk_id' => (int)$task['apk_id'],
+            ':user_id' => (int)$task['user_id'],
+            ':selection_mode' => (string)$legacy['selection_mode'],
+            ':buckets_json' => '[]',
+            ':template_id' => (int)$task['template_id'],
+            ':template_version' => mb_substr((string)$task['template_version'], 0, 50, 'UTF-8'),
+        ]);
+        return $attemptNo;
+    }
+}
+
+if (!function_exists('bucketSnapshotDecodeBucketsJson')) {
+    /** 解析数据库快照 JSON，异常数据按空数组处理。 */
+    function bucketSnapshotDecodeBucketsJson($value): array {
+        $decoded = is_array($value) ? $value : json_decode((string)$value, true);
+        return is_array($decoded) ? bucketNormalizePublicSnapshotRows($decoded) : [];
+    }
+}
+
+if (!function_exists('bucketSnapshotSetDefaults')) {
+    /** 为列表行写入统一的静态桶字段。 */
+    function bucketSnapshotSetDefaults(array &$row): void {
+        $row['static_injected_buckets'] = [
+            'state' => 'none',
+            'source' => 'unknown',
+            'evidence' => 'unknown',
+            'exact' => 0,
+            'status' => '',
+            'selection_mode' => 'global_inject',
+            'replacement_count' => 0,
+            'task_id' => 0,
+            'attempt_no' => 0,
+            'template_version' => '',
+            'completed_at' => '',
+            'artifact_path' => '',
+            'artifact_sha256' => '',
+            'count' => 0,
+            'items' => [],
+        ];
+        $row['static_injected_bucket_source'] = 'unknown';
+        $row['static_injected_bucket_exact'] = 0;
+        $row['static_injected_bucket_status'] = '';
+        $row['static_injected_bucket_selection_mode'] = 'global_inject';
+        $row['static_injected_bucket_replacement_count'] = 0;
+        $row['static_injected_bucket_task_id'] = 0;
+        $row['static_injected_bucket_attempt_no'] = 0;
+        $row['static_injected_bucket_artifact_path'] = '';
+        $row['static_injected_bucket_artifact_sha256'] = '';
+        $row['static_injected_bucket_completed_at'] = '';
+    }
+}
+
+if (!function_exists('bucketSnapshotApplyRecord')) {
+    /** 将一条持久快照映射到 API 列表行。 */
+    function bucketSnapshotApplyRecord(array &$row, array $snapshot, array $currentBuckets = []): void {
+        $source = trim((string)($snapshot['evidence'] ?? 'runtime_snapshot'));
+        if ($source === '') $source = 'runtime_snapshot';
+        $status = trim((string)($snapshot['status'] ?? ''));
+        $replacementCount = (int)($snapshot['replacement_count'] ?? 0);
+        $snapshotItems = bucketSnapshotDecodeBucketsJson($snapshot['buckets_json'] ?? '[]');
+        $currentRows = [];
+        foreach ($snapshotItems as $item) {
+            $id = (int)($item['id'] ?? 0);
+            if ($id > 0 && isset($currentBuckets[$id]) && empty($currentBuckets[$id]['_missing'])) {
+                $currentRows[] = $currentBuckets[$id];
+            }
+        }
+        $items = bucketNormalizePublicSnapshotRows($snapshotItems, $currentRows);
+        $snapshotDomains = [];
+        foreach ($snapshotItems as $snapshotItem) {
+            $domain = (string)($snapshotItem['domain'] ?? '');
+            if ($domain !== '') $snapshotDomains[] = $domain;
+        }
+        $expectedBucketsCsv = implode(',', $snapshotDomains);
+        $exactBucketsCsv = (string)($snapshot['exact_buckets_csv'] ?? '');
+        $runtimeSnapshotConsistent = !empty($snapshotItems)
+            && count($snapshotDomains) === count($snapshotItems)
+            && $expectedBucketsCsv !== ''
+            && hash_equals($expectedBucketsCsv, $exactBucketsCsv);
+        if ($status === 'failed') {
+            $state = 'failed';
+        } elseif ($status === 'prepared') {
+            $state = 'pending';
+        } elseif ($source === 'legacy_inferred') {
+            $state = 'legacy_inferred';
+        } elseif ($source === 'unknown') {
+            $state = 'unknown';
+        } elseif ($status === 'success' && $replacementCount > 0 && $runtimeSnapshotConsistent) {
+            $state = 'verified';
+        } elseif ($status === 'success') {
+            $state = 'unresolved_placeholder';
+        } else {
+            $state = 'unknown';
+        }
+        $exact = $state === 'verified' ? 1 : 0;
+        $payload = [
+            'state' => $state,
+            'source' => $source,
+            'evidence' => $source,
+            'exact' => $exact,
+            'status' => $status,
+            'selection_mode' => (string)($snapshot['selection_mode'] ?? 'global_inject'),
+            'replacement_count' => max(0, $replacementCount),
+            'task_id' => (int)($snapshot['task_id'] ?? 0),
+            'attempt_no' => (int)($snapshot['attempt_no'] ?? 1),
+            'template_version' => (string)($snapshot['template_version'] ?? ''),
+            'completed_at' => (string)($snapshot['completed_at'] ?? ''),
+            'artifact_path' => (string)($snapshot['artifact_path'] ?? ''),
+            'artifact_sha256' => (string)($snapshot['artifact_sha256'] ?? ''),
+            'count' => count($items),
+            'items' => $items,
+        ];
+        $row['static_injected_buckets'] = $payload;
+        $row['static_injected_bucket_source'] = $source;
+        $row['static_injected_bucket_exact'] = $exact;
+        $row['static_injected_bucket_status'] = $status;
+        $row['static_injected_bucket_selection_mode'] = (string)($snapshot['selection_mode'] ?? 'global_inject');
+        $row['static_injected_bucket_replacement_count'] = max(0, $replacementCount);
+        $row['static_injected_bucket_task_id'] = (int)($snapshot['task_id'] ?? 0);
+        $row['static_injected_bucket_attempt_no'] = (int)($snapshot['attempt_no'] ?? 1);
+        $row['static_injected_bucket_artifact_path'] = (string)($snapshot['artifact_path'] ?? '');
+        $row['static_injected_bucket_artifact_sha256'] = (string)($snapshot['artifact_sha256'] ?? '');
+        $row['static_injected_bucket_completed_at'] = (string)($snapshot['completed_at'] ?? '');
+    }
+}
+
+if (!function_exists('bucketSnapshotLoadCurrentRows')) {
+    /** 批量读取当前桶公开信息，仅用于无运行时快照的历史推断。 */
+    function bucketSnapshotLoadCurrentRows(PDO $pdo, array $bucketIds, bool $includeMissing = true): array {
+        $ids = [];
+        foreach ($bucketIds as $value) {
+            $id = (int)$value;
+            if ($id > 0) $ids[$id] = $id;
+        }
+        if (empty($ids)) return [];
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $pdo->prepare("SELECT id, name, provider, domain, enabled FROM cainiao_s3_bucket WHERE id IN ({$placeholders})");
+        $stmt->execute(array_values($ids));
+        $current = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $rawBucket) {
+            $normalized = bucketNormalizePublicSnapshotRows([$rawBucket]);
+            if (empty($normalized)) continue;
+            $bucket = $normalized[0];
+            // 当前状态也保留数据库原值，才能与 APK 快照准确比较。
+            // 页面仅把 HTTP(S) 地址渲染成链接，其余协议只作为文本证据。
+            $bucket['enabled'] = (int)($rawBucket['enabled'] ?? 0) === 1 ? 1 : 0;
+            $bucket['_missing'] = 0;
+            $current[(int)$bucket['id']] = $bucket;
+        }
+
+        $result = [];
+        foreach ($ids as $id) {
+            if (isset($current[$id])) {
+                $result[$id] = $current[$id];
+            } elseif ($includeMissing) {
+                $result[$id] = [
+                    'id' => $id,
+                    'name' => '已删除桶 #' . $id,
+                    'provider' => '',
+                    'domain' => '',
+                    'enabled' => 0,
+                    '_missing' => 1,
+                ];
+            }
+        }
+        return $result;
+    }
+}
+
+if (!function_exists('bucketBackfillLegacySnapshots')) {
+    /**
+     * 幂等回填现存成功任务。
+     *
+     * 回填只能证明历史 bucket_ids 的选择意图，所以始终使用
+     * legacy_inferred/unknown，replacement_count 保持 0，不会伪装成 worker 验证快照。
+     * 表与任务无外键，回填后任务过期清理不会删除快照。
+     */
+    function bucketBackfillLegacySnapshots(PDO $pdo, array $taskIds = []): array {
+        static $done = [];
+        $key = spl_object_hash($pdo);
+        $normalizedTaskIds = [];
+        foreach ($taskIds as $value) {
+            $id = (int)$value;
+            if ($id > 0) $normalizedTaskIds[$id] = $id;
+        }
+        $fullBackfill = empty($normalizedTaskIds);
+        if ($fullBackfill && isset($done[$key])) return $done[$key];
+        $result = ['scanned' => 0, 'inserted' => 0, 'legacy_inferred' => 0, 'unknown' => 0];
+        if ((string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') {
+            if ($fullBackfill) $done[$key] = $result;
+            return $result;
+        }
+        ensureInjectBucketSnapshotSchema($pdo);
+
+        $where = "t.status_text='编译成功' AND s.task_id IS NULL";
+        $queryParams = [];
+        if (!$fullBackfill) {
+            $placeholders = implode(',', array_fill(0, count($normalizedTaskIds), '?'));
+            $where .= " AND t.id IN ({$placeholders})";
+            $queryParams = array_values($normalizedTaskIds);
+        }
+        $select = $pdo->prepare("SELECT t.id, t.apk_id, t.user_id, t.bucket_ids, t.template_id,
+                t.injected_apk, t.created_at, t.completed_at, COALESCE(tmp.version, '') AS template_version
+            FROM cainiao_inject_task t
+            LEFT JOIN cainiao_template tmp ON tmp.id=t.template_id
+            LEFT JOIN cainiao_inject_bucket_snapshot s ON s.task_id=t.id
+            WHERE {$where}
+            ORDER BY t.id ASC");
+        $select->execute($queryParams);
+        $rows = $select->fetchAll(PDO::FETCH_ASSOC);
+        $result['scanned'] = count($rows);
+        if (empty($rows)) {
+            if ($fullBackfill) $done[$key] = $result;
+            return $result;
+        }
+
+        $legacyByTask = [];
+        $allBucketIds = [];
+        foreach ($rows as $task) {
+            $legacy = bucketDecodeLegacyTaskBucketIds($task['bucket_ids'] ?? null);
+            $legacyByTask[(int)$task['id']] = $legacy;
+            foreach ($legacy['bucket_ids'] as $id) $allBucketIds[(int)$id] = (int)$id;
+        }
+        $currentBuckets = bucketSnapshotLoadCurrentRows($pdo, array_values($allBucketIds), true);
+        $insert = $pdo->prepare("INSERT IGNORE INTO cainiao_inject_bucket_snapshot
+            (task_id, attempt_no, apk_id, user_id, status, selection_mode, evidence, buckets_json,
+             exact_buckets_csv, replacement_count, template_id, template_version,
+             artifact_path, artifact_sha256, prepared_at, completed_at)
+            VALUES
+            (:task_id, 1, :apk_id, :user_id, 'success', :selection_mode, :evidence, CAST(:buckets_json AS JSON),
+             '', 0, :template_id, :template_version, :artifact_path, '', :prepared_at, :completed_at)");
+
+        foreach ($rows as $task) {
+            $taskId = (int)$task['id'];
+            $legacy = $legacyByTask[$taskId];
+            $buckets = [];
+            foreach ($legacy['bucket_ids'] as $bucketId) {
+                $bucketId = (int)$bucketId;
+                if (!isset($currentBuckets[$bucketId])) continue;
+                $bucket = $currentBuckets[$bucketId];
+                unset($bucket['enabled'], $bucket['_missing']);
+                $buckets[] = $bucket;
+            }
+            $bucketsJson = json_encode(
+                bucketNormalizePublicSnapshotRows($buckets),
+                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+            );
+            if ($bucketsJson === false) $bucketsJson = '[]';
+            $completedAt = trim((string)($task['completed_at'] ?? ''));
+            $preparedAt = trim((string)($task['created_at'] ?? ''));
+            if ($preparedAt === '') $preparedAt = date('Y-m-d H:i:s');
+            if ($completedAt === '') $completedAt = $preparedAt;
+            $insert->execute([
+                ':task_id' => $taskId,
+                ':apk_id' => (int)$task['apk_id'],
+                ':user_id' => (int)$task['user_id'],
+                ':selection_mode' => (string)$legacy['selection_mode'],
+                ':evidence' => (string)$legacy['evidence'],
+                ':buckets_json' => $bucketsJson,
+                ':template_id' => (int)$task['template_id'],
+                ':template_version' => mb_substr((string)$task['template_version'], 0, 50, 'UTF-8'),
+                ':artifact_path' => (string)($task['injected_apk'] ?? ''),
+                ':prepared_at' => $preparedAt,
+                ':completed_at' => $completedAt,
+            ]);
+            if ($insert->rowCount() > 0) {
+                $result['inserted']++;
+                $evidence = (string)$legacy['evidence'];
+                if (isset($result[$evidence])) $result[$evidence]++;
+            }
+        }
+        if ($fullBackfill) $done[$key] = $result;
+        return $result;
+    }
+}
+
+if (!function_exists('bucketSnapshotApplyLegacySelection')) {
+    /** 将任务 bucket_ids 以“历史推断”口径映射到 API 列表行。 */
+    function bucketSnapshotApplyLegacySelection(
+        array &$row,
+        array $legacy,
+        array $currentBuckets,
+        int $taskId = 0,
+        string $templateVersion = '',
+        string $completedAt = '',
+        string $taskStatus = 'success'
+    ): void {
+        $buckets = [];
+        foreach (($legacy['bucket_ids'] ?? []) as $id) {
+            $id = (int)$id;
+            if ($id > 0 && isset($currentBuckets[$id])) {
+                $bucket = $currentBuckets[$id];
+                unset($bucket['_missing'], $bucket['enabled']);
+                $bucket['provider_label'] = (string)$bucket['provider'] !== ''
+                    ? bucketProviderLabel((string)$bucket['provider'])
+                    : '';
+                if (!empty($currentBuckets[$id]['_missing'])) {
+                    $bucket['current_name'] = '';
+                    $bucket['current_provider'] = '';
+                    $bucket['current_domain'] = '';
+                    $bucket['current_state'] = 'deleted';
+                    $bucket['state'] = 'deleted';
+                    $bucket['changed'] = 1;
+                } else {
+                    $bucket['current_name'] = (string)$bucket['name'];
+                    $bucket['current_provider'] = (string)$bucket['provider'];
+                    $bucket['current_domain'] = (string)$bucket['domain'];
+                    $bucket['current_state'] = (int)$currentBuckets[$id]['enabled'] === 1 ? 'current' : 'disabled';
+                    $bucket['state'] = $bucket['current_state'];
+                    $bucket['changed'] = 0;
+                }
+                $buckets[] = $bucket;
+            }
+        }
+        $source = (string)($legacy['evidence'] ?? 'unknown');
+        if ($taskStatus === 'failed' || stripos($taskStatus, '失败') !== false) {
+            $state = 'failed';
+            $status = 'failed';
+            $source = 'unknown';
+        } elseif (!in_array(trim($taskStatus), ['success', '编译成功'], true)) {
+            // 除成功和失败终态外，worker 还有下载、反编译、
+            // 配置写入、签名等多种中间文案，统一视为待生成。
+            $state = 'pending';
+            $status = 'prepared';
+            $source = 'unknown';
+        } else {
+            $state = $source === 'legacy_inferred' ? 'legacy_inferred' : 'unknown';
+            $status = $taskStatus === '编译成功' ? 'success' : $taskStatus;
+        }
+        $payload = [
+            'state' => $state,
+            'source' => $source,
+            'evidence' => $source,
+            'exact' => 0,
+            'status' => $status,
+            'selection_mode' => (string)($legacy['selection_mode'] ?? 'global_inject'),
+            'replacement_count' => 0,
+            'task_id' => $taskId,
+            'attempt_no' => 0,
+            'template_version' => $templateVersion,
+            'completed_at' => $completedAt,
+            'artifact_path' => '',
+            'artifact_sha256' => '',
+            'count' => count($buckets),
+            'items' => $buckets,
+        ];
+        $row['static_injected_buckets'] = $payload;
+        $row['static_injected_bucket_source'] = $source;
+        $row['static_injected_bucket_exact'] = 0;
+        $row['static_injected_bucket_status'] = $status;
+        $row['static_injected_bucket_selection_mode'] = (string)($legacy['selection_mode'] ?? 'global_inject');
+        $row['static_injected_bucket_replacement_count'] = 0;
+        $row['static_injected_bucket_task_id'] = $taskId;
+        $row['static_injected_bucket_attempt_no'] = 0;
+        $row['static_injected_bucket_artifact_path'] = '';
+        $row['static_injected_bucket_artifact_sha256'] = '';
+        $row['static_injected_bucket_completed_at'] = $completedAt;
+    }
+}
+
+if (!function_exists('bucketAttachTaskSnapshots')) {
+    /**
+     * 为任务列表批量附加 static_injected_buckets，整个列表最多三次查询。
+     * 快照缺失时，显式 bucket_ids 标为 legacy_inferred；全局回退标为 unknown。
+     */
+    function bucketAttachTaskSnapshots(PDO $pdo, array &$list): void {
+        if (empty($list)) return;
+        $taskIndexes = [];
+        foreach ($list as $index => &$row) {
+            bucketSnapshotSetDefaults($row);
+            if (isset($row['task_type']) && (string)$row['task_type'] !== 'inject') continue;
+            $taskId = (int)($row['task_id'] ?? $row['id'] ?? 0);
+            if ($taskId > 0) $taskIndexes[$taskId][] = $index;
+        }
+        unset($row);
+        if (empty($taskIndexes) || (string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') return;
+
+        ensureInjectBucketSnapshotSchema($pdo);
+        $taskIds = array_keys($taskIndexes);
+        $placeholders = implode(',', array_fill(0, count($taskIds), '?'));
+        $stmt = $pdo->prepare("SELECT * FROM cainiao_inject_bucket_snapshot
+            WHERE task_id IN ({$placeholders})
+            ORDER BY task_id ASC, attempt_no DESC, id DESC");
+        $stmt->execute($taskIds);
+        $snapshots = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $snapshot) {
+            $taskId = (int)$snapshot['task_id'];
+            if (!isset($snapshots[$taskId])) $snapshots[$taskId] = $snapshot;
+        }
+
+        $legacyByTask = [];
+        $allBucketIds = [];
+        foreach ($taskIndexes as $taskId => $indexes) {
+            if (isset($snapshots[$taskId])) {
+                foreach (bucketSnapshotDecodeBucketsJson($snapshots[$taskId]['buckets_json'] ?? '[]') as $bucket) {
+                    $bucketId = (int)($bucket['id'] ?? 0);
+                    if ($bucketId > 0) $allBucketIds[$bucketId] = $bucketId;
+                }
+                continue;
+            }
+            $sourceRow = $list[$indexes[0]];
+            $legacy = bucketDecodeLegacyTaskBucketIds($sourceRow['bucket_ids'] ?? null);
+            $legacyByTask[$taskId] = $legacy;
+            foreach ($legacy['bucket_ids'] as $id) $allBucketIds[(int)$id] = (int)$id;
+        }
+
+        $currentBuckets = bucketSnapshotLoadCurrentRows($pdo, array_values($allBucketIds), true);
+        foreach ($taskIndexes as $taskId => $indexes) {
+            if (isset($snapshots[$taskId])) {
+                foreach ($indexes as $index) {
+                    bucketSnapshotApplyRecord($list[$index], $snapshots[$taskId], $currentBuckets);
+                }
+                continue;
+            }
+            $legacy = $legacyByTask[$taskId];
+            foreach ($indexes as $index) {
+                $sourceRow = $list[$index];
+                bucketSnapshotApplyLegacySelection(
+                    $list[$index],
+                    $legacy,
+                    $currentBuckets,
+                    (int)$taskId,
+                    (string)($sourceRow['template_version'] ?? ''),
+                    (string)($sourceRow['completed_at'] ?? ''),
+                    (string)($sourceRow['status_text'] ?? '')
+                );
+            }
+        }
+    }
+}
+
+if (!function_exists('bucketAttachLatestAppSnapshots')) {
+    /**
+     * 为应用列表批量附加最近成功制品的静态桶快照。
+     * 新表没有数据时仅回退最近一条仍保留的成功任务，不对多任务做并集。
+     */
+    function bucketAttachLatestAppSnapshots(PDO $pdo, array &$list): void {
+        if (empty($list)) return;
+        $appIndexes = [];
+        foreach ($list as $index => &$row) {
+            bucketSnapshotSetDefaults($row);
+            $appId = (int)($row['apk_id'] ?? $row['id'] ?? 0);
+            if ($appId > 0) $appIndexes[$appId][] = $index;
+        }
+        unset($row);
+        if (empty($appIndexes) || (string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') return;
+
+        ensureInjectBucketSnapshotSchema($pdo);
+        $appIds = array_keys($appIndexes);
+        $placeholders = implode(',', array_fill(0, count($appIds), '?'));
+        // MySQL 8 窗口函数只返回每个应用最近一份成功制品，避免随着
+        // 历史快照增长而把全部成功记录加载到 PHP 内存。
+        $stmt = $pdo->prepare("SELECT ranked.* FROM (
+                SELECT s.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY s.apk_id
+                        ORDER BY COALESCE(s.completed_at, s.prepared_at) DESC, s.id DESC
+                    ) AS snapshot_rank
+                FROM cainiao_inject_bucket_snapshot s
+                WHERE s.apk_id IN ({$placeholders}) AND s.status='success'
+            ) ranked
+            WHERE ranked.snapshot_rank=1");
+        $stmt->execute($appIds);
+        $latestSnapshots = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $snapshot) {
+            $appId = (int)$snapshot['apk_id'];
+            if (!isset($latestSnapshots[$appId])) $latestSnapshots[$appId] = $snapshot;
+        }
+
+        $missingAppIds = [];
+        foreach ($appIndexes as $appId => $indexes) {
+            if (!isset($latestSnapshots[$appId])) $missingAppIds[] = (int)$appId;
+        }
+        $latestTasks = [];
+        if (!empty($missingAppIds)) {
+            $fallbackPlaceholders = implode(',', array_fill(0, count($missingAppIds), '?'));
+            $fallbackStmt = $pdo->prepare("SELECT t.id, t.apk_id, t.bucket_ids, t.completed_at, t.created_at,
+                    COALESCE(tmp.version, '') AS template_version
+                FROM cainiao_inject_task t
+                LEFT JOIN cainiao_template tmp ON tmp.id=t.template_id
+                WHERE t.apk_id IN ({$fallbackPlaceholders}) AND t.status_text='编译成功'
+                ORDER BY t.apk_id ASC, COALESCE(t.completed_at, t.created_at) DESC, t.id DESC");
+            $fallbackStmt->execute($missingAppIds);
+            foreach ($fallbackStmt->fetchAll(PDO::FETCH_ASSOC) as $task) {
+                $appId = (int)$task['apk_id'];
+                if (!isset($latestTasks[$appId])) $latestTasks[$appId] = $task;
+            }
+        }
+
+        $legacyByApp = [];
+        $allBucketIds = [];
+        foreach ($latestSnapshots as $snapshot) {
+            foreach (bucketSnapshotDecodeBucketsJson($snapshot['buckets_json'] ?? '[]') as $bucket) {
+                $bucketId = (int)($bucket['id'] ?? 0);
+                if ($bucketId > 0) $allBucketIds[$bucketId] = $bucketId;
+            }
+        }
+        foreach ($missingAppIds as $appId) {
+            if (!isset($latestTasks[$appId])) continue;
+            $legacy = bucketDecodeLegacyTaskBucketIds($latestTasks[$appId]['bucket_ids'] ?? null);
+            $legacyByApp[$appId] = $legacy;
+            foreach ($legacy['bucket_ids'] as $id) $allBucketIds[(int)$id] = (int)$id;
+        }
+        $currentBuckets = bucketSnapshotLoadCurrentRows($pdo, array_values($allBucketIds), true);
+        foreach ($latestSnapshots as $appId => $snapshot) {
+            foreach ($appIndexes[$appId] as $index) {
+                bucketSnapshotApplyRecord($list[$index], $snapshot, $currentBuckets);
+            }
+        }
+        foreach ($legacyByApp as $appId => $legacy) {
+            $taskId = (int)$latestTasks[$appId]['id'];
+            foreach ($appIndexes[$appId] as $index) {
+                bucketSnapshotApplyLegacySelection(
+                    $list[$index],
+                    $legacy,
+                    $currentBuckets,
+                    $taskId,
+                    (string)($latestTasks[$appId]['template_version'] ?? ''),
+                    (string)($latestTasks[$appId]['completed_at'] ?? ''),
+                    'success'
+                );
+            }
+        }
+    }
+}
+
 if (!function_exists('ensureBucketFeatureSchema')) {
     /**
      * 初始化桶管理元数据和两张日聚合统计表。
@@ -476,6 +1427,7 @@ if (!function_exists('ensureBucketFeatureSchema')) {
           KEY `idx_stat_date` (`stat_date`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='壳端配置文件日命中统计'");
 
+        ensureInjectBucketSnapshotSchema($pdo);
         bucketMigrateLegacyProviderLabels($pdo);
         $ready[$key] = true;
     }

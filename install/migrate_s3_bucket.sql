@@ -195,6 +195,36 @@ CREATE TABLE IF NOT EXISTS `cainiao_s3_bucket_file_stats` (
   KEY `idx_stat_date` (`stat_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='壳端配置文件日命中统计';
 
+-- 每个成功注入制品的固定种子桶快照必须独立于任务表持久化。
+-- cainiao_inject_task 会按保留天数自动清理，因此这里刻意不建外键，
+-- task_id 与 attempt_no 共同关联一次构建尝试，不随任务删除级联清理。
+CREATE TABLE IF NOT EXISTS `cainiao_inject_bucket_snapshot` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `task_id` int NOT NULL COMMENT '注入任务ID，任务清理后仍保留',
+  `attempt_no` int unsigned NOT NULL DEFAULT 1 COMMENT '同一任务的构建尝试序号',
+  `apk_id` int NOT NULL COMMENT '应用ID',
+  `user_id` int NOT NULL COMMENT '应用归属用户ID',
+  `status` varchar(24) NOT NULL DEFAULT 'prepared' COMMENT 'prepared/success/failed',
+  `selection_mode` varchar(32) NOT NULL DEFAULT 'global_inject' COMMENT 'explicit_ids/global_inject',
+  `evidence` varchar(32) NOT NULL DEFAULT 'runtime_snapshot' COMMENT 'runtime_snapshot/legacy_inferred/unknown',
+  `buckets_json` json NOT NULL COMMENT '注入时桶ID、名称、Provider与公开域名快照，不含凭据',
+  `exact_buckets_csv` mediumtext NOT NULL COMMENT '实际用于替换 [#BUCKETS#] 的公开域名串',
+  `replacement_count` int unsigned NOT NULL DEFAULT 0 COMMENT '实际替换的占位符数',
+  `template_id` int NOT NULL DEFAULT 0 COMMENT '壳模板ID快照',
+  `template_version` varchar(50) NOT NULL DEFAULT '' COMMENT '壳模板版本快照',
+  `artifact_path` varchar(1024) NOT NULL DEFAULT '' COMMENT '成功制品路径快照',
+  `artifact_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '' COMMENT '成功制品 SHA-256',
+  `prepared_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '桶快照解析时间',
+  `completed_at` datetime DEFAULT NULL COMMENT '制品成功时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_snapshot_task_attempt` (`task_id`,`attempt_no`),
+  KEY `idx_snapshot_apk_status_completed` (`apk_id`,`status`,`completed_at`,`id`),
+  KEY `idx_snapshot_user_completed` (`user_id`,`completed_at`,`id`),
+  KEY `idx_snapshot_status_prepared` (`status`,`prepared_at`),
+  KEY `idx_snapshot_artifact_sha256` (`artifact_sha256`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='注入制品固定种子桶快照';
+
 -- 菜单写入具备唯一性保护，重复执行不会生成第二个“存储桶管理”。
 INSERT INTO `cainiao_menu` (`parent_id`, `name`, `icon`, `path`, `hidden`, `role_id`)
 SELECT parent.`id`, '存储桶管理', 'Upload', 'admin/bucket', 0, parent.`role_id`

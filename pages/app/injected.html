@@ -11,6 +11,48 @@
   <style>
     body { padding: 20px; }
     .toolbar { margin-bottom: 20px; }
+    .static-bucket-summary {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .static-bucket-summary .el-tag {
+      max-width: 132px;
+    }
+    .static-bucket-tag-text {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .static-bucket-dialog {
+      width: min(860px, 94vw) !important;
+    }
+    .static-bucket-dialog .el-dialog__body {
+      max-height: 72vh;
+      overflow: auto;
+    }
+    .static-bucket-meta {
+      margin: 14px 0;
+    }
+    .static-bucket-mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      word-break: break-all;
+    }
+    .static-bucket-secondary {
+      margin-top: 4px;
+      color: #909399;
+      font-size: 12px;
+      line-height: 1.45;
+      word-break: break-all;
+    }
+    @media (max-width: 640px) {
+      body { margin: 0; padding: 12px; }
+      .static-bucket-dialog { width: 96vw !important; margin-top: 3vh !important; }
+      .static-bucket-dialog .el-dialog__body { padding: 12px; }
+    }
   </style>
 </head>
 <body>
@@ -67,6 +109,38 @@
       <el-table-column label="模板" width="90">
         <template #default="scope">
           <div>{{ scope.row.template_name }}<br>{{ scope.row.template_version }}</div>
+        </template>
+      </el-table-column>
+      <el-table-column label="本次固定桶" min-width="238">
+        <template #default="scope">
+          <div class="static-bucket-summary">
+            <el-tag size="small" effect="plain" :type="staticBucketStateType(scope.row.static_injected_buckets)">
+              {{ staticBucketStateLabel(scope.row.static_injected_buckets) }}
+            </el-tag>
+            <el-tooltip
+              v-for="item in staticBucketPreviewItems(scope.row.static_injected_buckets)"
+              :key="'task-bucket-' + scope.row.id + '-' + item.id + '-' + item.domain"
+              :content="staticBucketTooltip(item)"
+              placement="top">
+              <el-tag size="small" :type="staticBucketProviderType(item.provider)">
+                <span class="static-bucket-tag-text">{{ staticBucketCompactLabel(item) }}</span>
+              </el-tag>
+            </el-tooltip>
+            <el-tag
+              v-if="staticBucketHiddenCount(scope.row.static_injected_buckets) > 0"
+              size="small"
+              type="info">
+              +{{ staticBucketHiddenCount(scope.row.static_injected_buckets) }}
+            </el-tag>
+            <el-button
+              v-if="staticBucketCanInspect(scope.row.static_injected_buckets)"
+              link
+              type="primary"
+              size="small"
+              @click="openStaticBucketDetails(scope.row)">
+              详情
+            </el-button>
+          </div>
         </template>
       </el-table-column>
       <el-table-column label="签名" prop="sign_name"></el-table-column>
@@ -292,6 +366,83 @@
       :url-list="imageList"
       @close="imageViewerVisible = false"
     ></el-image-viewer>
+
+    <!-- 本次制品固定桶使用任务级不可变证据，仅展示公开信息，不读取桶凭据。 -->
+    <el-dialog
+      v-model="staticBucketDialogVisible"
+      class="static-bucket-dialog"
+      title="本次固定桶详情"
+      destroy-on-close>
+      <el-alert
+        :title="staticBucketEvidence(activeStaticBucketSnapshot)"
+        :type="staticBucketAlertType(activeStaticBucketSnapshot)"
+        show-icon
+        :closable="false">
+      </el-alert>
+
+      <el-descriptions class="static-bucket-meta" :column="1" border size="small">
+        <el-descriptions-item label="应用">
+          [{{ activeStaticBucketOwner.apk_id || '-' }}] {{ activeStaticBucketOwner.apk_name || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="注入任务">{{ activeStaticBucketSnapshot.task_id || activeStaticBucketOwner.task_id || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="证据状态">
+          <el-tag size="small" :type="staticBucketStateType(activeStaticBucketSnapshot)">
+            {{ staticBucketStateLabel(activeStaticBucketSnapshot) }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="固定桶数量">{{ staticBucketCount(activeStaticBucketSnapshot) }}</el-descriptions-item>
+        <el-descriptions-item label="构建尝试">{{ activeStaticBucketSnapshot.attempt_no || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="壳版本">{{ activeStaticBucketSnapshot.template_version || activeStaticBucketOwner.template_version || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="完成时间">{{ activeStaticBucketSnapshot.completed_at || activeStaticBucketOwner.completed_at || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="制品 SHA-256">
+          <span class="static-bucket-mono">{{ activeStaticBucketSnapshot.artifact_sha256 || '-' }}</span>
+        </el-descriptions-item>
+      </el-descriptions>
+
+      <el-table
+        v-if="activeStaticBucketSnapshot.items.length"
+        :data="activeStaticBucketSnapshot.items"
+        border
+        size="small">
+        <el-table-column label="ID" prop="id" width="66"></el-table-column>
+        <el-table-column label="注入时桶名称 / 类型" min-width="190">
+          <template #default="scope">
+            <div>{{ scope.row.name || ('桶 #' + scope.row.id) }}</div>
+            <div class="static-bucket-secondary">{{ staticBucketProviderLabel(scope.row) }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="注入时公开地址" min-width="290">
+          <template #default="scope">
+            <el-link
+              v-if="safeStaticBucketUrl(scope.row.domain)"
+              class="static-bucket-mono"
+              type="primary"
+              :href="safeStaticBucketUrl(scope.row.domain)"
+              target="_blank"
+              rel="noopener noreferrer">
+              {{ scope.row.domain }}
+            </el-link>
+            <span v-else class="static-bucket-mono">{{ scope.row.domain || '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="当前状态" min-width="178">
+          <template #default="scope">
+            <el-tag size="small" effect="plain" :type="staticBucketCurrentStateType(scope.row)">
+              {{ staticBucketCurrentStateLabel(scope.row) }}
+            </el-tag>
+            <div v-if="staticBucketCurrentChanged(scope.row)" class="static-bucket-secondary">
+              当前名称：{{ scope.row.current_name || '-' }}<br>
+              当前地址：{{ scope.row.current_domain || '-' }}
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else :description="staticBucketEmptyText(activeStaticBucketSnapshot)"></el-empty>
+
+      <template #footer>
+        <el-button @click="staticBucketDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
     
   </div>
 
@@ -308,6 +459,173 @@
 
         const taskList = ref([]);
         const total = ref(0);
+
+        // 任务级快照表示本次 APK 固化的种子桶，与联网后取得的动态候选桶严格分开。
+        const STATIC_BUCKET_STATE = Object.freeze({
+          verified: { label: '已核验', type: 'success', alert: 'success' },
+          legacy_inferred: { label: '历史推算', type: 'warning', alert: 'warning' },
+          unknown: { label: '历史未知', type: 'info', alert: 'warning' },
+          pending: { label: '待生成', type: 'info', alert: 'info' },
+          unresolved_placeholder: { label: '占位符未替换', type: 'danger', alert: 'error' },
+          failed: { label: '生成失败', type: 'danger', alert: 'error' },
+          none: { label: '未写入固定桶', type: 'info', alert: 'info' },
+        });
+        const staticBucketDialogVisible = ref(false);
+        const activeStaticBucketOwner = reactive({
+          task_id: 0, apk_id: 0, apk_name: '', template_version: '', completed_at: '',
+        });
+        const activeStaticBucketSnapshot = reactive(normalizeStaticBucketSnapshot(null));
+
+        /** 将接口快照限制为页面需要的公开字段，并为旧数据提供稳定默认值。 */
+        function normalizeStaticBucketSnapshot(value) {
+          const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+          const state = Object.prototype.hasOwnProperty.call(STATIC_BUCKET_STATE, String(source.state || ''))
+            ? String(source.state) : 'unknown';
+          const items = Array.isArray(source.items) ? source.items.map(function (item) {
+            const row = item && typeof item === 'object' ? item : {};
+            return {
+              id: Number(row.id) > 0 ? Number(row.id) : 0,
+              name: String(row.name || ''),
+              provider: String(row.provider || ''),
+              provider_label: String(row.provider_label || ''),
+              domain: String(row.domain || ''),
+              current_state: String(row.current_state || ''),
+              current_name: String(row.current_name || ''),
+              current_domain: String(row.current_domain || ''),
+            };
+          }) : [];
+          return {
+            state,
+            task_id: Number(source.task_id) > 0 ? Number(source.task_id) : 0,
+            attempt_no: Number(source.attempt_no) > 0 ? Number(source.attempt_no) : 0,
+            template_version: String(source.template_version || ''),
+            completed_at: String(source.completed_at || ''),
+            artifact_sha256: String(source.artifact_sha256 || ''),
+            count: Number.isFinite(Number(source.count)) ? Math.max(0, Number(source.count)) : items.length,
+            items,
+          };
+        }
+
+        function replaceReactiveObject(target, source) {
+          Object.keys(target).forEach(function (key) { delete target[key]; });
+          Object.assign(target, source);
+        }
+
+        function staticBucketState(snapshot) {
+          return normalizeStaticBucketSnapshot(snapshot).state;
+        }
+
+        function staticBucketStateLabel(snapshot) {
+          return (STATIC_BUCKET_STATE[staticBucketState(snapshot)] || STATIC_BUCKET_STATE.unknown).label;
+        }
+
+        function staticBucketStateType(snapshot) {
+          return (STATIC_BUCKET_STATE[staticBucketState(snapshot)] || STATIC_BUCKET_STATE.unknown).type;
+        }
+
+        function staticBucketAlertType(snapshot) {
+          return (STATIC_BUCKET_STATE[staticBucketState(snapshot)] || STATIC_BUCKET_STATE.unknown).alert;
+        }
+
+        function staticBucketCount(snapshot) {
+          const normalized = normalizeStaticBucketSnapshot(snapshot);
+          return Math.max(normalized.count, normalized.items.length);
+        }
+
+        function staticBucketPreviewItems(snapshot) {
+          return normalizeStaticBucketSnapshot(snapshot).items.slice(0, 2);
+        }
+
+        function staticBucketHiddenCount(snapshot) {
+          const normalized = normalizeStaticBucketSnapshot(snapshot);
+          return Math.max(0, Math.max(normalized.count, normalized.items.length) - 2);
+        }
+
+        function staticBucketCanInspect(snapshot) {
+          const normalized = normalizeStaticBucketSnapshot(snapshot);
+          return normalized.items.length > 0 || normalized.state !== 'none';
+        }
+
+        function staticBucketProviderLabel(item) {
+          const labels = { b2: 'Backblaze B2', s3: 'AWS S3', r2: 'Cloudflare R2' };
+          return String(item.provider_label || labels[String(item.provider || '').toLowerCase()] || item.provider || '未知类型');
+        }
+
+        function staticBucketCompactLabel(item) {
+          return staticBucketProviderLabel(item);
+        }
+
+        function staticBucketProviderType(provider) {
+          return { b2: 'success', s3: 'primary', r2: 'warning' }[String(provider || '').toLowerCase()] || 'info';
+        }
+
+        function staticBucketTooltip(item) {
+          return [item.name || ('桶 #' + item.id), staticBucketProviderLabel(item), item.domain || '未记录公开地址'].join('｜');
+        }
+
+        function staticBucketEvidence(snapshot) {
+          const state = staticBucketState(snapshot);
+          const messages = {
+            verified: '已由生成制品的固定桶快照核验；这里展示的是本次 APK 实际固化的公开种子地址。',
+            legacy_inferred: '旧制品缺少不可变快照，以下内容根据当时保留的任务桶 ID 推算，可能与最终 APK 存在差异。',
+            unknown: '历史记录不足，当前页面不会拿现有全局桶配置倒推旧 APK。',
+            pending: '任务仍在处理，生成制品后才会记录本次实际固定桶。',
+            unresolved_placeholder: '制品证据显示固定桶占位符仍未完成替换，请检查模板或重新执行注入。',
+            failed: '本次任务生成失败，当前没有可核验的成功制品固定桶。',
+            none: '本次制品经记录没有写入固定配置桶。',
+          };
+          return messages[state] || messages.unknown;
+        }
+
+        function staticBucketEmptyText(snapshot) {
+          const state = staticBucketState(snapshot);
+          if (state === 'pending') return '任务完成后显示本次实际固定桶';
+          if (state === 'unresolved_placeholder') return '固定桶占位符尚未替换';
+          if (state === 'failed') return '本次任务失败且没有成功制品';
+          if (state === 'none') return '本次制品未写入固定配置桶';
+          return '没有可展示的固定桶明细';
+        }
+
+        function safeStaticBucketUrl(value) {
+          const url = String(value || '').trim();
+          return /^https?:\/\//i.test(url) ? url : '';
+        }
+
+        function staticBucketCurrentChanged(item) {
+          return String(item.current_state || '').toLowerCase() === 'changed'
+            || (!!item.current_name && item.current_name !== item.name)
+            || (!!item.current_domain && item.current_domain !== item.domain);
+        }
+
+        function staticBucketCurrentStateLabel(item) {
+          const state = String(item.current_state || '').toLowerCase();
+          const labels = {
+            active: '当前启用', enabled: '当前启用', current: '当前一致', unchanged: '当前一致',
+            disabled: '当前已停用', deleted: '当前已删除', missing: '当前已删除',
+            changed: '当前配置已变化', unknown: '当前状态未知',
+          };
+          return labels[state] || (staticBucketCurrentChanged(item) ? '当前配置已变化' : '当前状态未知');
+        }
+
+        function staticBucketCurrentStateType(item) {
+          const state = String(item.current_state || '').toLowerCase();
+          if (state === 'active' || state === 'enabled' || state === 'current' || state === 'unchanged') return 'success';
+          if (state === 'changed' || state === 'disabled') return 'warning';
+          if (state === 'deleted' || state === 'missing') return 'danger';
+          return 'info';
+        }
+
+        function openStaticBucketDetails(row) {
+          replaceReactiveObject(activeStaticBucketOwner, {
+            task_id: Number(row && row.id) || 0,
+            apk_id: Number(row && row.apk_id) || 0,
+            apk_name: String((row && row.apk_name) || ''),
+            template_version: String((row && row.template_version) || ''),
+            completed_at: String((row && row.completed_at) || ''),
+          });
+          replaceReactiveObject(activeStaticBucketSnapshot, normalizeStaticBucketSnapshot(row && row.static_injected_buckets));
+          staticBucketDialogVisible.value = true;
+        }
 
         const dialogVisible = ref(false);
         const editForm = reactive({
@@ -779,7 +1097,28 @@ async function confirmLanzouUpload() {
           imageViewerVisible,
           imageList,
           previewImage,
-          openInNewTab
+          openInNewTab,
+          staticBucketDialogVisible,
+          activeStaticBucketOwner,
+          activeStaticBucketSnapshot,
+          staticBucketStateLabel,
+          staticBucketStateType,
+          staticBucketAlertType,
+          staticBucketCount,
+          staticBucketPreviewItems,
+          staticBucketHiddenCount,
+          staticBucketCanInspect,
+          staticBucketProviderLabel,
+          staticBucketCompactLabel,
+          staticBucketProviderType,
+          staticBucketTooltip,
+          staticBucketEvidence,
+          staticBucketEmptyText,
+          safeStaticBucketUrl,
+          staticBucketCurrentChanged,
+          staticBucketCurrentStateLabel,
+          staticBucketCurrentStateType,
+          openStaticBucketDetails
 
         };
       }

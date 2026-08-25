@@ -365,6 +365,11 @@ function getMyAppList(PDO $pdo, array $input)
 
     $list = $dataStmt->fetchAll(PDO::FETCH_ASSOC);
 
+    // 批量附加每个应用最近一份成功 APK 制品的固定桶快照。
+    // 快照是注入时的不可变公开信息，与当前动态桶及配置推送范围分开。
+    ensureBucketFeatureSchema($pdo);
+    bucketAttachLatestAppSnapshots($pdo, $list);
+
     // 批量预查询，避免循环内N+1查询
     $now = date('Y-m-d H:i:s');
     $appIds = array_column($list, 'id');
@@ -5028,7 +5033,7 @@ function getInjectTaskList(PDO $pdo, array $input)
     $offset = ($page - 1) * $limit;
     $status = isset($input['status_text']) ? trim($input['status_text']) : '';
     $id = isset($input['id']) && is_numeric($input['id']) ? intval($input['id']) : null;
-    
+
     $releaseday = (int)Auth::getSetting($pdo, "releaseday", "3");
     $autoCleanResult = autoClearExpiredInjectTask($pdo, $releaseday);
     
@@ -5074,6 +5079,11 @@ function getInjectTaskList(PDO $pdo, array $input)
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
     $list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // 任务列表按制品维度展示固定桶；历史任务仅保存选择 ID 时，
+    // 返回明确的推算等级，不用当前全局桶冒充历史 APK 事实。
+    ensureBucketFeatureSchema($pdo);
+    bucketAttachTaskSnapshots($pdo, $list);
     
     
     
@@ -5108,6 +5118,20 @@ function autoClearExpiredInjectTask($pdo, $releaseday)
     $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     $deleted = [];
+
+    // 只回填这批即将删除的成功任务，避免普通列表请求反复扫描全库。
+    $deletableTaskIds = [];
+    foreach ($tasks as $task) {
+        $status = (string)($task['status_text'] ?? '');
+        $allowed = ['等待处理', '编译成功'];
+        if (in_array($status, $allowed, true) || stripos($status, '失败') !== false) {
+            $deletableTaskIds[] = (int)$task['id'];
+        }
+    }
+    if (!empty($deletableTaskIds)) {
+        ensureBucketFeatureSchema($pdo);
+        bucketBackfillLegacySnapshots($pdo, $deletableTaskIds);
+    }
 
     foreach ($tasks as $task) {
         $status = $task['status_text'];
@@ -5412,6 +5436,18 @@ function retryInjectTask(PDO $pdo, array $input)
         throw new Exception('仅失败或成功的任务可重试');
     }
 
+    // 旧成功任务在快照功能上线前只有 bucket_ids。重置状态前先将
+    // 该制品作为 legacy 证据持久化，新 attempt 后续失败也不会覆盖它。
+    if (stripos((string)$task['status_text'], '成功') !== false) {
+        ensureBucketFeatureSchema($pdo);
+        bucketBackfillLegacySnapshots($pdo, [$id]);
+    }
+
+    // 复用任务 ID 时先建立新的尝试，列表立刻显示待生成，旧 success
+    // 快照继续作为应用最近成功制品，不受本轮结果覆盖。
+    ensureBucketFeatureSchema($pdo);
+    bucketStartInjectAttempt($pdo, $id);
+
     // 更新任务状态
     $update = $pdo->prepare("UPDATE cainiao_inject_task SET status_text = '等待处理', status_info = '请等待任务队列', completed_at = NULL, debugrun = 0 WHERE {$where}");
     $update->execute($params);
@@ -5456,6 +5492,12 @@ function deleteInjectTask(PDO $pdo, array $input)
 
     if (!$canDelete) {
         throw new Exception('仅允许删除等待处理、编译成功或失败的任务');
+    }
+
+    // 任务行删除后 bucket_ids 不再存在，成功制品必须先回填独立快照。
+    if ($status === '编译成功') {
+        ensureBucketFeatureSchema($pdo);
+        bucketBackfillLegacySnapshots($pdo, [$id]);
     }
 
     // 删除 release 中的注入后文件
@@ -5547,6 +5589,11 @@ function deleteTask(PDO $pdo, array $input)
 
     if (!$canDelete) {
         throw new Exception('仅允许删除等待处理、成功或失败的任务');
+    }
+
+    if ($taskType === 'inject' && $status === '编译成功') {
+        ensureBucketFeatureSchema($pdo);
+        bucketBackfillLegacySnapshots($pdo, [$id]);
     }
 
     // ---------- 删除产物文件 ----------

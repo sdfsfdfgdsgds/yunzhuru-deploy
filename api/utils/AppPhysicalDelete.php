@@ -356,6 +356,8 @@ if (!function_exists('physicallyDeleteAppDatabase')) {
             appPhysicalDeleteRows($pdo, '卡密', 'cainiao_kami', 'app_id', $appId, $record);
 
             appPhysicalDeleteByIds($pdo, '高速下载记录', 'cainiao_download_record', 'task_id', $injectTaskIds, $record);
+            // 任务过期清理时保留制品桶快照，仅在应用本体物理删除时一并清理。
+            appPhysicalDeleteRows($pdo, '注入制品固定桶快照', 'cainiao_inject_bucket_snapshot', 'apk_id', $appId, $record);
             appPhysicalDeleteRows($pdo, '普通注入任务', 'cainiao_inject_task', 'apk_id', $appId, $record);
             appPhysicalDeleteRows($pdo, '加固任务', 'cainiao_jiagu_task', 'apk_id', $appId, $record);
 
