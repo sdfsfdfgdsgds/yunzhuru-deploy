@@ -255,6 +255,9 @@ if (!function_exists('bucketNormalizeRecord')) {
 
         $endpoint = bucketNormalizeHttpsUrl($pick('endpoint'), 'Endpoint', true);
         $domain = bucketNormalizeHttpsUrl($pick('domain'), '公开访问地址');
+        if (strpos($domain, ',') !== false) {
+            throw new InvalidArgumentException('公开访问地址中不应包含英文逗号');
+        }
         bucketValidateEndpoint($provider, $endpoint);
 
         $region = strtolower(trim((string)$pick('region')));
@@ -329,6 +332,31 @@ if (!function_exists('bucketEnsureMysqlColumn')) {
         if (!bucketMysqlColumnExists($pdo, $table, $column)) {
             $pdo->exec("ALTER TABLE `{$table}` ADD COLUMN `{$column}` {$definition}");
         }
+    }
+}
+
+if (!function_exists('bucketMysqlIndexExists')) {
+    /** 检查指定索引是否存在。表名和索引名仅由内部常量传入。 */
+    function bucketMysqlIndexExists(PDO $pdo, string $table, string $index): bool {
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM information_schema.STATISTICS '
+            . 'WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=:table AND INDEX_NAME=:index_name');
+        $stmt->execute([':table' => $table, ':index_name' => $index]);
+        return (int)$stmt->fetchColumn() > 0;
+    }
+}
+
+if (!function_exists('bucketEnsureMysqlIndex')) {
+    /** 以幂等方式增加内部定义的普通或唯一索引。 */
+    function bucketEnsureMysqlIndex(
+        PDO $pdo,
+        string $table,
+        string $index,
+        string $columns,
+        bool $unique = false
+    ): void {
+        if (bucketMysqlIndexExists($pdo, $table, $index)) return;
+        $type = $unique ? 'UNIQUE KEY' : 'KEY';
+        $pdo->exec("ALTER TABLE `{$table}` ADD {$type} `{$index}` ({$columns})");
     }
 }
 
@@ -434,6 +462,35 @@ if (!function_exists('ensureInjectBucketSnapshotSchema')) {
           KEY `idx_snapshot_status_prepared` (`status`,`prepared_at`),
           KEY `idx_snapshot_artifact_sha256` (`artifact_sha256`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='注入制品静态配置桶快照'");
+
+        // 兼容曾运行过单任务唯一键候选版的环境。CREATE TABLE IF NOT EXISTS
+        // 不会升级现存结构，因此字段和索引必须逐项幂等收敛。
+        bucketEnsureMysqlColumn(
+            $pdo,
+            'cainiao_inject_bucket_snapshot',
+            'attempt_no',
+            "int unsigned NOT NULL DEFAULT 1 AFTER `task_id`"
+        );
+        $pdo->exec('UPDATE cainiao_inject_bucket_snapshot SET attempt_no=1 WHERE attempt_no IS NULL OR attempt_no<1');
+        bucketEnsureMysqlIndex(
+            $pdo,
+            'cainiao_inject_bucket_snapshot',
+            'uniq_snapshot_task_attempt',
+            '`task_id`,`attempt_no`',
+            true
+        );
+        if (bucketMysqlIndexExists($pdo, 'cainiao_inject_bucket_snapshot', 'uniq_snapshot_task')) {
+            $pdo->exec('ALTER TABLE `cainiao_inject_bucket_snapshot` DROP INDEX `uniq_snapshot_task`');
+        }
+        bucketEnsureMysqlIndex(
+            $pdo,
+            'cainiao_inject_bucket_snapshot',
+            'idx_snapshot_apk_status_completed',
+            '`apk_id`,`status`,`completed_at`,`id`'
+        );
+        if (bucketMysqlIndexExists($pdo, 'cainiao_inject_bucket_snapshot', 'idx_snapshot_apk_completed')) {
+            $pdo->exec('ALTER TABLE `cainiao_inject_bucket_snapshot` DROP INDEX `idx_snapshot_apk_completed`');
+        }
 
         $ready[$key] = true;
     }
@@ -827,6 +884,45 @@ if (!function_exists('bucketStartInjectAttempt')) {
     }
 }
 
+if (!function_exists('bucketEnsureSuccessfulTaskSnapshot')) {
+    /**
+     * 成功任务删除或重试前，确保至少存在一条 success 快照。
+     *
+     * 正常 worker 会先终结快照再公开成功状态；本方法同时兜住哈希、数据库
+     * 或旧候选版本留下的 prepared 记录。收口失败时抛出异常，由调用方保留任务。
+     */
+    function bucketEnsureSuccessfulTaskSnapshot(PDO $pdo, int $taskId): void {
+        if ($taskId <= 0) {
+            throw new InvalidArgumentException('配置桶快照的任务 ID 错误');
+        }
+        ensureInjectBucketSnapshotSchema($pdo);
+        if ((string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') return;
+
+        $latest = bucketSnapshotLatestAttempt($pdo, $taskId);
+        if ($latest === null) {
+            bucketBackfillLegacySnapshots($pdo, [$taskId]);
+            $latest = bucketSnapshotLatestAttempt($pdo, $taskId);
+        }
+        if ($latest && (string)$latest['status'] === 'success') return;
+
+        if ($latest && (string)$latest['status'] === 'prepared') {
+            bucketSnapshotRuntimeAttempt($taskId, (int)$latest['attempt_no']);
+        } else {
+            bucketSnapshotRuntimeAttempt($taskId, 0);
+        }
+        try {
+            bucketFinalizeInjectSnapshot($pdo, $taskId, '编译成功');
+        } finally {
+            bucketSnapshotRuntimeAttempt($taskId, 0);
+        }
+
+        $final = bucketSnapshotLatestAttempt($pdo, $taskId);
+        if (!$final || (string)$final['status'] !== 'success') {
+            throw new RuntimeException('成功任务的配置桶快照尚未终结');
+        }
+    }
+}
+
 if (!function_exists('bucketSnapshotDecodeBucketsJson')) {
     /** 解析数据库快照 JSON，异常数据按空数组处理。 */
     function bucketSnapshotDecodeBucketsJson($value): array {
@@ -894,6 +990,9 @@ if (!function_exists('bucketSnapshotApplyRecord')) {
         $runtimeSnapshotConsistent = !empty($snapshotItems)
             && count($snapshotDomains) === count($snapshotItems)
             && $expectedBucketsCsv !== ''
+            && count(array_filter($snapshotDomains, static function (string $domain): bool {
+                return strpos($domain, ',') !== false;
+            })) === 0
             && hash_equals($expectedBucketsCsv, $exactBucketsCsv);
         if ($status === 'failed') {
             $state = 'failed';
@@ -1293,16 +1392,22 @@ if (!function_exists('bucketAttachLatestAppSnapshots')) {
         $latestTasks = [];
         if (!empty($missingAppIds)) {
             $fallbackPlaceholders = implode(',', array_fill(0, count($missingAppIds), '?'));
-            $fallbackStmt = $pdo->prepare("SELECT t.id, t.apk_id, t.bucket_ids, t.completed_at, t.created_at,
-                    COALESCE(tmp.version, '') AS template_version
-                FROM cainiao_inject_task t
-                LEFT JOIN cainiao_template tmp ON tmp.id=t.template_id
-                WHERE t.apk_id IN ({$fallbackPlaceholders}) AND t.status_text='编译成功'
-                ORDER BY t.apk_id ASC, COALESCE(t.completed_at, t.created_at) DESC, t.id DESC");
+            $fallbackStmt = $pdo->prepare("SELECT ranked.* FROM (
+                    SELECT t.id, t.apk_id, t.bucket_ids, t.completed_at, t.created_at,
+                        COALESCE(tmp.version, '') AS template_version,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY t.apk_id
+                            ORDER BY COALESCE(t.completed_at, t.created_at) DESC, t.id DESC
+                        ) AS task_rank
+                    FROM cainiao_inject_task t
+                    LEFT JOIN cainiao_template tmp ON tmp.id=t.template_id
+                    WHERE t.apk_id IN ({$fallbackPlaceholders}) AND t.status_text='编译成功'
+                ) ranked
+                WHERE ranked.task_rank=1");
             $fallbackStmt->execute($missingAppIds);
             foreach ($fallbackStmt->fetchAll(PDO::FETCH_ASSOC) as $task) {
                 $appId = (int)$task['apk_id'];
-                if (!isset($latestTasks[$appId])) $latestTasks[$appId] = $task;
+                $latestTasks[$appId] = $task;
             }
         }
 

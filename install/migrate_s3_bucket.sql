@@ -225,6 +225,77 @@ CREATE TABLE IF NOT EXISTS `cainiao_inject_bucket_snapshot` (
   KEY `idx_snapshot_artifact_sha256` (`artifact_sha256`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='注入制品固定种子桶快照';
 
+-- 兼容曾部署过 UNIQUE(task_id) 的候选结构。先补尝试号和复合唯一键，
+-- 再删除旧唯一键，整个区段可重复执行。
+SET @bucket_snapshot_ddl = (
+  SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE `cainiao_inject_bucket_snapshot` ADD COLUMN `attempt_no` int unsigned NOT NULL DEFAULT 1 COMMENT ''同一任务的构建尝试序号'' AFTER `task_id`',
+    'DO 1')
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'cainiao_inject_bucket_snapshot'
+    AND COLUMN_NAME = 'attempt_no'
+);
+PREPARE bucket_snapshot_stmt FROM @bucket_snapshot_ddl;
+EXECUTE bucket_snapshot_stmt;
+DEALLOCATE PREPARE bucket_snapshot_stmt;
+
+UPDATE `cainiao_inject_bucket_snapshot`
+SET `attempt_no` = 1
+WHERE `attempt_no` IS NULL OR `attempt_no` < 1;
+
+SET @bucket_snapshot_ddl = (
+  SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE `cainiao_inject_bucket_snapshot` ADD UNIQUE KEY `uniq_snapshot_task_attempt` (`task_id`,`attempt_no`)',
+    'DO 1')
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'cainiao_inject_bucket_snapshot'
+    AND INDEX_NAME = 'uniq_snapshot_task_attempt'
+);
+PREPARE bucket_snapshot_stmt FROM @bucket_snapshot_ddl;
+EXECUTE bucket_snapshot_stmt;
+DEALLOCATE PREPARE bucket_snapshot_stmt;
+
+SET @bucket_snapshot_ddl = (
+  SELECT IF(COUNT(*) > 0,
+    'ALTER TABLE `cainiao_inject_bucket_snapshot` DROP INDEX `uniq_snapshot_task`',
+    'DO 1')
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'cainiao_inject_bucket_snapshot'
+    AND INDEX_NAME = 'uniq_snapshot_task'
+);
+PREPARE bucket_snapshot_stmt FROM @bucket_snapshot_ddl;
+EXECUTE bucket_snapshot_stmt;
+DEALLOCATE PREPARE bucket_snapshot_stmt;
+
+SET @bucket_snapshot_ddl = (
+  SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE `cainiao_inject_bucket_snapshot` ADD KEY `idx_snapshot_apk_status_completed` (`apk_id`,`status`,`completed_at`,`id`)',
+    'DO 1')
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'cainiao_inject_bucket_snapshot'
+    AND INDEX_NAME = 'idx_snapshot_apk_status_completed'
+);
+PREPARE bucket_snapshot_stmt FROM @bucket_snapshot_ddl;
+EXECUTE bucket_snapshot_stmt;
+DEALLOCATE PREPARE bucket_snapshot_stmt;
+
+SET @bucket_snapshot_ddl = (
+  SELECT IF(COUNT(*) > 0,
+    'ALTER TABLE `cainiao_inject_bucket_snapshot` DROP INDEX `idx_snapshot_apk_completed`',
+    'DO 1')
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'cainiao_inject_bucket_snapshot'
+    AND INDEX_NAME = 'idx_snapshot_apk_completed'
+);
+PREPARE bucket_snapshot_stmt FROM @bucket_snapshot_ddl;
+EXECUTE bucket_snapshot_stmt;
+DEALLOCATE PREPARE bucket_snapshot_stmt;
+
 -- 菜单写入具备唯一性保护，重复执行不会生成第二个“存储桶管理”。
 INSERT INTO `cainiao_menu` (`parent_id`, `name`, `icon`, `path`, `hidden`, `role_id`)
 SELECT parent.`id`, '存储桶管理', 'Upload', 'admin/bucket', 0, parent.`role_id`

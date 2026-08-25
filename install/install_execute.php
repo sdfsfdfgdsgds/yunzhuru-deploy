@@ -538,6 +538,25 @@ function installDatabase(PDO $pdo)
             KEY `idx_snapshot_status_prepared` (`status`,`prepared_at`),
             KEY `idx_snapshot_artifact_sha256` (`artifact_sha256`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='注入制品固定种子桶快照'");
+        addFieldsIfNotExist($pdo, $bucketSnapshotTable, [
+            'attempt_no' => "INT UNSIGNED NOT NULL DEFAULT 1 COMMENT '同一任务的构建尝试序号' AFTER `task_id`",
+        ]);
+        $pdo->exec("UPDATE `$bucketSnapshotTable` SET `attempt_no`=1 WHERE `attempt_no` IS NULL OR `attempt_no`<1");
+        if (!indexExists($pdo, $bucketSnapshotTable, 'uniq_snapshot_task_attempt')) {
+            $pdo->exec("ALTER TABLE `$bucketSnapshotTable` ADD UNIQUE KEY `uniq_snapshot_task_attempt` (`task_id`,`attempt_no`)");
+        }
+        if (indexExists($pdo, $bucketSnapshotTable, 'uniq_snapshot_task')) {
+            $pdo->exec("ALTER TABLE `$bucketSnapshotTable` DROP INDEX `uniq_snapshot_task`");
+        }
+        addIndexIfNotExist(
+            $pdo,
+            $bucketSnapshotTable,
+            'idx_snapshot_apk_status_completed',
+            '`apk_id`,`status`,`completed_at`,`id`'
+        );
+        if (indexExists($pdo, $bucketSnapshotTable, 'idx_snapshot_apk_completed')) {
+            $pdo->exec("ALTER TABLE `$bucketSnapshotTable` DROP INDEX `idx_snapshot_apk_completed`");
+        }
         
         
         

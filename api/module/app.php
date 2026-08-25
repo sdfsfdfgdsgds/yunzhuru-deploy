@@ -5144,6 +5144,16 @@ function autoClearExpiredInjectTask($pdo, $releaseday)
             continue;
         }
 
+        if ($status === '编译成功') {
+            try {
+                bucketEnsureSuccessfulTaskSnapshot($pdo, (int)$task['id']);
+            } catch (\Throwable $snapshotError) {
+                // 成功证据收口异常时保留任务和制品，下一轮清理会再次尝试。
+                error_log('[BucketSnapshot] 跳过任务 #' . (int)$task['id'] . ' 的自动清理: ' . $snapshotError->getMessage());
+                continue;
+            }
+        }
+
         // 删除 release 文件
         if ($apkFile !== '') {
             $releasePath = __DIR__ . '/../../release/' . $apkFile;
@@ -5440,7 +5450,7 @@ function retryInjectTask(PDO $pdo, array $input)
     // 该制品作为 legacy 证据持久化，新 attempt 后续失败也不会覆盖它。
     if (stripos((string)$task['status_text'], '成功') !== false) {
         ensureBucketFeatureSchema($pdo);
-        bucketBackfillLegacySnapshots($pdo, [$id]);
+        bucketEnsureSuccessfulTaskSnapshot($pdo, $id);
     }
 
     // 复用任务 ID 时先建立新的尝试，列表立刻显示待生成，旧 success
@@ -5497,7 +5507,7 @@ function deleteInjectTask(PDO $pdo, array $input)
     // 任务行删除后 bucket_ids 不再存在，成功制品必须先回填独立快照。
     if ($status === '编译成功') {
         ensureBucketFeatureSchema($pdo);
-        bucketBackfillLegacySnapshots($pdo, [$id]);
+        bucketEnsureSuccessfulTaskSnapshot($pdo, $id);
     }
 
     // 删除 release 中的注入后文件
@@ -5593,7 +5603,7 @@ function deleteTask(PDO $pdo, array $input)
 
     if ($taskType === 'inject' && $status === '编译成功') {
         ensureBucketFeatureSchema($pdo);
-        bucketBackfillLegacySnapshots($pdo, [$id]);
+        bucketEnsureSuccessfulTaskSnapshot($pdo, $id);
     }
 
     // ---------- 删除产物文件 ----------

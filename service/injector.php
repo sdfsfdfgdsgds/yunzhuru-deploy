@@ -637,7 +637,7 @@ function handleInjectionTasks(PDO $pdo, $oss)
         $bucketDomains = [];
         foreach ($publicSnapshotRows as $bucketRow) {
             $domain = (string)($bucketRow['domain'] ?? '');
-            if ($domain === '') continue;
+            if ($domain === '' || strpos($domain, ',') !== false) continue;
             // 只有真正进入 BUCKETS 字符串的行才进入快照，确保页面桶数
             // 与 APK 实际写入集合逐项一致；旧协议地址仍按原值留证。
             $bucketDomains[] = $domain;
@@ -5588,6 +5588,16 @@ function updateTaskStatus(PDO $pdo, int $taskId, string $status)
         $now = date('Y-m-d H:i:s');
     }
 
+    // 先终结制品快照，再把任务终态公开给页面。SHA-256 计算期间任务仍保持
+    // 处理中状态，删除接口便不会抢先移除任务行或制品文件。
+    if ($status === '编译成功' || stripos($status, '失败') !== false) {
+        try {
+            bucketFinalizeInjectSnapshot($pdo, $taskId, $status);
+        } catch (\Throwable $snapshotError) {
+            echo "[BucketSnapshot] 任务 {$taskId} 终态快照写入失败: " . $snapshotError->getMessage() . "\n";
+        }
+    }
+
     $stmt = $pdo->prepare("
         UPDATE cainiao_inject_task
         SET status_text = :status, completed_at = :completed_at
@@ -5601,16 +5611,6 @@ function updateTaskStatus(PDO $pdo, int $taskId, string $status)
     ]);
 
     echo "\n[" . date('Y-m-d H:i:s') . "] 已更新任务 #$taskId 状态为：$status\n";
-
-    // 快照终态与任务终态使用同一个收口，覆盖所有编译、签名、
-    // 下载和注入失败分支。快照写入异常只记日志，不改写主任务结果。
-    if ($status === '编译成功' || stripos($status, '失败') !== false) {
-        try {
-            bucketFinalizeInjectSnapshot($pdo, $taskId, $status);
-        } catch (\Throwable $snapshotError) {
-            echo "[BucketSnapshot] 任务 {$taskId} 终态快照写入失败: " . $snapshotError->getMessage() . "\n";
-        }
-    }
 
     // 编译成功后自动推送配置到存储桶
     if ($status === '编译成功') {
