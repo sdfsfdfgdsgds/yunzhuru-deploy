@@ -564,9 +564,20 @@
       width: 100%;
       height: 100%;
       overflow: hidden;
+      visibility: hidden;
+      opacity: 0;
+      pointer-events: none;
       background: #ffffff;
       border: 0;
       scrollbar-width: none;
+      transition: opacity 0.12s ease;
+    }
+
+    /* 子页统一主题加载完成后再显示，避免刷新时闪过旧样式。 */
+    .iframe-wrapper.is-ready {
+      visibility: visible;
+      opacity: 1;
+      pointer-events: auto;
     }
 
     .iframe-wrapper::-webkit-scrollbar {
@@ -929,6 +940,7 @@
             <iframe
               ref="contentIframe"
               class="iframe-wrapper"
+              :class="{ 'is-ready': !iframeLoading }"
               :src="iframeSrc"
               :title="pageTitle"
               @load="handleIframeLoaded"
@@ -1288,10 +1300,14 @@
         const currentYear = new Date().getFullYear();
 
         const menuList = ref([]);
-        const activeMenu = ref(config.defaultPage);
-        const iframeSrc = ref(pagePrefix + config.defaultPage + pageSuffix);
+        // 首屏直接恢复上次菜单，避免先请求默认页、挂载后再请求目标页造成双重闪切。
+        const savedInitialMenu = localStorage.getItem('active_menu') || '';
+        const initialMenu = savedInitialMenu || config.defaultPage;
+        const activeMenu = ref(initialMenu);
+        const iframeSrc = ref(pagePrefix + initialMenu + pageSuffix);
         const contentIframe = ref(null);
         const iframeLoading = ref(true);
+        let iframeLoadToken = 0;
         const isMobileViewport = ref(window.innerWidth <= 900);
         const mobileMenuVisible = ref(false);
         const openedTabs = ref([
@@ -1652,14 +1668,61 @@ function closeTab(path) {
 /**
  * iframe 每次完成导航后注入统一主题。注入过程严格幂等，并隔离跨域或 DOM 异常。
  */
-function handleIframeLoaded() {
-  iframeLoading.value = false;
+function handleIframeLoaded(event) {
+  const loadToken = iframeLoadToken;
+  let revealRequested = false;
+  let fallbackTimer = null;
+  let themeLink = null;
 
-  try {
-    const frameDocument = contentIframe.value && contentIframe.value.contentDocument;
-    if (!frameDocument || !frameDocument.documentElement) {
+  /**
+   * 在主题样式已解析后等待两帧再显示 iframe，
+   * 确保浏览器先完成样式计算和绘制。令牌可防止上一个页面的延迟回调覆盖新导航状态。
+   */
+  const revealFrame = () => {
+    if (revealRequested || loadToken !== iframeLoadToken) {
       return;
     }
+    revealRequested = true;
+    if (fallbackTimer !== null) {
+      window.clearTimeout(fallbackTimer);
+      fallbackTimer = null;
+    }
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (loadToken === iframeLoadToken) {
+          iframeLoading.value = false;
+        }
+      });
+    });
+  };
+
+  try {
+    const frameElement = event && event.currentTarget ? event.currentTarget : contentIframe.value;
+    const frameDocument = frameElement && frameElement.contentDocument;
+    if (!frameDocument || !frameDocument.documentElement) {
+      revealFrame();
+      return;
+    }
+
+    // 快速连续切换标签时，忽略已被新导航取代的旧文档 load 事件。
+    const expectedUrl = new URL(iframeSrc.value, window.location.origin);
+    const loadedUrl = new URL(frameDocument.location.href, window.location.origin);
+    if (
+      expectedUrl.pathname !== loadedUrl.pathname
+      || expectedUrl.search !== loadedUrl.search
+      || expectedUrl.hash !== loadedUrl.hash
+    ) {
+      return;
+    }
+
+    // 仅当本次 load 确实属于当前导航时启动兜底，避免旧页迟到事件提前显示新页。
+    fallbackTimer = window.setTimeout(() => {
+      // 超时后移除仍未生效的 link，防止已显示原页面后又被迟到样式二次切换。
+      if (themeLink && !themeLink.sheet && themeLink.parentNode) {
+        themeLink.parentNode.removeChild(themeLink);
+      }
+      revealFrame();
+    }, 3000);
 
     frameDocument.documentElement.classList.add('admin-v2-frame');
     frameDocument.documentElement.dataset.theme = 'light';
@@ -1668,18 +1731,32 @@ function handleIframeLoaded() {
       frameDocument.body.dataset.theme = 'light';
     }
 
-    let themeLink = frameDocument.querySelector('link[data-admin-theme-v2="true"]');
+    themeLink = frameDocument.querySelector('link[data-admin-theme-v2="true"]');
     if (!themeLink) {
       themeLink = frameDocument.createElement('link');
       themeLink.rel = 'stylesheet';
       themeLink.href = '/element/css/admin-theme-v2.css';
       themeLink.dataset.adminThemeV2 = 'true';
+      themeLink.addEventListener('load', revealFrame, { once: true });
+      themeLink.addEventListener('error', revealFrame, { once: true });
       (frameDocument.head || frameDocument.documentElement).appendChild(themeLink);
+    } else if (themeLink.sheet) {
+      revealFrame();
+    } else {
+      themeLink.addEventListener('load', revealFrame, { once: true });
+      themeLink.addEventListener('error', revealFrame, { once: true });
     }
   } catch (error) {
     // 同源业务页会正常注入；若未来出现跨域页面，仅跳过主题注入并保留页面访问。
     console.debug('子页面主题注入已跳过：', error);
+    revealFrame();
   }
+}
+
+/** 标记新的 iframe 导航周期，使旧页面的异步样式回调自动失效。 */
+function beginIframeLoad() {
+  iframeLoadToken += 1;
+  iframeLoading.value = true;
 }
 
 
@@ -1856,8 +1933,12 @@ async function clearS3Config() {
             }
 
             activeMenu.value = path;
-            iframeLoading.value = true;
-            iframeSrc.value = pagePrefix + path + pageSuffix;
+            const nextIframeSrc = pagePrefix + path + pageSuffix;
+            // 重复点击当前菜单时不会产生新 load 事件，因此保持当前就绪状态。
+            if (iframeSrc.value !== nextIframeSrc) {
+              beginIframeLoad();
+              iframeSrc.value = nextIframeSrc;
+            }
             ensureTab(path);
             localStorage.setItem('active_menu', path);
             mobileMenuVisible.value = false;
@@ -1868,15 +1949,18 @@ async function clearS3Config() {
         }
         function refreshIframe() {
           // 强制刷新 iframe，并保持 URL 结构干净，避免多次刷新把查询串拼乱。
-          iframeLoading.value = true;
+          beginIframeLoad();
           const url = new URL(iframeSrc.value || (pagePrefix + config.defaultPage + pageSuffix), window.location.origin);
           url.searchParams.set('_t', Date.now());
           iframeSrc.value = url.pathname.replace(/^\//, '') + url.search + url.hash;
         }
         function goHome() {
             activeMenu.value = config.defaultPage;
-            iframeLoading.value = true;
-            iframeSrc.value = pagePrefix + config.defaultPage + pageSuffix;
+            const homeIframeSrc = pagePrefix + config.defaultPage + pageSuffix;
+            if (iframeSrc.value !== homeIframeSrc) {
+              beginIframeLoad();
+              iframeSrc.value = homeIframeSrc;
+            }
             ensureTab(config.defaultPage);
             mobileMenuVisible.value = false;
             localStorage.setItem('active_menu', config.defaultPage);
@@ -2062,12 +2146,8 @@ async function clearS3Config() {
             localStorage.setItem(noticeKey, '1');
           }*/
 
-          const savedMenu = localStorage.getItem('active_menu');
-          if (savedMenu) {
-            activeMenu.value = savedMenu;
-            iframeLoading.value = true;
-            iframeSrc.value = pagePrefix + savedMenu + pageSuffix;
-            ensureTab(savedMenu);
+          if (savedInitialMenu) {
+            ensureTab(savedInitialMenu);
           }
           const ua = navigator.userAgent.toLowerCase();
             const isMobile = /iphone|ipad|android|mobile|phone/.test(ua);
