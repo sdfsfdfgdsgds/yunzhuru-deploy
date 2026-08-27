@@ -507,6 +507,154 @@ function getAppStaticBucketFiles(PDO $pdo, array $input)
     ];
 }
 
+/**
+ * 读取并解密某个应用最近成功制品中的单个固定桶对象。
+ *
+ * 请求只允许提交 app_id、bucket_id 以及当前已展示的 task_id/attempt_no；
+ * 对象路径与公开 URL 必须由服务端从制品证据恢复，避免任意 URL 读取和
+ * 当前桶记录改写已核验的历史 APK 事实。
+ */
+function getAppStaticBucketFileContent(PDO $pdo, array $input)
+{
+    $user = Auth::check($pdo);
+    $parseInteger = static function ($value, bool $allowZero = false): ?int {
+        if (is_int($value)) {
+            $parsed = $value;
+        } elseif (is_string($value) && preg_match('/^\d+$/', $value) === 1) {
+            $parsed = (int)$value;
+        } else {
+            return null;
+        }
+        return $allowZero ? ($parsed >= 0 ? $parsed : null) : ($parsed > 0 ? $parsed : null);
+    };
+    $appId = $parseInteger($input['app_id'] ?? null) ?? 0;
+    $bucketId = $parseInteger($input['bucket_id'] ?? null) ?? 0;
+    $requestedTaskIdValue = $parseInteger($input['task_id'] ?? null);
+    $requestedAttemptNoValue = $parseInteger($input['attempt_no'] ?? null, true);
+    $requestedTaskId = $requestedTaskIdValue ?? 0;
+    $requestedAttemptNo = $requestedAttemptNoValue ?? -1;
+    if ($appId <= 0) {
+        throw new InvalidArgumentException('应用 ID 格式错误');
+    }
+    if ($bucketId <= 0) {
+        throw new InvalidArgumentException('固定桶 ID 格式错误');
+    }
+    if ($requestedTaskIdValue === null || $requestedAttemptNoValue === null) {
+        throw new InvalidArgumentException('制品快照标识缺失，请关闭详情后重新打开');
+    }
+
+    ensureApkDeleteMarkerTable($pdo);
+    $stmt = $pdo->prepare("SELECT a.id, a.user_id, a.name
+        FROM cainiao_apk a
+        LEFT JOIN cainiao_apk_deleted d ON d.apk_id=a.id
+        WHERE a.id=:id AND d.apk_id IS NULL
+        LIMIT 1");
+    $stmt->execute([':id' => $appId]);
+    $app = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$app || (($user['role'] ?? '') !== 'admin' && (int)$app['user_id'] !== (int)$user['id'])) {
+        throw new RuntimeException('应用不存在或当前账号无权查看');
+    }
+
+    ensureBucketFeatureSchema($pdo);
+    $rows = [[
+        'id' => $appId,
+        'apk_id' => $appId,
+        'name' => (string)$app['name'],
+    ]];
+    bucketAttachLatestAppSnapshots($pdo, $rows);
+    $snapshot = is_array($rows[0]['static_injected_buckets'] ?? null)
+        ? $rows[0]['static_injected_buckets']
+        : [];
+    // 详情弹窗打开后可能刚好有新制品完成；此时停止旧行读取，
+    // 避免用新快照的域名回答旧弹窗中的桶。
+    if ((int)($snapshot['task_id'] ?? 0) !== $requestedTaskId) {
+        throw new RuntimeException('最近成功制品已更新，请关闭详情后重新打开');
+    }
+    if ((int)($snapshot['attempt_no'] ?? 0) !== $requestedAttemptNo) {
+        throw new RuntimeException('最近成功制品的构建尝试已更新，请关闭详情后重新打开');
+    }
+    $items = bucketAttachAppFileFields(
+        is_array($snapshot['items'] ?? null) ? $snapshot['items'] : [],
+        $appId
+    );
+
+    $selected = null;
+    foreach ($items as $item) {
+        if ((int)($item['id'] ?? 0) === $bucketId) {
+            $selected = $item;
+            break;
+        }
+    }
+    if (!is_array($selected)) {
+        throw new RuntimeException('该桶不在此应用最近成功制品的固定桶快照中');
+    }
+
+    $fileUrl = (string)($selected['app_file_url'] ?? '');
+    if ($fileUrl === '') {
+        throw new RuntimeException('该历史固定桶未保留可用的公开对象地址');
+    }
+    $object = bucketReadPublicObjectBody($fileUrl, 1048576);
+    $payload = bucketDecryptAppConfigPayload((string)$object['body']);
+    $config = is_array($payload['config'] ?? null) ? $payload['config'] : [];
+
+    // 在任何明文进入 API 响应前强制校验对象内 APPID，防止错误路由造成跨应用配置泄露。
+    $payloadAppId = bucketRequireMatchingAppConfigId($config, $appId);
+    $appIdMatches = true;
+
+    // 明文中包含应用的完整远程配置，禁止浏览器和中间层持久缓存。
+    if (!headers_sent()) {
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
+    }
+
+    return [
+        'message' => '已读取并解密该桶当前实际对象',
+        'app_id' => $appId,
+        'app_name' => (string)$app['name'],
+        'snapshot' => [
+            'state' => (string)($snapshot['state'] ?? 'unknown'),
+            'exact' => (int)($snapshot['exact'] ?? 0),
+            'evidence' => (string)($snapshot['evidence'] ?? ''),
+            'task_id' => (int)($snapshot['task_id'] ?? 0),
+            'attempt_no' => (int)($snapshot['attempt_no'] ?? 0),
+            'template_version' => (string)($snapshot['template_version'] ?? ''),
+            'completed_at' => (string)($snapshot['completed_at'] ?? ''),
+        ],
+        'bucket' => [
+            'id' => (int)($selected['id'] ?? 0),
+            'name' => (string)($selected['name'] ?? ''),
+            'provider' => (string)($selected['provider'] ?? ''),
+            'provider_label' => (string)($selected['provider_label'] ?? ''),
+            'domain' => (string)($selected['domain'] ?? ''),
+            'app_file_key' => (string)($selected['app_file_key'] ?? ''),
+            'app_file_url' => $fileUrl,
+        ],
+        'object' => [
+            'http_code' => (int)($object['http_code'] ?? 0),
+            'byte_size' => (int)($object['byte_size'] ?? 0),
+            'cipher_sha256' => (string)($object['cipher_sha256'] ?? ''),
+            'last_modified' => (string)($object['last_modified'] ?? ''),
+            'updated_at' => (string)($object['updated_at'] ?? ''),
+        ],
+        'plaintext' => [
+            // json 是桶对象解密后的原始字节；pretty_json 只用于人工阅读。
+            // 两者分别返回大小与哈希，避免用格式化文本校验原始明文时误报。
+            'json' => (string)($payload['plain_text'] ?? ''),
+            'pretty_json' => (string)($payload['pretty_json'] ?? ''),
+            'byte_size' => (int)($payload['plain_byte_size'] ?? 0),
+            'sha256' => (string)($payload['plain_sha256'] ?? ''),
+            'pretty_byte_size' => (int)($payload['pretty_byte_size'] ?? 0),
+            'pretty_sha256' => (string)($payload['pretty_sha256'] ?? ''),
+            'field_count' => count($config),
+            'payload_app_id' => $payloadAppId,
+            'app_id_matches' => $appIdMatches,
+            'config_delivery_version' => $config['config_delivery_version'] ?? null,
+            'network_config_version' => $config['network_config_version'] ?? null,
+        ],
+        'checked_at' => (new DateTimeImmutable('now', new DateTimeZone('Asia/Shanghai')))->format('Y-m-d H:i:s'),
+    ];
+}
+
 //获取复用应用的配置列表
 function getMyReuseAppList(PDO $pdo, array $input)
 {

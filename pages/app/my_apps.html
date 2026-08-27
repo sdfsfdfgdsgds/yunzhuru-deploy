@@ -104,11 +104,38 @@
       line-height: 1.45;
       word-break: break-all;
     }
+    .static-bucket-plaintext-dialog {
+      width: min(1120px, 96vw) !important;
+    }
+    .static-bucket-plaintext-dialog .el-dialog__body {
+      max-height: 76vh;
+      overflow: auto;
+    }
+    .static-bucket-plaintext {
+      box-sizing: border-box;
+      width: 100%;
+      max-height: 56vh;
+      margin: 14px 0 0;
+      padding: 16px;
+      overflow: auto;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      background: #0d1117;
+      color: #e6edf3;
+      font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      white-space: pre;
+      tab-size: 2;
+    }
+    .static-bucket-plaintext-loading {
+      min-height: 120px;
+    }
     @media (max-width: 640px) {
       body { margin: 0; }
       #app { padding: 12px !important; }
       .static-bucket-dialog { width: 96vw !important; margin-top: 3vh !important; }
       .static-bucket-dialog .el-dialog__body { padding: 12px; }
+      .static-bucket-plaintext-dialog { width: 96vw !important; margin-top: 3vh !important; }
+      .static-bucket-plaintext-dialog .el-dialog__body { padding: 12px; }
     }
   </style>
 </head>
@@ -821,11 +848,136 @@
             </div>
           </template>
         </el-table-column>
+        <el-table-column label="明文配置" width="118" fixed="right">
+          <template #default="scope">
+            <el-button
+              type="primary"
+              size="small"
+              :loading="staticBucketPlainLoading && staticBucketPlainActiveBucketId === Number(scope.row.id)"
+              :disabled="!scope.row.id || !scope.row.app_file_url || staticBucketPlainLoading"
+              @click="viewStaticBucketPlaintext(scope.row)">
+              查看明文
+            </el-button>
+          </template>
+        </el-table-column>
       </el-table>
       <el-empty v-else :description="staticBucketEmptyText(activeStaticBucketSnapshot)"></el-empty>
 
       <template #footer>
         <el-button @click="staticBucketDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 明文始终按需读取单个历史固定桶 URL，不随列表或元数据请求批量下载。 -->
+    <el-dialog
+      v-model="staticBucketPlainDialogVisible"
+      class="static-bucket-plaintext-dialog"
+      title="桶实际对象明文"
+      append-to-body
+      destroy-on-close
+      @closed="resetStaticBucketPlaintext">
+      <el-alert
+        :title="staticBucketPlainEvidenceText(staticBucketPlainMeta)"
+        :type="staticBucketPlainMeta.snapshotState === 'verified' ? 'info' : 'warning'"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 14px;">
+      </el-alert>
+
+      <el-descriptions :column="2" border size="small">
+        <el-descriptions-item label="应用">
+          [{{ staticBucketPlainMeta.appId || '-' }}] {{ staticBucketPlainMeta.appName || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="桶">
+          [{{ staticBucketPlainMeta.bucketId || '-' }}] {{ staticBucketPlainMeta.bucketName || '-' }}
+          <span v-if="staticBucketPlainMeta.providerLabel"> / {{ staticBucketPlainMeta.providerLabel }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="制品证据">
+          <el-tag size="small" :type="staticBucketStateType({ state: staticBucketPlainMeta.snapshotState })">
+            {{ staticBucketStateLabel({ state: staticBucketPlainMeta.snapshotState }) }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="注入任务 / 构建尝试">
+          {{ staticBucketPlainMeta.taskId || '-' }} / {{ staticBucketPlainMeta.attemptNo || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="实际对象" :span="2">
+          <el-link
+            v-if="safeStaticBucketUrl(staticBucketPlainMeta.fileUrl)"
+            class="static-bucket-mono"
+            type="primary"
+            :href="safeStaticBucketUrl(staticBucketPlainMeta.fileUrl)"
+            target="_blank"
+            rel="noopener noreferrer">
+            {{ staticBucketPlainMeta.fileUrl }}
+          </el-link>
+          <span v-else class="static-bucket-mono">{{ staticBucketPlainMeta.fileUrl || '-' }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="对象时间">{{ staticBucketPlainMeta.updatedAt || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="读取时间">{{ staticBucketPlainMeta.checkedAt || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="密文 / 原始明文大小">
+          {{ staticBucketPlainMeta.cipherBytes ? formatStaticBucketBytes(staticBucketPlainMeta.cipherBytes) : '-' }}
+          /
+          {{ staticBucketPlainMeta.plainBytes ? formatStaticBucketBytes(staticBucketPlainMeta.plainBytes) : '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="格式化展示大小">
+          {{ staticBucketPlainMeta.prettyBytes ? formatStaticBucketBytes(staticBucketPlainMeta.prettyBytes) : '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="APPID 校验">
+          <el-tag size="small" :type="staticBucketPlainMatchType(staticBucketPlainMeta.appIdMatches)">
+            {{ staticBucketPlainMatchLabel(staticBucketPlainMeta) }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="配置版本">
+          delivery={{ staticBucketPlainMeta.configDeliveryVersion ?? '-' }}，network={{ staticBucketPlainMeta.networkConfigVersion ?? '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="顶层字段数">{{ staticBucketPlainMeta.fieldCount || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="密文 SHA-256" :span="2">
+          <span class="static-bucket-mono">{{ staticBucketPlainMeta.cipherSha256 || '-' }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="原始明文 SHA-256" :span="2">
+          <span class="static-bucket-mono">{{ staticBucketPlainMeta.plainSha256 || '-' }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="格式化展示 SHA-256" :span="2">
+          <span class="static-bucket-mono">{{ staticBucketPlainMeta.prettySha256 || '-' }}</span>
+        </el-descriptions-item>
+      </el-descriptions>
+
+      <el-alert
+        v-if="staticBucketPlainError"
+        :title="staticBucketPlainError"
+        type="error"
+        show-icon
+        :closable="false"
+        style="margin-top: 14px;">
+      </el-alert>
+
+      <div v-if="staticBucketPlainRawJson || staticBucketPlainPrettyJson" style="margin-top: 14px;">
+        <span style="margin-right: 10px; color: #606266;">展示与复制：</span>
+        <el-radio-group v-model="staticBucketPlainViewMode" size="small" @change="changeStaticBucketPlainView">
+          <el-radio-button label="pretty">格式化 JSON</el-radio-button>
+          <el-radio-button label="raw">原始明文</el-radio-button>
+        </el-radio-group>
+      </div>
+
+      <div
+        class="static-bucket-plaintext-loading"
+        v-loading="staticBucketPlainLoading"
+        element-loading-text="正在读取、解密并校验 JSON">
+        <pre v-if="staticBucketPlainJson" class="static-bucket-plaintext">{{ staticBucketPlainJson }}</pre>
+        <el-empty
+          v-else-if="!staticBucketPlainLoading && !staticBucketPlainError"
+          description="暂无可展示的明文">
+        </el-empty>
+      </div>
+
+      <template #footer>
+        <el-button
+          type="primary"
+          :disabled="!staticBucketPlainJson"
+          @click="copyStaticBucketPlaintext">
+          复制 JSON
+        </el-button>
+        <el-button @click="staticBucketPlainDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
 
@@ -869,6 +1021,39 @@
         let staticBucketFileRequestId = 0;
         const activeStaticBucketOwner = reactive({ id: 0, name: '' });
         const activeStaticBucketSnapshot = reactive(normalizeStaticBucketSnapshot(null));
+        const staticBucketPlainDialogVisible = ref(false);
+        const staticBucketPlainLoading = ref(false);
+        const staticBucketPlainError = ref('');
+        const staticBucketPlainJson = ref('');
+        const staticBucketPlainRawJson = ref('');
+        const staticBucketPlainPrettyJson = ref('');
+        const staticBucketPlainViewMode = ref('pretty');
+        const staticBucketPlainActiveBucketId = ref(0);
+        let staticBucketPlainRequestId = 0;
+        const staticBucketPlainMeta = reactive({
+          appId: 0,
+          appName: '',
+          bucketId: 0,
+          bucketName: '',
+          providerLabel: '',
+          fileUrl: '',
+          updatedAt: '',
+          checkedAt: '',
+          cipherBytes: 0,
+          plainBytes: 0,
+          prettyBytes: 0,
+          cipherSha256: '',
+          plainSha256: '',
+          prettySha256: '',
+          fieldCount: 0,
+          payloadAppId: null,
+          appIdMatches: null,
+          configDeliveryVersion: null,
+          networkConfigVersion: null,
+          snapshotState: 'unknown',
+          taskId: 0,
+          attemptNo: 0,
+        });
 
         /** 将缺失或异常响应收敛为稳定结构，保证旧接口缓存也可正常渲染。 */
         function normalizeStaticBucketSnapshot(value) {
@@ -1074,6 +1259,186 @@
           staticBucketDialogVisible.value = true;
           staticBucketFileError.value = '';
           if (activeStaticBucketOwner.id > 0) loadStaticBucketFiles(Number(activeStaticBucketOwner.id));
+        }
+
+        /**
+         * 按需读取用户点击的单个固定桶；前端只传制品标识和桶 ID，
+         * 真实 URL 与对象键由服务端从同一份历史快照中生成。
+         */
+        async function viewStaticBucketPlaintext(row) {
+          const appId = Number(activeStaticBucketOwner.id) || 0;
+          const bucketId = Number(row && row.id) || 0;
+          if (appId <= 0 || bucketId <= 0) {
+            ElementPlus.ElMessage.warning('应用或固定桶标识缺失');
+            return;
+          }
+
+          const requestId = ++staticBucketPlainRequestId;
+          replaceReactiveObject(staticBucketPlainMeta, {
+            appId,
+            appName: String(activeStaticBucketOwner.name || ''),
+            bucketId,
+            bucketName: String((row && row.name) || ''),
+            providerLabel: staticBucketProviderLabel(row || {}),
+            fileUrl: String((row && row.app_file_url) || ''),
+            updatedAt: String((row && row.app_file_updated_at) || ''),
+            checkedAt: '',
+            cipherBytes: Number((row && row.app_file_size) || 0),
+            plainBytes: 0,
+            prettyBytes: 0,
+            cipherSha256: '',
+            plainSha256: '',
+            prettySha256: '',
+            fieldCount: 0,
+            payloadAppId: null,
+            appIdMatches: null,
+            configDeliveryVersion: null,
+            networkConfigVersion: null,
+            snapshotState: String(activeStaticBucketSnapshot.state || 'unknown'),
+            taskId: Number(activeStaticBucketSnapshot.task_id) || 0,
+            attemptNo: Number(activeStaticBucketSnapshot.attempt_no) || 0,
+          });
+          staticBucketPlainJson.value = '';
+          staticBucketPlainRawJson.value = '';
+          staticBucketPlainPrettyJson.value = '';
+          staticBucketPlainViewMode.value = 'pretty';
+          staticBucketPlainError.value = '';
+          staticBucketPlainActiveBucketId.value = bucketId;
+          staticBucketPlainLoading.value = true;
+          staticBucketPlainDialogVisible.value = true;
+
+          try {
+            const response = await fetch('/api/index.php?module=app&method=getAppStaticBucketFileContent', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              cache: 'no-store',
+              body: JSON.stringify({
+                app_id: appId,
+                bucket_id: bucketId,
+                task_id: Number(activeStaticBucketSnapshot.task_id) || 0,
+                attempt_no: Number(activeStaticBucketSnapshot.attempt_no) || 0,
+              }),
+            });
+            const json = await response.json();
+            if (json.code !== 200 || !json.data || !json.data.plaintext) {
+              throw new Error(json.message || '桶配置明文读取失败');
+            }
+            if (requestId !== staticBucketPlainRequestId || !staticBucketPlainDialogVisible.value) return;
+
+            const data = json.data;
+            const bucket = data.bucket || {};
+            const object = data.object || {};
+            const plaintext = data.plaintext || {};
+            const snapshot = data.snapshot || {};
+            replaceReactiveObject(staticBucketPlainMeta, {
+              appId: Number(data.app_id) || appId,
+              appName: String(data.app_name || activeStaticBucketOwner.name || ''),
+              bucketId: Number(bucket.id) || bucketId,
+              bucketName: String(bucket.name || (row && row.name) || ''),
+              providerLabel: String(bucket.provider_label || staticBucketProviderLabel(row || {})),
+              fileUrl: String(bucket.app_file_url || (row && row.app_file_url) || ''),
+              updatedAt: String(object.updated_at || (row && row.app_file_updated_at) || ''),
+              checkedAt: String(data.checked_at || ''),
+              cipherBytes: Number(object.byte_size) || 0,
+              plainBytes: Number(plaintext.byte_size) || 0,
+              prettyBytes: Number(plaintext.pretty_byte_size) || 0,
+              cipherSha256: String(object.cipher_sha256 || ''),
+              plainSha256: String(plaintext.sha256 || ''),
+              prettySha256: String(plaintext.pretty_sha256 || ''),
+              fieldCount: Number(plaintext.field_count) || 0,
+              payloadAppId: plaintext.payload_app_id === null || plaintext.payload_app_id === undefined
+                ? null
+                : String(plaintext.payload_app_id),
+              appIdMatches: plaintext.app_id_matches === true
+                ? true
+                : (plaintext.app_id_matches === false ? false : null),
+              configDeliveryVersion: plaintext.config_delivery_version ?? null,
+              networkConfigVersion: plaintext.network_config_version ?? null,
+              snapshotState: String(snapshot.state || activeStaticBucketSnapshot.state || 'unknown'),
+              taskId: Number(snapshot.task_id) || 0,
+              attemptNo: Number(snapshot.attempt_no) || 0,
+            });
+            staticBucketPlainRawJson.value = String(plaintext.json || '');
+            staticBucketPlainPrettyJson.value = String(plaintext.pretty_json || plaintext.json || '');
+            staticBucketPlainJson.value = staticBucketPlainPrettyJson.value || staticBucketPlainRawJson.value;
+          } catch (error) {
+            if (requestId !== staticBucketPlainRequestId || !staticBucketPlainDialogVisible.value) return;
+            staticBucketPlainError.value = String((error && error.message) || '桶配置明文读取失败');
+          } finally {
+            if (requestId === staticBucketPlainRequestId) {
+              staticBucketPlainLoading.value = false;
+              staticBucketPlainActiveBucketId.value = 0;
+            }
+          }
+        }
+
+        function resetStaticBucketPlaintext() {
+          staticBucketPlainRequestId++;
+          staticBucketPlainLoading.value = false;
+          staticBucketPlainActiveBucketId.value = 0;
+          staticBucketPlainError.value = '';
+          staticBucketPlainJson.value = '';
+          staticBucketPlainRawJson.value = '';
+          staticBucketPlainPrettyJson.value = '';
+          staticBucketPlainViewMode.value = 'pretty';
+        }
+
+        function staticBucketPlainMatchType(value) {
+          if (value === true) return 'success';
+          if (value === false) return 'danger';
+          return 'info';
+        }
+
+        function staticBucketPlainMatchLabel(meta) {
+          if (meta.appIdMatches === true) return '一致（' + meta.appId + '）';
+          if (meta.appIdMatches === false) return '不一致（桶内：' + (meta.payloadAppId || '非法值') + '）';
+          return '桶内未声明 APPID';
+        }
+
+        function staticBucketPlainEvidenceText(meta) {
+          const prefix = meta.snapshotState === 'verified'
+            ? '该 URL 来自生成制品的已核验固定桶快照。'
+            : '旧制品证据不完整，该 URL 可能来自历史任务保留信息或当前桶记录。';
+          return prefix + '这里展示页面当前 URL 此刻返回的实际对象明文，对象会被后续推送覆盖。';
+        }
+
+        function formatStaticBucketBytes(value) {
+          const bytes = Math.max(0, Number(value) || 0);
+          if (bytes < 1024) return bytes + ' B';
+          if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KiB';
+          return (bytes / 1024 / 1024).toFixed(2) + ' MiB';
+        }
+
+        function changeStaticBucketPlainView(mode) {
+          staticBucketPlainJson.value = mode === 'raw'
+            ? staticBucketPlainRawJson.value
+            : staticBucketPlainPrettyJson.value;
+        }
+
+        async function copyStaticBucketPlaintext() {
+          const text = String(staticBucketPlainJson.value || '');
+          if (!text) return;
+          try {
+            if (navigator.clipboard && window.isSecureContext) {
+              await navigator.clipboard.writeText(text);
+            } else {
+              const textarea = document.createElement('textarea');
+              try {
+                textarea.value = text;
+                textarea.setAttribute('readonly', 'readonly');
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                if (!document.execCommand('copy')) throw new Error('copy command returned false');
+              } finally {
+                textarea.remove();
+              }
+            }
+            ElementPlus.ElMessage.success('JSON 已复制');
+          } catch (error) {
+            ElementPlus.ElMessage.error('复制失败，请在明文区手动选择复制');
+          }
         }
 
         // ===== URL 注入（管理员专用） =====
@@ -2184,6 +2549,23 @@ onMounted(() => {
           staticBucketCurrentStateType,
           staticBucketFileStatusLabel,
           openStaticBucketDetails,
+          staticBucketPlainDialogVisible,
+          staticBucketPlainLoading,
+          staticBucketPlainError,
+          staticBucketPlainJson,
+          staticBucketPlainRawJson,
+          staticBucketPlainPrettyJson,
+          staticBucketPlainViewMode,
+          staticBucketPlainActiveBucketId,
+          staticBucketPlainMeta,
+          viewStaticBucketPlaintext,
+          resetStaticBucketPlaintext,
+          staticBucketPlainMatchType,
+          staticBucketPlainMatchLabel,
+          staticBucketPlainEvidenceText,
+          formatStaticBucketBytes,
+          changeStaticBucketPlainView,
+          copyStaticBucketPlaintext,
 
 
         };

@@ -265,6 +265,56 @@ if (!function_exists('bucketAttachAppFileFields')) {
     }
 }
 
+if (!function_exists('bucketPublicIpAddressIsSafe')) {
+    /**
+     * 判断单个 IP 是否适合服务端公开对象请求。
+     *
+     * PHP 7.4 的 FILTER_FLAG_NO_PRIV_RANGE/NO_RES_RANGE 对 IPv4-mapped、
+     * IPv4-compatible、NAT64 和 6to4 IPv6 中嵌入的私网 IPv4 判断不完整，
+     * 因此需要解出内层 IPv4 后再执行一次公网校验。
+     */
+    function bucketPublicIpAddressIsSafe(string $ip): bool {
+        if (filter_var(
+            $ip,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        ) === false) {
+            return false;
+        }
+
+        $packed = @inet_pton($ip);
+        if ($packed === false || strlen($packed) !== 16) return true;
+
+        $embeddedV4 = null;
+        $zero10 = str_repeat("\0", 10);
+        $zero12 = str_repeat("\0", 12);
+        if (substr($packed, 0, 10) === $zero10 && substr($packed, 10, 2) === "\xff\xff") {
+            // IPv4-mapped IPv6：::ffff:W.X.Y.Z
+            $embeddedV4 = substr($packed, 12, 4);
+        } elseif (substr($packed, 0, 12) === $zero12) {
+            // 旧式 IPv4-compatible IPv6：::W.X.Y.Z，同时覆盖 :: 和 ::1。
+            $embeddedV4 = substr($packed, 12, 4);
+        } elseif (substr($packed, 0, 12) === hex2bin('0064ff9b0000000000000000')) {
+            // IETF well-known NAT64：64:ff9b::/96。
+            $embeddedV4 = substr($packed, 12, 4);
+        } elseif (substr($packed, 0, 6) === hex2bin('0064ff9b0001')) {
+            // RFC 8215 local-use NAT64：64:ff9b:1::/48，IPv4 位于末 32 位。
+            $embeddedV4 = substr($packed, 12, 4);
+        } elseif (substr($packed, 0, 2) === "\x20\x02") {
+            // 6to4：2002:V4ADDR::/48，IPv4 位于第 16-48 位。
+            $embeddedV4 = substr($packed, 2, 4);
+        }
+
+        if ($embeddedV4 === null) return true;
+        $ipv4 = @inet_ntop($embeddedV4);
+        return is_string($ipv4) && filter_var(
+            $ipv4,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        ) !== false;
+    }
+}
+
 if (!function_exists('bucketPublicUrlSafeIps')) {
     /** 解析公开 URL；只有全部 DNS 结果都是公网地址时才返回 IP 列表。 */
     function bucketPublicUrlSafeIps(string $url): array {
@@ -283,11 +333,7 @@ if (!function_exists('bucketPublicUrlSafeIps')) {
             }
         }
         if (empty($ips)) return [];
-        foreach ($ips as $ip) {
-            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
-                return [];
-            }
-        }
+        foreach ($ips as $ip) if (!bucketPublicIpAddressIsSafe((string)$ip)) return [];
         return array_values(array_unique($ips));
     }
 }
@@ -330,6 +376,221 @@ if (!function_exists('bucketPublicObjectHeaderSize')) {
             if ($value !== '' && ctype_digit($value)) return max(0, (int)$value);
         }
         return 0;
+    }
+}
+
+if (!function_exists('bucketReadPublicObjectBody')) {
+    /**
+     * 从 APK 真正使用的公开 HTTPS 地址读取单个桶对象。
+     *
+     * 该方法与元数据探测使用相同的 SSRF 防护：DNS 结果必须全部为公网 IP，
+     * 连接时固定已校验 IP，开启 TLS 验证且禁止跳转。返回内容仅用于
+     * 已鉴权的单应用明文查看接口，默认最多读取 1 MiB。
+     */
+    function bucketReadPublicObjectBody(string $url, int $maxBytes = 1048576): array {
+        if (!function_exists('curl_init')) {
+            throw new RuntimeException('当前服务缺少 cURL 扩展');
+        }
+
+        $url = bucketSafeStoredPublicUrl($url);
+        if ($url === '') {
+            throw new InvalidArgumentException('桶文件公开地址未通过安全校验');
+        }
+        $safeIps = bucketPublicUrlSafeIps($url);
+        if (empty($safeIps)) {
+            throw new RuntimeException('桶文件域名未解析到安全公网 IP');
+        }
+
+        $maxBytes = max(1024, min($maxBytes, 4 * 1024 * 1024));
+        $host = trim((string)(parse_url($url, PHP_URL_HOST) ?: ''), '[]');
+        $port = (int)(parse_url($url, PHP_URL_PORT) ?: 443);
+
+        $capture = (object)[
+            'headers' => [],
+            'body' => '',
+            'bytes' => 0,
+            'too_large' => false,
+        ];
+        $handle = curl_init($url);
+        $options = [
+            CURLOPT_RETURNTRANSFER => false,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_CONNECTTIMEOUT => 3,
+            CURLOPT_TIMEOUT => 10,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_HTTPGET => true,
+            CURLOPT_HTTPHEADER => [
+                'Accept: application/octet-stream,text/plain;q=0.9,*/*;q=0.1',
+                'Accept-Encoding: identity',
+                'Cache-Control: no-cache',
+                'Pragma: no-cache',
+            ],
+            CURLOPT_USERAGENT => 'yunzhuru-app-config-plaintext/1.0',
+            CURLOPT_HEADERFUNCTION => static function ($curlHandle, string $line) use ($capture): int {
+                $length = strlen($line);
+                $trimmed = trim($line);
+                if ($trimmed === '') return $length;
+                if (stripos($trimmed, 'HTTP/') === 0) {
+                    $capture->headers = [];
+                    return $length;
+                }
+                $separator = strpos($line, ':');
+                if ($separator !== false) {
+                    $name = strtolower(trim(substr($line, 0, $separator)));
+                    $value = trim(substr($line, $separator + 1));
+                    if ($name !== '') $capture->headers[$name] = $value;
+                }
+                return $length;
+            },
+            CURLOPT_WRITEFUNCTION => static function ($curlHandle, string $chunk) use ($capture, $maxBytes): int {
+                $chunkLength = strlen($chunk);
+                if ($capture->bytes + $chunkLength > $maxBytes) {
+                    $capture->too_large = true;
+                    return 0;
+                }
+                $capture->body .= $chunk;
+                $capture->bytes += $chunkLength;
+                return $chunkLength;
+            },
+        ];
+        // URL 中已是公网 IP 字面量时无需 RESOLVE，尤其 IPv6 主机会与
+        // libcurl 的 host:port:[address] 格式产生冒号歧义；域名才固定到已校验 IP。
+        if (filter_var($host, FILTER_VALIDATE_IP) === false) {
+            $pinnedIp = (string)$safeIps[0];
+            if (strpos($pinnedIp, ':') !== false) $pinnedIp = '[' . $pinnedIp . ']';
+            $options[CURLOPT_RESOLVE] = ["{$host}:{$port}:{$pinnedIp}"];
+        }
+        if (defined('CURLOPT_PROTOCOLS') && defined('CURLPROTO_HTTPS')) {
+            $options[CURLOPT_PROTOCOLS] = CURLPROTO_HTTPS;
+        }
+        curl_setopt_array($handle, $options);
+
+        $executed = curl_exec($handle);
+        $httpCode = (int)curl_getinfo($handle, CURLINFO_HTTP_CODE);
+        $curlError = trim((string)curl_error($handle));
+        curl_close($handle);
+
+        if ($capture->too_large) {
+            throw new RuntimeException('桶配置文件超过 ' . $maxBytes . ' 字节安全上限');
+        }
+        if ($executed === false) {
+            throw new RuntimeException('桶配置文件读取失败' . ($curlError !== '' ? '：' . $curlError : ''));
+        }
+        if ($httpCode === 401 || $httpCode === 403) {
+            throw new RuntimeException("桶配置文件公开读取受限（HTTP {$httpCode}），APK 访问该地址时也会收到同样结果");
+        }
+        if ($httpCode === 404) {
+            throw new RuntimeException('该桶中不存在本应用的配置文件（HTTP 404）');
+        }
+        // 完整正文请求只接受 200；206 代表部分内容，不参与解密。
+        if ($httpCode !== 200) {
+            throw new RuntimeException("桶配置文件返回异常（HTTP {$httpCode}）");
+        }
+        if ($capture->body === '') {
+            throw new RuntimeException('桶配置文件内容为空');
+        }
+
+        $time = bucketPublicObjectHeaderTime((array)$capture->headers);
+        return [
+            'url' => $url,
+            'http_code' => $httpCode,
+            'body' => $capture->body,
+            'byte_size' => $capture->bytes,
+            'cipher_sha256' => hash('sha256', $capture->body),
+            'last_modified' => (string)($time['raw'] ?? ''),
+            'updated_at' => (string)($time['display'] ?? ''),
+        ];
+    }
+}
+
+if (!function_exists('bucketDecryptAppConfigPayload')) {
+    /**
+     * 按壳端协议解密 `config/{APPID}.enc`。
+     *
+     * 文件合同为 Base64(16 字节随机 IV + AES-128-CBC 密文)，密钥与
+     * `ConfigHelper::encrypt_json()` 及 Android 壳端保持一致。只有解密后为 JSON 对象
+     * 的内容才会返回给页面。
+     */
+    function bucketDecryptAppConfigPayload(string $encodedPayload): array {
+        $encodedPayload = trim($encodedPayload);
+        $raw = base64_decode($encodedPayload, true);
+        if ($raw === false || strlen($raw) <= 16) {
+            throw new RuntimeException('桶配置密文不是有效的 Base64 + IV 封包');
+        }
+
+        $iv = substr($raw, 0, 16);
+        $cipherText = substr($raw, 16);
+        if ($cipherText === '' || strlen($cipherText) % 16 !== 0) {
+            throw new RuntimeException('桶配置 AES 密文长度异常');
+        }
+        $plainText = openssl_decrypt(
+            $cipherText,
+            'AES-128-CBC',
+            '1234567890abcdef',
+            OPENSSL_RAW_DATA,
+            $iv
+        );
+        if ($plainText === false) {
+            throw new RuntimeException('桶配置 AES 解密失败');
+        }
+
+        $decodedObject = json_decode($plainText);
+        if (json_last_error() !== JSON_ERROR_NONE || !is_object($decodedObject)) {
+            throw new RuntimeException('桶配置解密后不是有效 JSON 对象：' . json_last_error_msg());
+        }
+        $decoded = json_decode($plainText, true);
+        $prettyJson = json_encode(
+            // 使用 object 视图格式化，避免纯数字键对象或空对象被改写成 JSON 数组。
+            $decodedObject,
+            JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+        );
+        if ($prettyJson === false) {
+            throw new RuntimeException('桶配置 JSON 格式化失败：' . json_last_error_msg());
+        }
+
+        return [
+            'config' => $decoded,
+            'plain_text' => $plainText,
+            'pretty_json' => $prettyJson,
+            'plain_byte_size' => strlen($plainText),
+            'plain_sha256' => hash('sha256', $plainText),
+            'pretty_byte_size' => strlen($prettyJson),
+            'pretty_sha256' => hash('sha256', $prettyJson),
+        ];
+    }
+}
+
+if (!function_exists('bucketRequireMatchingAppConfigId')) {
+    /**
+     * 要求解密配置中的 APPID 与已鉴权应用完全一致。
+     *
+     * 这是明文返回前的跨应用边界：历史域名、CDN 或桶路由异常时，
+     * 即使密文能正常解密，也不将其完整内容返回给另一个应用的所有者。
+     */
+    function bucketRequireMatchingAppConfigId(array $config, int $expectedAppId): string {
+        if ($expectedAppId <= 0) {
+            throw new InvalidArgumentException('预期 APPID 格式错误');
+        }
+        if (array_key_exists('appid', $config)) {
+            $value = $config['appid'];
+        } elseif (array_key_exists('app_id', $config)) {
+            $value = $config['app_id'];
+        } else {
+            throw new RuntimeException('桶配置缺少 APPID，已停止返回明文');
+        }
+
+        if (is_int($value) && $value > 0) {
+            $normalized = (string)$value;
+        } elseif (is_string($value) && preg_match('/^[1-9]\d*$/', $value) === 1) {
+            $normalized = $value;
+        } else {
+            throw new RuntimeException('桶配置 APPID 类型或格式异常，已停止返回明文');
+        }
+        if ((int)$normalized !== $expectedAppId) {
+            throw new RuntimeException('桶配置 APPID 与目标应用不一致，已停止返回明文');
+        }
+        return $normalized;
     }
 }
 
@@ -377,8 +638,6 @@ if (!function_exists('bucketLoadAppFileMetadata')) {
 
             $host = trim((string)(parse_url($url, PHP_URL_HOST) ?: ''), '[]');
             $port = (int)(parse_url($url, PHP_URL_PORT) ?: 443);
-            $pinnedIp = (string)$safeIps[0];
-            if (strpos($pinnedIp, ':') !== false) $pinnedIp = '[' . $pinnedIp . ']';
             $capture = (object)['headers' => []];
             $handle = curl_init($url);
             $options = [
@@ -392,7 +651,6 @@ if (!function_exists('bucketLoadAppFileMetadata')) {
                 CURLOPT_RANGE => '0-0',
                 CURLOPT_HTTPHEADER => ['Cache-Control: no-cache', 'Pragma: no-cache'],
                 CURLOPT_USERAGENT => 'yunzhuru-app-file-check/1.0',
-                CURLOPT_RESOLVE => ["{$host}:{$port}:{$pinnedIp}"],
                 CURLOPT_HEADERFUNCTION => static function ($curlHandle, string $line) use ($capture): int {
                     $length = strlen($line);
                     $trimmed = trim($line);
@@ -410,6 +668,11 @@ if (!function_exists('bucketLoadAppFileMetadata')) {
                     return $length;
                 },
             ];
+            if (filter_var($host, FILTER_VALIDATE_IP) === false) {
+                $pinnedIp = (string)$safeIps[0];
+                if (strpos($pinnedIp, ':') !== false) $pinnedIp = '[' . $pinnedIp . ']';
+                $options[CURLOPT_RESOLVE] = ["{$host}:{$port}:{$pinnedIp}"];
+            }
             if (defined('CURLOPT_PROTOCOLS') && defined('CURLPROTO_HTTPS')) {
                 $options[CURLOPT_PROTOCOLS] = CURLPROTO_HTTPS;
             }
