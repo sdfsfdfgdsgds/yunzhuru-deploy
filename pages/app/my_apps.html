@@ -166,12 +166,35 @@
     .static-bucket-plaintext-loading {
       min-height: 120px;
     }
+    .api-payload-section {
+      margin-top: 16px;
+    }
+    .api-payload-section-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      color: #303133;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .api-payload-section-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    .api-payload-section .static-bucket-plaintext {
+      max-height: 34vh;
+    }
     @media (max-width: 640px) {
       body { margin: 0; }
       #app { padding: 12px !important; }
       .static-bucket-dialog { width: 96vw !important; margin-top: 3vh !important; }
       .static-bucket-dialog .el-dialog__body { padding: 12px; }
       .static-api-toolbar { flex-direction: column; }
+      .api-payload-section-heading { align-items: flex-start; flex-direction: column; }
       .static-bucket-plaintext-dialog { width: 96vw !important; margin-top: 3vh !important; }
       .static-bucket-plaintext-dialog .el-dialog__body { padding: 12px; }
     }
@@ -889,7 +912,7 @@
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="明文配置" width="118" fixed="right">
+            <el-table-column label="配置数据" width="118" fixed="right">
               <template #default="scope">
                 <el-button
                   type="primary"
@@ -897,7 +920,7 @@
                   :loading="staticBucketPlainLoading && staticBucketPlainActiveBucketId === Number(scope.row.id)"
                   :disabled="!scope.row.id || !scope.row.app_file_url || staticBucketPlainLoading"
                   @click="viewStaticBucketPlaintext(scope.row)">
-                  查看明文
+                  查看数据
                 </el-button>
               </template>
             </el-table-column>
@@ -910,7 +933,7 @@
             <div>
               <div class="static-api-title">当前有效下发 API（后台控制面）</div>
               <div class="static-bucket-secondary">
-                桶对象会异步刷新；每个桶实际落盘的 API 列表，以该行“查看明文”为准。
+                桶对象会异步刷新；每个桶实际落盘的 API 列表，以该行“查看数据”为准。
                 此处展示下发合同，不对每个 API 执行即时健康探测。
               </div>
             </div>
@@ -996,7 +1019,7 @@
             <el-table-column label="后台更新时间" width="176">
               <template #default="scope">{{ scope.row.updated_at || '-' }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="92" fixed="right">
+            <el-table-column label="操作" width="176" fixed="right">
               <template #default="scope">
                 <el-button
                   link
@@ -1004,6 +1027,14 @@
                   :disabled="!safeDynamicApiUrl(scope.row.delivery_url)"
                   @click="copyDynamicApiUrl(scope.row)">
                   复制 URL
+                </el-button>
+                <el-button
+                  link
+                  type="primary"
+                  :loading="apiPayloadLoading && apiPayloadActiveEntryKey === scope.row.entry_key"
+                  :disabled="!scope.row.entry_key || apiPayloadLoading"
+                  @click="viewDynamicApiPayload(scope.row)">
+                  查看数据
                 </el-button>
               </template>
             </el-table-column>
@@ -1031,11 +1062,11 @@
       </template>
     </el-dialog>
 
-    <!-- 明文始终按需读取单个历史固定桶 URL，不随列表或元数据请求批量下载。 -->
+    <!-- 加密与明文始终按需读取单个历史固定桶 URL，不随列表或元数据请求批量下载。 -->
     <el-dialog
       v-model="staticBucketPlainDialogVisible"
       class="static-bucket-plaintext-dialog"
-      title="桶实际对象明文"
+      title="桶实际对象：加密与明文"
       append-to-body
       destroy-on-close
       @closed="resetStaticBucketPlaintext">
@@ -1114,9 +1145,10 @@
         style="margin-top: 14px;">
       </el-alert>
 
-      <div v-if="staticBucketPlainRawJson || staticBucketPlainPrettyJson" style="margin-top: 14px;">
+      <div v-if="staticBucketPlainCiphertext || staticBucketPlainRawJson || staticBucketPlainPrettyJson" style="margin-top: 14px;">
         <span style="margin-right: 10px; color: #606266;">展示与复制：</span>
         <el-radio-group v-model="staticBucketPlainViewMode" size="small" @change="changeStaticBucketPlainView">
+          <el-radio-button v-if="staticBucketPlainCiphertext" label="cipher">加密原文</el-radio-button>
           <el-radio-button label="pretty">格式化 JSON</el-radio-button>
           <el-radio-button label="raw">原始明文</el-radio-button>
         </el-radio-group>
@@ -1129,7 +1161,7 @@
         <pre v-if="staticBucketPlainJson" class="static-bucket-plaintext">{{ staticBucketPlainJson }}</pre>
         <el-empty
           v-else-if="!staticBucketPlainLoading && !staticBucketPlainError"
-          description="暂无可展示的明文">
+          description="暂无可展示的数据">
         </el-empty>
       </div>
 
@@ -1138,9 +1170,168 @@
           type="primary"
           :disabled="!staticBucketPlainJson"
           @click="copyStaticBucketPlaintext">
-          复制 JSON
+          复制当前数据
         </el-button>
         <el-button @click="staticBucketPlainDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- API 数据只在用户点击单个节点时请求；同一次响应同时保留原文和解密结果。 -->
+    <el-dialog
+      v-model="apiPayloadDialogVisible"
+      class="static-bucket-plaintext-dialog"
+      title="API 节点实际响应数据"
+      append-to-body
+      destroy-on-close
+      @closed="resetDynamicApiPayload">
+      <el-alert
+        title="本次由云注入服务器向选中的 API 节点发起一次真实 POST；这里展示该次响应，不代表某台手机的本地缓存、DNS 或运营商链路。"
+        type="info"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 14px;">
+      </el-alert>
+
+      <el-descriptions :column="2" border size="small">
+        <el-descriptions-item label="应用">
+          [{{ apiPayloadMeta.appId || '-' }}] {{ apiPayloadMeta.appName || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="API 节点">
+          [{{ apiPayloadMeta.apiId || '-' }}] {{ apiPayloadMeta.apiName || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="下发 URL" :span="2">
+          <span class="static-bucket-mono">{{ apiPayloadMeta.deliveryUrl || '-' }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="本次实际 URL" :span="2">
+          <span class="static-bucket-mono">{{ apiPayloadMeta.requestUrl || '-' }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="HTTP / Content-Type">
+          <el-tag size="small" effect="plain" :type="apiPayloadHttpType(apiPayloadMeta.httpCode)">
+            {{ apiPayloadMeta.httpCode || '-' }}
+          </el-tag>
+          <span style="margin-left: 8px;">{{ apiPayloadMeta.contentType || '-' }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="响应来源">
+          {{ apiPayloadResponseSourceLabel(apiPayloadMeta) }}
+        </el-descriptions-item>
+        <el-descriptions-item label="缓存 TTL / 服务端耗时">
+          {{ apiPayloadMeta.dataSourceTtl || '-' }} / {{ apiPayloadMeta.dataTtl || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="本次请求耗时">
+          {{ formatApiPayloadMilliseconds(apiPayloadMeta.elapsedMs) }}
+        </el-descriptions-item>
+        <el-descriptions-item label="读取时间">
+          {{ apiPayloadMeta.checkedAt || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="响应原文 / 原始明文大小">
+          {{ apiPayloadMeta.responseBytes ? formatStaticBucketBytes(apiPayloadMeta.responseBytes) : '-' }}
+          /
+          {{ apiPayloadMeta.plainBytes ? formatStaticBucketBytes(apiPayloadMeta.plainBytes) : '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="响应展示编码">
+          {{ apiPayloadMeta.responseEncoding === 'base64' ? 'Base64（原响应为二进制字节）' : 'UTF-8 原文' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="格式化明文大小">
+          {{ apiPayloadMeta.prettyBytes ? formatStaticBucketBytes(apiPayloadMeta.prettyBytes) : '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="请求 APPID / 响应 APPID">
+          {{ apiPayloadMeta.appId || '-' }} / {{ apiPayloadMeta.payloadAppId || '-' }}
+          <el-tag
+            v-if="apiPayloadMeta.appIdMatches !== null"
+            size="small"
+            effect="plain"
+            :type="staticBucketPlainMatchType(apiPayloadMeta.appIdMatches)"
+            style="margin-left: 8px;">
+            {{ apiPayloadMeta.appIdMatches ? '一致' : '不一致' }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="配置版本">
+          delivery={{ apiPayloadMeta.configDeliveryVersion ?? '-' }}，network={{ apiPayloadMeta.networkConfigVersion ?? '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="配置解析来源">
+          {{ apiPayloadMeta.configResolution || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="顶层字段数">
+          {{ apiPayloadMeta.fieldCount || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="响应原文 SHA-256" :span="2">
+          <span class="static-bucket-mono">{{ apiPayloadMeta.responseSha256 || '-' }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="原始明文 SHA-256" :span="2">
+          <span class="static-bucket-mono">{{ apiPayloadMeta.plainSha256 || '-' }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="格式化明文 SHA-256" :span="2">
+          <span class="static-bucket-mono">{{ apiPayloadMeta.prettySha256 || '-' }}</span>
+        </el-descriptions-item>
+      </el-descriptions>
+
+      <el-alert
+        v-if="apiPayloadError"
+        :title="apiPayloadError"
+        type="error"
+        show-icon
+        :closable="false"
+        style="margin-top: 14px;">
+      </el-alert>
+
+      <div class="static-bucket-plaintext-loading" v-loading="apiPayloadLoading" element-loading-text="正在请求 API 并解密响应">
+        <div class="api-payload-section">
+          <div class="api-payload-section-heading">
+            <span v-if="apiPayloadMeta.responseEncoding === 'base64'">响应原文字节（Base64 编码展示）</span>
+            <span v-else>{{ apiPayloadPlainState === 'success' ? '响应原文（Base64 AES 密文）' : '响应原文' }}</span>
+            <el-button
+              size="small"
+              type="primary"
+              :disabled="!apiPayloadResponseBody"
+              @click="copyApiPayloadResponse">
+              复制响应原文
+            </el-button>
+          </div>
+          <pre v-if="apiPayloadResponseBody" class="static-bucket-plaintext">{{ apiPayloadResponseBody }}</pre>
+          <el-empty
+            v-else-if="!apiPayloadLoading && !apiPayloadError"
+            description="本次响应没有正文">
+          </el-empty>
+        </div>
+
+        <div class="api-payload-section">
+          <div class="api-payload-section-heading">
+            <span>解密明文</span>
+            <div class="api-payload-section-actions">
+              <el-radio-group
+                v-model="apiPayloadPlainViewMode"
+                size="small"
+                @change="changeApiPayloadPlainView">
+                <el-radio-button label="pretty">格式化 JSON</el-radio-button>
+                <el-radio-button label="raw">原始明文</el-radio-button>
+              </el-radio-group>
+              <el-button
+                size="small"
+                type="primary"
+                :disabled="!apiPayloadPlainText"
+                @click="copyApiPayloadPlaintext">
+                复制当前明文
+              </el-button>
+            </div>
+          </div>
+          <el-alert
+            v-if="apiPayloadDecodeError"
+            :title="apiPayloadDecodeError"
+            type="warning"
+            show-icon
+            :closable="false"
+            style="margin-top: 12px;">
+          </el-alert>
+          <pre v-if="apiPayloadPlainText" class="static-bucket-plaintext">{{ apiPayloadPlainText }}</pre>
+          <el-empty
+            v-else-if="!apiPayloadLoading && !apiPayloadDecodeError && !apiPayloadError"
+            description="本次响应没有可展示的解密明文">
+          </el-empty>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="apiPayloadDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
 
@@ -1191,6 +1382,7 @@
         const staticBucketPlainLoading = ref(false);
         const staticBucketPlainError = ref('');
         const staticBucketPlainJson = ref('');
+        const staticBucketPlainCiphertext = ref('');
         const staticBucketPlainRawJson = ref('');
         const staticBucketPlainPrettyJson = ref('');
         const staticBucketPlainViewMode = ref('pretty');
@@ -1220,6 +1412,54 @@
           taskId: 0,
           attemptNo: 0,
         });
+        // API 实际响应采用独立状态和请求序号，避免与固定桶证据或并发节点互相覆盖。
+        const apiPayloadDialogVisible = ref(false);
+        const apiPayloadLoading = ref(false);
+        const apiPayloadError = ref('');
+        const apiPayloadDecodeError = ref('');
+        const apiPayloadResponseBody = ref('');
+        const apiPayloadPlainRaw = ref('');
+        const apiPayloadPlainPretty = ref('');
+        const apiPayloadPlainText = ref('');
+        const apiPayloadPlainViewMode = ref('pretty');
+        const apiPayloadPlainState = ref('pending');
+        const apiPayloadActiveEntryKey = ref('');
+        let apiPayloadRequestId = 0;
+        const apiPayloadMeta = reactive(createEmptyApiPayloadMeta());
+
+        /** 返回 API 数据弹窗的完整空态，关闭后据此清除响应正文和校验信息。 */
+        function createEmptyApiPayloadMeta() {
+          return {
+            appId: 0,
+            appName: '',
+            apiId: 0,
+            apiName: '',
+            entryKey: '',
+            deliveryUrl: '',
+            requestUrl: '',
+            httpCode: 0,
+            contentType: '',
+            responseEncoding: 'utf-8',
+            dataSource: '',
+            appDataSource: '',
+            dataSourceTtl: '',
+            dataTtl: '',
+            configResolution: '',
+            elapsedMs: null,
+            checkedAt: '',
+            responseBytes: 0,
+            plainBytes: 0,
+            prettyBytes: 0,
+            responseSha256: '',
+            plainSha256: '',
+            prettySha256: '',
+            fieldCount: 0,
+            payloadAppId: null,
+            appIdMatches: null,
+            configDeliveryVersion: null,
+            networkConfigVersion: null,
+          };
+        }
 
         /** 将缺失或异常响应收敛为稳定结构，保证旧接口缓存也可正常渲染。 */
         function normalizeStaticBucketSnapshot(value) {
@@ -1308,6 +1548,7 @@
             return {
               id: Number(row.id) > 0 ? Number(row.id) : 0,
               name: String(row.name || ''),
+              entry_key: String(row.entry_key || '').trim(),
               base_url: /^https?:\/\//i.test(baseUrl) ? baseUrl : '',
               usage_scope: scope,
               delivery_scope: String(row.delivery_scope || 'config'),
@@ -1621,6 +1862,8 @@
           staticBucketFileRequestId++;
           staticBucketFileLoading.value = false;
           staticBucketFileError.value = '';
+          apiPayloadDialogVisible.value = false;
+          resetDynamicApiPayload();
           staticEntryActiveTab.value = 'buckets';
           replaceReactiveObject(activeStaticBucketOwner, { id: 0, name: '' });
           replaceReactiveObject(activeStaticBucketSnapshot, normalizeStaticBucketSnapshot(null));
@@ -1666,6 +1909,7 @@
             attemptNo: Number(activeStaticBucketSnapshot.attempt_no) || 0,
           });
           staticBucketPlainJson.value = '';
+          staticBucketPlainCiphertext.value = '';
           staticBucketPlainRawJson.value = '';
           staticBucketPlainPrettyJson.value = '';
           staticBucketPlainViewMode.value = 'pretty';
@@ -1695,6 +1939,7 @@
             const data = json.data;
             const bucket = data.bucket || {};
             const object = data.object || {};
+            const ciphertext = data.ciphertext || {};
             const plaintext = data.plaintext || {};
             const snapshot = data.snapshot || {};
             replaceReactiveObject(staticBucketPlainMeta, {
@@ -1706,10 +1951,10 @@
               fileUrl: String(bucket.app_file_url || (row && row.app_file_url) || ''),
               updatedAt: String(object.updated_at || (row && row.app_file_updated_at) || ''),
               checkedAt: String(data.checked_at || ''),
-              cipherBytes: Number(object.byte_size) || 0,
+              cipherBytes: Number(ciphertext.byte_size || object.byte_size) || 0,
               plainBytes: Number(plaintext.byte_size) || 0,
               prettyBytes: Number(plaintext.pretty_byte_size) || 0,
-              cipherSha256: String(object.cipher_sha256 || ''),
+              cipherSha256: String(ciphertext.sha256 || ciphertext.cipher_sha256 || object.cipher_sha256 || ''),
               plainSha256: String(plaintext.sha256 || ''),
               prettySha256: String(plaintext.pretty_sha256 || ''),
               fieldCount: Number(plaintext.field_count) || 0,
@@ -1725,6 +1970,9 @@
               taskId: Number(snapshot.task_id) || 0,
               attemptNo: Number(snapshot.attempt_no) || 0,
             });
+            staticBucketPlainCiphertext.value = String(
+              ciphertext.body ?? ciphertext.text ?? object.body ?? ''
+            );
             staticBucketPlainRawJson.value = String(plaintext.json || '');
             staticBucketPlainPrettyJson.value = String(plaintext.pretty_json || plaintext.json || '');
             staticBucketPlainJson.value = staticBucketPlainPrettyJson.value || staticBucketPlainRawJson.value;
@@ -1745,6 +1993,7 @@
           staticBucketPlainActiveBucketId.value = 0;
           staticBucketPlainError.value = '';
           staticBucketPlainJson.value = '';
+          staticBucketPlainCiphertext.value = '';
           staticBucketPlainRawJson.value = '';
           staticBucketPlainPrettyJson.value = '';
           staticBucketPlainViewMode.value = 'pretty';
@@ -1777,6 +2026,10 @@
         }
 
         function changeStaticBucketPlainView(mode) {
+          if (mode === 'cipher') {
+            staticBucketPlainJson.value = staticBucketPlainCiphertext.value;
+            return;
+          }
           staticBucketPlainJson.value = mode === 'raw'
             ? staticBucketPlainRawJson.value
             : staticBucketPlainPrettyJson.value;
@@ -1813,14 +2066,239 @@
           }
         }
 
+        /** HTTP 状态只用于人工辨识本次节点响应，不把解密成功与 HTTP 成功混为一类。 */
+        function apiPayloadHttpType(value) {
+          const code = Number(value) || 0;
+          if (code >= 200 && code < 300) return 'success';
+          if (code >= 300 && code < 500) return 'warning';
+          if (code >= 500) return 'danger';
+          return 'info';
+        }
+
+        function formatApiPayloadMilliseconds(value) {
+          const milliseconds = Number(value);
+          return Number.isFinite(milliseconds) && milliseconds >= 0
+            ? milliseconds.toFixed(2) + ' ms'
+            : '-';
+        }
+
+        function apiPayloadResponseSourceLabel(meta) {
+          const parts = [];
+          if (meta.dataSource) parts.push('配置：' + meta.dataSource);
+          if (meta.appDataSource) parts.push('应用：' + meta.appDataSource);
+          return parts.length ? parts.join('，') : '-';
+        }
+
+        /** 从大小写可能不同的响应头对象中读取一个白名单字段。 */
+        function apiPayloadHeaderValue(headers, name) {
+          if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return '';
+          const target = String(name || '').toLowerCase();
+          const key = Object.keys(headers).find(function (headerName) {
+            return String(headerName).toLowerCase() === target;
+          });
+          return key ? String(headers[key] ?? '') : '';
+        }
+
+        /**
+         * 向选中的当前有效 API 节点发起一次真实诊断请求。
+         * 前端只提交应用 ID 与服务端生成的入口标识，URL 和请求凭据全部由后端恢复。
+         */
+        async function viewDynamicApiPayload(row) {
+          const appId = Number(activeStaticBucketOwner.id) || 0;
+          const entryKey = String((row && row.entry_key) || '').trim();
+          if (appId <= 0 || !entryKey) {
+            ElementPlus.ElMessage.warning('应用或 API 入口标识缺失，请刷新当前列表');
+            return;
+          }
+
+          const requestId = ++apiPayloadRequestId;
+          apiPayloadActiveEntryKey.value = entryKey;
+          apiPayloadLoading.value = true;
+          apiPayloadError.value = '';
+          apiPayloadDecodeError.value = '';
+          apiPayloadResponseBody.value = '';
+          apiPayloadPlainRaw.value = '';
+          apiPayloadPlainPretty.value = '';
+          apiPayloadPlainText.value = '';
+          apiPayloadPlainViewMode.value = 'pretty';
+          apiPayloadPlainState.value = 'pending';
+          replaceReactiveObject(apiPayloadMeta, Object.assign(createEmptyApiPayloadMeta(), {
+            appId,
+            appName: String(activeStaticBucketOwner.name || ''),
+            apiId: Number((row && row.id) || 0),
+            apiName: String((row && row.name) || ''),
+            entryKey,
+            deliveryUrl: String((row && row.delivery_url) || ''),
+          }));
+          apiPayloadDialogVisible.value = true;
+
+          try {
+            const response = await fetch('/api/index.php?module=app&method=getAppApiConfigPayload', {
+              method: 'POST',
+              cache: 'no-store',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ app_id: appId, entry_key: entryKey }),
+            });
+            const json = await response.json();
+            if (json.code !== 200 || !json.data) {
+              throw new Error(json.message || 'API 节点数据读取失败');
+            }
+            const entryStillCurrent = activeCurrentDynamicApiUrls.items.some(function (item) {
+              return String(item.entry_key || '') === entryKey;
+            });
+            if (requestId !== apiPayloadRequestId
+              || !apiPayloadDialogVisible.value
+              || Number(activeStaticBucketOwner.id) !== appId
+              || apiPayloadActiveEntryKey.value !== entryKey
+              || !entryStillCurrent) return;
+
+            const data = json.data || {};
+            const api = data.api || data.endpoint || {};
+            const ciphertext = data.ciphertext || {};
+            const responseData = data.response || ciphertext || {};
+            const plaintext = data.plaintext || {};
+            const headers = responseData.headers || data.headers || {};
+            const responseBody = String(
+              responseData.body ?? responseData.raw_body ?? ciphertext.body ?? ciphertext.text ?? ''
+            );
+            const rawPlaintext = String(plaintext.json ?? plaintext.raw_json ?? plaintext.text ?? '');
+            const prettyPlaintext = String(plaintext.pretty_json ?? rawPlaintext);
+            const payloadAppId = plaintext.payload_app_id === null || plaintext.payload_app_id === undefined
+              ? (data.payload_app_id === null || data.payload_app_id === undefined ? null : String(data.payload_app_id))
+              : String(plaintext.payload_app_id);
+            let appIdMatches = plaintext.app_id_matches === true
+              ? true
+              : (plaintext.app_id_matches === false ? false : null);
+            if (appIdMatches === null && payloadAppId !== null) {
+              appIdMatches = String(payloadAppId) === String(appId);
+            }
+            const declaredSource = typeof responseData.source === 'string' ? responseData.source : '';
+            const plainState = String(
+              plaintext.state || ((rawPlaintext || prettyPlaintext) ? 'success' : 'failed')
+            ).toLowerCase();
+
+            replaceReactiveObject(apiPayloadMeta, {
+              appId: Number(data.app_id) || appId,
+              appName: String(data.app_name || activeStaticBucketOwner.name || ''),
+              apiId: Number(api.id || (row && row.id)) || 0,
+              apiName: String(api.name || (row && row.name) || ''),
+              entryKey: String(api.entry_key || entryKey),
+              deliveryUrl: String(api.delivery_url || (row && row.delivery_url) || ''),
+              requestUrl: String(api.request_url || responseData.request_url || responseData.url || ''),
+              httpCode: Number(responseData.http_code || responseData.status_code) || 0,
+              contentType: String(
+                responseData.content_type || apiPayloadHeaderValue(headers, 'content-type') || ''
+              ),
+              responseEncoding: String(responseData.body_encoding || ciphertext.encoding || 'utf-8').toLowerCase(),
+              dataSource: String(
+                responseData.data_source || declaredSource || apiPayloadHeaderValue(headers, 'x-data-source') || ''
+              ),
+              appDataSource: String(
+                responseData.app_data_source || apiPayloadHeaderValue(headers, 'x-data-source-apk') || ''
+              ),
+              dataSourceTtl: String(
+                responseData.data_source_ttl ?? apiPayloadHeaderValue(headers, 'x-data-source-ttl') ?? ''
+              ),
+              dataTtl: String(responseData.data_ttl ?? apiPayloadHeaderValue(headers, 'x-data-ttl') ?? ''),
+              configResolution: String(
+                responseData.config_resolution || apiPayloadHeaderValue(headers, 'x-config-resolution') || ''
+              ),
+              elapsedMs: responseData.elapsed_ms ?? data.elapsed_ms ?? null,
+              checkedAt: String(data.checked_at || ''),
+              responseBytes: Number(
+                responseData.byte_size || ciphertext.byte_size || (responseBody ? new Blob([responseBody]).size : 0)
+              ) || 0,
+              plainBytes: Number(plaintext.byte_size) || 0,
+              prettyBytes: Number(plaintext.pretty_byte_size) || 0,
+              responseSha256: String(
+                responseData.sha256 || responseData.cipher_sha256 || ciphertext.sha256 || ciphertext.cipher_sha256 || ''
+              ),
+              plainSha256: String(plaintext.sha256 || ''),
+              prettySha256: String(plaintext.pretty_sha256 || ''),
+              fieldCount: Number(plaintext.field_count) || 0,
+              payloadAppId,
+              appIdMatches,
+              configDeliveryVersion: plaintext.config_delivery_version ?? null,
+              networkConfigVersion: plaintext.network_config_version ?? null,
+            });
+            apiPayloadResponseBody.value = responseBody;
+            apiPayloadPlainRaw.value = rawPlaintext;
+            apiPayloadPlainPretty.value = prettyPlaintext;
+            apiPayloadPlainText.value = prettyPlaintext || rawPlaintext;
+            apiPayloadPlainState.value = plainState === 'success' ? 'success' : 'failed';
+            apiPayloadDecodeError.value = String(
+              plaintext.error || plaintext.decode_error || data.decode_error
+              || (apiPayloadPlainState.value === 'failed' && responseBody ? '响应原文未通过配置解密或 JSON 校验' : '')
+            );
+          } catch (error) {
+            if (requestId !== apiPayloadRequestId
+              || !apiPayloadDialogVisible.value
+              || Number(activeStaticBucketOwner.id) !== appId
+              || apiPayloadActiveEntryKey.value !== entryKey) return;
+            apiPayloadError.value = String((error && error.message) || 'API 节点数据读取失败');
+          } finally {
+            if (requestId === apiPayloadRequestId && apiPayloadActiveEntryKey.value === entryKey) {
+              apiPayloadLoading.value = false;
+            }
+          }
+        }
+
+        /** 关闭后作废在途请求，并清除完整 API 响应及解密明文。 */
+        function resetDynamicApiPayload() {
+          apiPayloadRequestId++;
+          apiPayloadLoading.value = false;
+          apiPayloadError.value = '';
+          apiPayloadDecodeError.value = '';
+          apiPayloadResponseBody.value = '';
+          apiPayloadPlainRaw.value = '';
+          apiPayloadPlainPretty.value = '';
+          apiPayloadPlainText.value = '';
+          apiPayloadPlainViewMode.value = 'pretty';
+          apiPayloadPlainState.value = 'pending';
+          apiPayloadActiveEntryKey.value = '';
+          replaceReactiveObject(apiPayloadMeta, createEmptyApiPayloadMeta());
+        }
+
+        function changeApiPayloadPlainView(mode) {
+          apiPayloadPlainText.value = mode === 'raw'
+            ? apiPayloadPlainRaw.value
+            : apiPayloadPlainPretty.value;
+        }
+
+        async function copyApiPayloadResponse() {
+          const text = String(apiPayloadResponseBody.value || '');
+          if (!text) return;
+          try {
+            await copyTextToClipboard(text);
+            ElementPlus.ElMessage.success(
+              apiPayloadMeta.responseEncoding === 'base64'
+                ? '响应原文字节的 Base64 展示已复制'
+                : '响应原文已复制'
+            );
+          } catch (error) {
+            ElementPlus.ElMessage.error('复制失败，请在响应原文区域手动选择复制');
+          }
+        }
+
+        async function copyApiPayloadPlaintext() {
+          const text = String(apiPayloadPlainText.value || '');
+          if (!text) return;
+          try {
+            await copyTextToClipboard(text);
+            ElementPlus.ElMessage.success('解密明文已复制');
+          } catch (error) {
+            ElementPlus.ElMessage.error('复制失败，请在解密明文区域手动选择复制');
+          }
+        }
+
         async function copyStaticBucketPlaintext() {
           const text = String(staticBucketPlainJson.value || '');
           if (!text) return;
           try {
             await copyTextToClipboard(text);
-            ElementPlus.ElMessage.success('JSON 已复制');
+            ElementPlus.ElMessage.success('当前数据已复制');
           } catch (error) {
-            ElementPlus.ElMessage.error('复制失败，请在明文区手动选择复制');
+            ElementPlus.ElMessage.error('复制失败，请在数据区手动选择复制');
           }
         }
 
@@ -2954,6 +3432,7 @@ onMounted(() => {
           staticBucketPlainLoading,
           staticBucketPlainError,
           staticBucketPlainJson,
+          staticBucketPlainCiphertext,
           staticBucketPlainRawJson,
           staticBucketPlainPrettyJson,
           staticBucketPlainViewMode,
@@ -2967,6 +3446,26 @@ onMounted(() => {
           formatStaticBucketBytes,
           changeStaticBucketPlainView,
           copyStaticBucketPlaintext,
+          apiPayloadDialogVisible,
+          apiPayloadLoading,
+          apiPayloadError,
+          apiPayloadDecodeError,
+          apiPayloadResponseBody,
+          apiPayloadPlainRaw,
+          apiPayloadPlainPretty,
+          apiPayloadPlainText,
+          apiPayloadPlainViewMode,
+          apiPayloadPlainState,
+          apiPayloadActiveEntryKey,
+          apiPayloadMeta,
+          viewDynamicApiPayload,
+          resetDynamicApiPayload,
+          apiPayloadHttpType,
+          apiPayloadResponseSourceLabel,
+          formatApiPayloadMilliseconds,
+          changeApiPayloadPlainView,
+          copyApiPayloadResponse,
+          copyApiPayloadPlaintext,
 
 
         };

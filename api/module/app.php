@@ -5,6 +5,7 @@ require_once __DIR__ . '/../utils/AppPhysicalDelete.php';
 require_once __DIR__ . '/../utils/AppConfigInvalidation.php';
 require_once __DIR__ . '/../utils/BucketPush.php';
 require_once __DIR__ . '/../utils/ConfigDelivery.php';
+require_once __DIR__ . '/../utils/ApiConfigProbe.php';
 
 if (!defined('OSS_DOWNLOAD_KEEP_MINUTES')) {
     // 注入产物可能达到数百 MB 到数 GB，OSS 临时下载对象需要覆盖完整下载和断点续传窗口。
@@ -537,6 +538,7 @@ function getAppStaticBucketFiles(PDO $pdo, array $input)
         $alignedApiRows = configDeliveryAlignEffectiveApiRows($effectiveUrls, $domainItems);
         $effectiveSource = (string)$alignedApiRows['effective_source'];
         $effectiveItems = is_array($alignedApiRows['items'] ?? null) ? $alignedApiRows['items'] : [];
+        $effectiveItems = apiConfigProbeAttachEntryKeys($effectiveItems);
 
         // URL 和池 ID 属于 APK 本就会收到的公开合同；内部名称、优先级和维护时间仅向管理员展示。
         $isAdmin = (($user['role'] ?? '') === 'admin');
@@ -551,6 +553,7 @@ function getAppStaticBucketFiles(PDO $pdo, array $input)
                     'delivery_url' => (string)($item['delivery_url'] ?? ''),
                     'priority' => 0,
                     'updated_at' => '',
+                    'entry_key' => (string)($item['entry_key'] ?? ''),
                 ];
             }, $effectiveItems);
         }
@@ -730,6 +733,13 @@ function getAppStaticBucketFileContent(PDO $pdo, array $input)
             'last_modified' => (string)($object['last_modified'] ?? ''),
             'updated_at' => (string)($object['updated_at'] ?? ''),
         ],
+        'ciphertext' => [
+            // body 是该 URL 本次实际返回的 Base64 密文；大小与哈希均按原始响应字节计算。
+            'body' => (string)($object['body'] ?? ''),
+            'text' => (string)($object['body'] ?? ''),
+            'byte_size' => (int)($object['byte_size'] ?? 0),
+            'sha256' => (string)($object['cipher_sha256'] ?? ''),
+        ],
         'plaintext' => [
             // json 是桶对象解密后的原始字节；pretty_json 只用于人工阅读。
             // 两者分别返回大小与哈希，避免用格式化文本校验原始明文时误报。
@@ -746,6 +756,211 @@ function getAppStaticBucketFileContent(PDO $pdo, array $input)
             'network_config_version' => $config['network_config_version'] ?? null,
         ],
         'checked_at' => (new DateTimeImmutable('now', new DateTimeZone('Asia/Shanghai')))->format('Y-m-d H:i:s'),
+    ];
+}
+
+/**
+ * 对当前有效 API 节点发起一次真实 Shell 配置请求，并展示同次响应的密文和明文。
+ *
+ * 浏览器只提交 app_id 与 entry_key；URL、应用归属参数和 POST 表单全部由服务端
+ * 重新推导，避免把该入口扩展成任意 URL 请求器。
+ */
+function getAppApiConfigPayload(PDO $pdo, array $input)
+{
+    $user = Auth::check($pdo);
+    if (!headers_sent()) {
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
+    }
+    $expectedInputKeys = ['app_id', 'entry_key'];
+    $actualInputKeys = array_values(array_map('strval', array_keys($input)));
+    sort($expectedInputKeys);
+    sort($actualInputKeys);
+    if ($actualInputKeys !== $expectedInputKeys) {
+        throw new InvalidArgumentException('请求只允许提交 app_id 与 entry_key');
+    }
+    $appIdValue = $input['app_id'] ?? null;
+    $entryKey = strtolower(trim((string)($input['entry_key'] ?? '')));
+    if (!(is_int($appIdValue) || (is_string($appIdValue) && preg_match('/^\d+$/', $appIdValue) === 1))) {
+        throw new InvalidArgumentException('应用 ID 格式错误');
+    }
+    $appId = (int)$appIdValue;
+    if ($appId <= 0 || preg_match('/^[a-f0-9]{64}$/', $entryKey) !== 1) {
+        throw new InvalidArgumentException('应用或 API 入口标识格式错误');
+    }
+
+    ensureApkDeleteMarkerTable($pdo);
+    $stmt = $pdo->prepare("SELECT a.id, a.user_id, a.name, a.package, a.version
+        FROM cainiao_apk a
+        INNER JOIN cainiao_apk_config c ON c.apk_id=a.id
+        LEFT JOIN cainiao_apk_deleted d ON d.apk_id=a.id
+        WHERE a.id=:id AND d.apk_id IS NULL
+        LIMIT 1");
+    $stmt->execute([':id' => $appId]);
+    $app = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$app || (($user['role'] ?? '') !== 'admin' && (int)$app['user_id'] !== (int)$user['id'])) {
+        throw new RuntimeException('应用不存在或当前账号无权查看');
+    }
+
+    // 每次点击都重新读取当前实际池；管理员修改域名后，旧页面 entry_key 会立即失效。
+    $publicPools = configDeliveryPublicPools($pdo);
+    $domainItems = [];
+    try {
+        $domainRows = configDeliveryEnabledApiDomainRows($pdo);
+        $domainItems = configDeliveryApiDomainRowsForScope($domainRows, 'config');
+    } catch (Throwable $domainError) {
+        if (!configDeliveryIsMissingTableException($domainError)) throw $domainError;
+    }
+    $effectiveUrls = array_values(array_map(
+        'strval',
+        is_array($publicPools['api_urls'] ?? null) ? $publicPools['api_urls'] : []
+    ));
+    $aligned = configDeliveryAlignEffectiveApiRows($effectiveUrls, $domainItems);
+    $currentItems = apiConfigProbeAttachEntryKeys(
+        is_array($aligned['items'] ?? null) ? $aligned['items'] : []
+    );
+    $selected = null;
+    foreach ($currentItems as $item) {
+        if (hash_equals((string)($item['entry_key'] ?? ''), $entryKey)) {
+            $selected = $item;
+            break;
+        }
+    }
+    if (!is_array($selected)) {
+        throw new RuntimeException('当前 API 域名池已经更新，请刷新列表后重新查看');
+    }
+
+    $packageName = trim((string)($app['package'] ?? ''));
+    $versionName = trim((string)($app['version'] ?? ''));
+    $postFields = [
+        'package' => $packageName !== '' ? $packageName : ('console.probe.' . $appId),
+        'version_name' => $versionName !== '' ? $versionName : '0',
+        'version_code' => '0',
+        'appid' => (string)$appId,
+        'appkey' => (string)$app['user_id'],
+        // key 刻意省略：shell.php 将其标记为“未提交key参数”且保持 disable=false。
+        'did' => 'console_api_probe_' . $appId,
+        'system_dns_ip' => '',
+        'shell_version' => '153',
+        'brand' => 'yunzhuru-console',
+        'model' => 'api-config-probe',
+        'android_version' => '0',
+        'sdk_int' => '0',
+        'abi' => 'server-probe',
+    ];
+
+    $response = [
+        'state' => 'request_error',
+        'error' => '',
+        'request_url' => '',
+        'http_code' => 0,
+        'content_type' => '',
+        'body' => '',
+        'body_encoding' => 'utf-8',
+        'raw_body' => '',
+        'byte_size' => 0,
+        'sha256' => '',
+        'elapsed_ms' => 0,
+        'data_source' => '',
+        'app_data_source' => '',
+        'data_source_ttl' => '',
+        'data_ttl' => '',
+        'config_resolution' => '',
+        'body_complete' => false,
+    ];
+    $guard = apiConfigProbeAcquireGuard((int)$user['id'], $appId, $entryKey);
+    try {
+        $response = apiConfigProbePost((string)$selected['delivery_url'], $postFields, 1048576);
+    } catch (Throwable $requestError) {
+        $response['error'] = $requestError->getMessage();
+    } finally {
+        apiConfigProbeReleaseGuard($guard);
+    }
+
+    $plaintext = [
+        'state' => 'unavailable',
+        'error' => '',
+        'decode_error' => '',
+        'json' => '',
+        'pretty_json' => '',
+        'byte_size' => 0,
+        'sha256' => '',
+        'pretty_byte_size' => 0,
+        'pretty_sha256' => '',
+        'field_count' => 0,
+        'payload_app_id' => null,
+        'app_id_matches' => null,
+        'config_delivery_version' => null,
+        'network_config_version' => null,
+    ];
+    if (!empty($response['body_complete']) && (string)($response['raw_body'] ?? '') !== '') {
+        try {
+            $payload = bucketDecryptAppConfigPayload((string)$response['raw_body']);
+            $config = is_array($payload['config'] ?? null) ? $payload['config'] : [];
+            $payloadAppId = $config['appid'] ?? ($config['app_id'] ?? null);
+            $payloadAppIdString = null;
+            if (is_int($payloadAppId) && $payloadAppId > 0) {
+                $payloadAppIdString = (string)$payloadAppId;
+            } elseif (is_string($payloadAppId) && preg_match('/^[1-9]\d*$/', $payloadAppId) === 1) {
+                $payloadAppIdString = $payloadAppId;
+            }
+            $appIdMatches = $payloadAppIdString !== null && (int)$payloadAppIdString === $appId;
+            $plaintext = [
+                'state' => $appIdMatches ? 'success' : 'payload_mismatch',
+                'error' => $appIdMatches ? '' : 'API 响应 APPID 与请求应用不一致，可能存在重定向或兜底解析',
+                'decode_error' => '',
+                'json' => (string)($payload['plain_text'] ?? ''),
+                'pretty_json' => (string)($payload['pretty_json'] ?? ''),
+                'byte_size' => (int)($payload['plain_byte_size'] ?? 0),
+                'sha256' => (string)($payload['plain_sha256'] ?? ''),
+                'pretty_byte_size' => (int)($payload['pretty_byte_size'] ?? 0),
+                'pretty_sha256' => (string)($payload['pretty_sha256'] ?? ''),
+                'field_count' => count($config),
+                'payload_app_id' => $payloadAppIdString,
+                'app_id_matches' => $appIdMatches,
+                'config_delivery_version' => isset($config['config_delivery_version']) ? (int)$config['config_delivery_version'] : null,
+                'network_config_version' => isset($config['network_config_version']) ? (int)$config['network_config_version'] : null,
+            ];
+        } catch (Throwable $decodeError) {
+            $message = $decodeError->getMessage();
+            $plaintext['state'] = 'invalid_ciphertext';
+            $plaintext['error'] = $message;
+            $plaintext['decode_error'] = $message;
+        }
+    } else {
+        $plaintext['error'] = (string)($response['error'] ?? '本次 API 请求没有可解密的响应');
+        $plaintext['decode_error'] = $plaintext['error'];
+    }
+
+    // raw_body 只用于同进程解密；浏览器只收到经过 UTF-8/Base64 保护的 body 字段。
+    unset($response['raw_body']);
+    $checkedAt = (new DateTimeImmutable('now', new DateTimeZone('Asia/Shanghai')))->format('Y-m-d H:i:s');
+    $isAdmin = (($user['role'] ?? '') === 'admin');
+    return [
+        'message' => $plaintext['state'] === 'success'
+            ? '已读取并解密该 API 节点的实际响应'
+            : '已取得该 API 节点的实际响应和诊断结果',
+        'state' => (string)($response['state'] ?? 'request_error'),
+        'app_id' => $appId,
+        'app_name' => (string)$app['name'],
+        'api' => [
+            'entry_key' => $entryKey,
+            'id' => (int)($selected['id'] ?? 0),
+            'name' => $isAdmin ? (string)($selected['name'] ?? '') : '',
+            'usage_scope' => (string)($selected['usage_scope'] ?? 'config'),
+            'delivery_url' => (string)($selected['delivery_url'] ?? ''),
+            'request_url' => (string)($response['request_url'] ?? ''),
+        ],
+        'response' => $response,
+        'ciphertext' => [
+            'body' => (string)($response['body'] ?? ''),
+            'text' => (string)($response['body'] ?? ''),
+            'encoding' => (string)($response['body_encoding'] ?? 'utf-8'),
+            'byte_size' => (int)($response['byte_size'] ?? 0),
+            'sha256' => (string)($response['sha256'] ?? ''),
+        ],
+        'plaintext' => $plaintext,
+        'checked_at' => $checkedAt,
     ];
 }
 
