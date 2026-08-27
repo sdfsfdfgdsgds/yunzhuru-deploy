@@ -462,6 +462,111 @@ function getMyAppList(PDO $pdo, array $input)
 
 
 /**
+ * 生成页面可展示的当前配置 API 入口合同。
+ *
+ * effective_urls 严格复用壳端实际收到的 api_urls；数据库行只用于
+ * 附加名称等展示元数据。普通账号只保留 APK 本就可取得的公开字段。
+ */
+function appBuildCurrentDynamicApiUrls(PDO $pdo, array $user, string $checkedAt): array
+{
+    $result = [
+        'state' => 'unavailable',
+        'semantics' => 'current_effective',
+        'scope' => 'config',
+        'effective_source' => 'unavailable',
+        'network_config_version' => null,
+        'checked_at' => $checkedAt,
+        'count' => 0,
+        'items' => [],
+        'effective_urls' => [],
+        'configured_count' => 0,
+        'configured_items' => [],
+        'message' => '当前动态 API 域名读取失败',
+    ];
+
+    try {
+        $publicPools = configDeliveryPublicPools($pdo);
+        $domainItems = [];
+        try {
+            $domainRows = configDeliveryEnabledApiDomainRows($pdo);
+            $domainItems = configDeliveryApiDomainRowsForScope($domainRows, 'config');
+        } catch (Throwable $domainError) {
+            if (!configDeliveryIsMissingTableException($domainError)) {
+                throw $domainError;
+            }
+            // 旧库尚未建立域名池表时，publicPools 已返回编译期紧急入口。
+        }
+
+        // 保留 publicPools 的原始顺序与字节值，与壳端实际字段严格对齐。
+        $effectiveUrls = array_values(array_map(
+            'strval',
+            is_array($publicPools['api_urls'] ?? null) ? $publicPools['api_urls'] : []
+        ));
+        $alignedApiRows = configDeliveryAlignEffectiveApiRows($effectiveUrls, $domainItems);
+        $effectiveSource = (string)$alignedApiRows['effective_source'];
+        $effectiveItems = is_array($alignedApiRows['items'] ?? null) ? $alignedApiRows['items'] : [];
+        $effectiveItems = apiConfigProbeAttachEntryKeys($effectiveItems);
+
+        $isAdmin = (($user['role'] ?? '') === 'admin');
+        if (!$isAdmin) {
+            $effectiveItems = array_map(static function (array $item): array {
+                return [
+                    'id' => (int)($item['id'] ?? 0),
+                    'name' => '',
+                    'base_url' => (string)($item['base_url'] ?? ''),
+                    'usage_scope' => (string)($item['usage_scope'] ?? 'config'),
+                    'delivery_scope' => (string)($item['delivery_scope'] ?? 'config'),
+                    'delivery_url' => (string)($item['delivery_url'] ?? ''),
+                    'priority' => 0,
+                    'updated_at' => '',
+                    'entry_key' => (string)($item['entry_key'] ?? ''),
+                ];
+            }, $effectiveItems);
+        }
+
+        $result = [
+            'state' => 'current_control_plane',
+            'semantics' => 'current_effective',
+            'scope' => 'config',
+            'effective_source' => $effectiveSource,
+            'network_config_version' => max(1, (int)($publicPools['network_config_version'] ?? 1)),
+            'checked_at' => $checkedAt,
+            'count' => count($effectiveItems),
+            'items' => $effectiveItems,
+            'effective_urls' => $effectiveUrls,
+            'configured_count' => $isAdmin ? count($domainItems) : 0,
+            'configured_items' => $isAdmin ? $domainItems : [],
+            'message' => '',
+        ];
+    } catch (Throwable $e) {
+        error_log('[AppStaticEntries] 读取当前动态 API 域名失败: ' . $e->getMessage());
+    }
+
+    return $result;
+}
+
+/**
+ * 生成与某份制品快照绑定的固定 API 证据。
+ *
+ * 当前历史快照尚未持久化 DOMAINS / POST_URL_LIST，因此明确返回
+ * not_recorded，避免用今天的动态域名池倒推旧 APK。
+ */
+function appBuildStaticInjectedApiUrls(array $snapshot): array
+{
+    return [
+        'state' => 'not_recorded',
+        'semantics' => 'fixed_bootstrap',
+        'exact' => 0,
+        'task_id' => (int)($snapshot['task_id'] ?? 0),
+        'attempt_no' => (int)($snapshot['attempt_no'] ?? 0),
+        'template_version' => (string)($snapshot['template_version'] ?? ''),
+        'count' => 0,
+        'items' => [],
+        'message' => '该历史制品未保存独立 API 启动入口快照',
+    ];
+}
+
+/**
  * 读取某个应用最近成功制品的固定桶配置文件详情。
  *
  * 桶列表和对象键全部由服务端快照决定；普通账号仅能查看自己的应用。
@@ -502,92 +607,8 @@ function getAppStaticBucketFiles(PDO $pdo, array $input)
     $snapshot['count'] = count($snapshot['items']);
 
     $checkedAt = (new DateTimeImmutable('now', new DateTimeZone('Asia/Shanghai')))->format('Y-m-d H:i:s');
-    // 当前 API 域名池是实时控制面，与不可变的制品固定桶快照分开返回。
-    // 读取失败时仍保留固定桶详情，避免全局池异常遮盖历史制品证据。
-    $dynamicApiUrls = [
-        'state' => 'unavailable',
-        'semantics' => 'current_effective',
-        'scope' => 'config',
-        'effective_source' => 'unavailable',
-        'network_config_version' => null,
-        'checked_at' => $checkedAt,
-        'count' => 0,
-        'items' => [],
-        'effective_urls' => [],
-        'configured_count' => 0,
-        'configured_items' => [],
-        'message' => '当前动态 API 域名读取失败',
-    ];
-    try {
-        $publicPools = configDeliveryPublicPools($pdo);
-        $domainItems = [];
-        try {
-            $domainRows = configDeliveryEnabledApiDomainRows($pdo);
-            $domainItems = configDeliveryApiDomainRowsForScope($domainRows, 'config');
-        } catch (Throwable $domainError) {
-            if (!configDeliveryIsMissingTableException($domainError)) {
-                throw $domainError;
-            }
-            // 旧库尚未建立域名池表时，publicPools 已返回编译期紧急入口。
-        }
-        // 保留 publicPools 的原始顺序与字节值，effective_urls 与壳端实际字段严格对齐。
-        $effectiveUrls = array_values(array_map(
-            'strval',
-            is_array($publicPools['api_urls'] ?? null) ? $publicPools['api_urls'] : []
-        ));
-        $alignedApiRows = configDeliveryAlignEffectiveApiRows($effectiveUrls, $domainItems);
-        $effectiveSource = (string)$alignedApiRows['effective_source'];
-        $effectiveItems = is_array($alignedApiRows['items'] ?? null) ? $alignedApiRows['items'] : [];
-        $effectiveItems = apiConfigProbeAttachEntryKeys($effectiveItems);
-
-        // URL 和池 ID 属于 APK 本就会收到的公开合同；内部名称、优先级和维护时间仅向管理员展示。
-        $isAdmin = (($user['role'] ?? '') === 'admin');
-        if (!$isAdmin) {
-            $effectiveItems = array_map(static function (array $item): array {
-                return [
-                    'id' => (int)($item['id'] ?? 0),
-                    'name' => '',
-                    'base_url' => (string)($item['base_url'] ?? ''),
-                    'usage_scope' => (string)($item['usage_scope'] ?? 'config'),
-                    'delivery_scope' => (string)($item['delivery_scope'] ?? 'config'),
-                    'delivery_url' => (string)($item['delivery_url'] ?? ''),
-                    'priority' => 0,
-                    'updated_at' => '',
-                    'entry_key' => (string)($item['entry_key'] ?? ''),
-                ];
-            }, $effectiveItems);
-        }
-        $dynamicApiUrls = [
-            'state' => 'current_control_plane',
-            'semantics' => 'current_effective',
-            'scope' => 'config',
-            'effective_source' => $effectiveSource,
-            'network_config_version' => max(1, (int)($publicPools['network_config_version'] ?? 1)),
-            'checked_at' => $checkedAt,
-            'count' => count($effectiveItems),
-            'items' => $effectiveItems,
-            'effective_urls' => $effectiveUrls,
-            'configured_count' => $isAdmin ? count($domainItems) : 0,
-            'configured_items' => $isAdmin ? $domainItems : [],
-            'message' => '',
-        ];
-    } catch (Throwable $e) {
-        error_log('[AppStaticEntries] 读取当前动态 API 域名失败: ' . $e->getMessage());
-    }
-
-    // 现有制品快照尚未保存 DOMAINS/POST_URL_LIST 的不可变证据。
-    // 显式返回 not_recorded，前端不得用当前动态池倒推历史 APK。
-    $staticInjectedApiUrls = [
-        'state' => 'not_recorded',
-        'semantics' => 'fixed_bootstrap',
-        'exact' => 0,
-        'task_id' => (int)($snapshot['task_id'] ?? 0),
-        'attempt_no' => (int)($snapshot['attempt_no'] ?? 0),
-        'template_version' => (string)($snapshot['template_version'] ?? ''),
-        'count' => 0,
-        'items' => [],
-        'message' => '该历史制品未保存独立 API 启动入口快照',
-    ];
+    $dynamicApiUrls = appBuildCurrentDynamicApiUrls($pdo, $user, $checkedAt);
+    $staticInjectedApiUrls = appBuildStaticInjectedApiUrls($snapshot);
 
     if (!headers_sent()) {
         header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -597,6 +618,97 @@ function getAppStaticBucketFiles(PDO $pdo, array $input)
     return [
         'message' => '应用固定桶与当前 API 入口已刷新',
         'app_id' => $appId,
+        'checked_at' => $checkedAt,
+        'static_injected_buckets' => $snapshot,
+        'static_injected_api_urls' => $staticInjectedApiUrls,
+        'current_dynamic_api_urls' => $dynamicApiUrls,
+    ];
+}
+
+/**
+ * 读取某次注入任务的固定入口证据与当前 API 域名。
+ *
+ * 任务 ID 和构建尝试号共同锁定用户当前看到的那份制品；后端自行查询
+ * APPID 和所有者，避免点击旧任务时串到该应用的最近成功制品。
+ */
+function getInjectTaskStaticEntries(PDO $pdo, array $input)
+{
+    $user = Auth::check($pdo);
+    $allowedKeys = ['task_id', 'attempt_no'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('任务详情请求参数不合法');
+    }
+
+    $parseInteger = static function ($value, bool $allowZero = false): ?int {
+        if (is_int($value)) {
+            $parsed = $value;
+        } elseif (is_string($value) && preg_match('/^\d+$/', $value) === 1) {
+            $parsed = (int)$value;
+        } else {
+            return null;
+        }
+        return $allowZero ? ($parsed >= 0 ? $parsed : null) : ($parsed > 0 ? $parsed : null);
+    };
+
+    $taskId = $parseInteger($input['task_id'] ?? null);
+    $attemptNo = $parseInteger($input['attempt_no'] ?? null, true);
+    if ($taskId === null || $attemptNo === null) {
+        throw new InvalidArgumentException('任务 ID 或构建尝试号格式错误');
+    }
+
+    $stmt = $pdo->prepare("SELECT
+            t.id, t.id AS task_id, t.apk_id, t.user_id, t.bucket_ids,
+            t.status_text, t.completed_at, t.created_at,
+            COALESCE(tpl.version, '') AS template_version
+        FROM cainiao_inject_task t
+        LEFT JOIN cainiao_template tpl ON tpl.id=t.template_id
+        WHERE t.id=:task_id
+        LIMIT 1");
+    $stmt->execute([':task_id' => $taskId]);
+    $task = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$task || (($user['role'] ?? '') !== 'admin' && (int)$task['user_id'] !== (int)$user['id'])) {
+        throw new RuntimeException('任务不存在或当前账号无权查看');
+    }
+
+    ensureBucketFeatureSchema($pdo);
+    $rows = [$task];
+    bucketAttachTaskSnapshots($pdo, $rows);
+    $snapshot = is_array($rows[0]['static_injected_buckets'] ?? null)
+        ? $rows[0]['static_injected_buckets']
+        : [];
+    $snapshotTaskId = (int)($snapshot['task_id'] ?? $taskId);
+    $snapshotAttemptNo = max(0, (int)($snapshot['attempt_no'] ?? 0));
+    if ($snapshotTaskId !== $taskId || $snapshotAttemptNo !== $attemptNo) {
+        if (!headers_sent()) {
+            header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+            header('Pragma: no-cache');
+        }
+        // 用结构化状态表达重试竞态，让页面隐藏已过期的桶证据，
+        // 避免将“attempt 已变更”误报为普通 API 域名读取异常。
+        return [
+            'message' => '本次制品快照已更新，请刷新注入任务列表后重新打开',
+            'state' => 'snapshot_stale',
+            'task_id' => $taskId,
+            'requested_attempt_no' => $attemptNo,
+            'attempt_no' => $snapshotAttemptNo,
+        ];
+    }
+
+    $checkedAt = (new DateTimeImmutable('now', new DateTimeZone('Asia/Shanghai')))->format('Y-m-d H:i:s');
+    $staticInjectedApiUrls = appBuildStaticInjectedApiUrls($snapshot);
+    $dynamicApiUrls = appBuildCurrentDynamicApiUrls($pdo, $user, $checkedAt);
+
+    if (!headers_sent()) {
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
+    }
+
+    return [
+        'message' => '本次制品固定入口与当前 API 域名已刷新',
+        'state' => 'current',
+        'task_id' => $taskId,
+        'attempt_no' => $snapshotAttemptNo,
+        'app_id' => (int)($task['apk_id'] ?? 0),
         'checked_at' => $checkedAt,
         'static_injected_buckets' => $snapshot,
         'static_injected_api_urls' => $staticInjectedApiUrls,

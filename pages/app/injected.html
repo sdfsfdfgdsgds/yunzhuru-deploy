@@ -28,7 +28,7 @@
       white-space: nowrap;
     }
     .static-bucket-dialog {
-      width: min(860px, 94vw) !important;
+      width: min(1360px, 96vw) !important;
     }
     .static-bucket-dialog .el-dialog__body {
       max-height: 72vh;
@@ -48,10 +48,54 @@
       line-height: 1.45;
       word-break: break-all;
     }
+    .static-entry-tabs {
+      margin-top: 14px;
+    }
+    .static-entry-stale-alert {
+      margin-top: 14px;
+    }
+    .static-api-toolbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+    .static-api-title {
+      color: #303133;
+      font-size: 15px;
+      font-weight: 700;
+      line-height: 1.5;
+    }
+    .static-api-meta {
+      margin-bottom: 12px;
+    }
+    .static-api-table-zone {
+      min-height: 150px;
+    }
+    .static-api-url {
+      display: block;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+    .static-api-fixed-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-top: 16px;
+      color: #303133;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .static-api-evidence {
+      margin-top: 12px;
+    }
     @media (max-width: 640px) {
       body { margin: 0; padding: 12px; }
       .static-bucket-dialog { width: 96vw !important; margin-top: 3vh !important; }
       .static-bucket-dialog .el-dialog__body { padding: 12px; }
+      .static-api-toolbar { flex-direction: column; }
     }
   </style>
 </head>
@@ -367,15 +411,26 @@
       @close="imageViewerVisible = false"
     ></el-image-viewer>
 
-    <!-- 本次制品固定桶使用任务级不可变证据，仅展示公开信息，不读取桶凭据。 -->
+    <!-- 固定桶是本次制品证据；API 域名分开展示历史固定证据与当前控制面。 -->
     <el-dialog
       v-model="staticBucketDialogVisible"
       class="static-bucket-dialog"
-      title="本次固定桶详情"
-      destroy-on-close>
+      title="本次固定桶与 API 入口"
+      destroy-on-close
+      @closed="resetStaticEntryDetails">
       <el-alert
+        v-if="!staticEntryStale"
         :title="staticBucketEvidence(activeStaticBucketSnapshot)"
         :type="staticBucketAlertType(activeStaticBucketSnapshot)"
+        show-icon
+        :closable="false">
+      </el-alert>
+
+      <el-alert
+        v-if="staticEntryStale"
+        class="static-entry-stale-alert"
+        :title="staticEntryError || '本次制品快照已更新，请刷新任务列表后重新打开'"
+        type="error"
         show-icon
         :closable="false">
       </el-alert>
@@ -386,12 +441,12 @@
         </el-descriptions-item>
         <el-descriptions-item label="注入任务">{{ activeStaticBucketSnapshot.task_id || activeStaticBucketOwner.task_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="证据状态">
-          <el-tag size="small" :type="staticBucketStateType(activeStaticBucketSnapshot)">
-            {{ staticBucketStateLabel(activeStaticBucketSnapshot) }}
+          <el-tag size="small" :type="staticEntryStale ? 'danger' : staticBucketStateType(activeStaticBucketSnapshot)">
+            {{ staticEntryStale ? '详情已过期' : staticBucketStateLabel(activeStaticBucketSnapshot) }}
           </el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="固定桶数量">{{ staticBucketCount(activeStaticBucketSnapshot) }}</el-descriptions-item>
-        <el-descriptions-item label="构建尝试">{{ activeStaticBucketSnapshot.attempt_no || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="构建尝试">{{ staticBucketAttemptLabel(activeStaticBucketSnapshot, activeStaticBucketOwner) }}</el-descriptions-item>
         <el-descriptions-item label="壳版本">{{ activeStaticBucketSnapshot.template_version || activeStaticBucketOwner.template_version || '-' }}</el-descriptions-item>
         <el-descriptions-item label="完成时间">{{ activeStaticBucketSnapshot.completed_at || activeStaticBucketOwner.completed_at || '-' }}</el-descriptions-item>
         <el-descriptions-item label="制品 SHA-256">
@@ -399,45 +454,192 @@
         </el-descriptions-item>
       </el-descriptions>
 
-      <el-table
-        v-if="activeStaticBucketSnapshot.items.length"
-        :data="activeStaticBucketSnapshot.items"
-        border
-        size="small">
-        <el-table-column label="ID" prop="id" width="66"></el-table-column>
-        <el-table-column label="注入时桶名称 / 类型" min-width="190">
-          <template #default="scope">
-            <div>{{ scope.row.name || ('桶 #' + scope.row.id) }}</div>
-            <div class="static-bucket-secondary">{{ staticBucketProviderLabel(scope.row) }}</div>
-          </template>
-        </el-table-column>
-        <el-table-column label="注入时公开地址" min-width="290">
-          <template #default="scope">
-            <el-link
-              v-if="safeStaticBucketUrl(scope.row.domain)"
-              class="static-bucket-mono"
-              type="primary"
-              :href="safeStaticBucketUrl(scope.row.domain)"
-              target="_blank"
-              rel="noopener noreferrer">
-              {{ scope.row.domain }}
-            </el-link>
-            <span v-else class="static-bucket-mono">{{ scope.row.domain || '-' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="当前状态" min-width="178">
-          <template #default="scope">
-            <el-tag size="small" effect="plain" :type="staticBucketCurrentStateType(scope.row)">
-              {{ staticBucketCurrentStateLabel(scope.row) }}
-            </el-tag>
-            <div v-if="staticBucketCurrentChanged(scope.row)" class="static-bucket-secondary">
-              当前名称：{{ scope.row.current_name || '-' }}<br>
-              当前地址：{{ scope.row.current_domain || '-' }}
+      <el-tabs v-if="!staticEntryStale" v-model="staticEntryActiveTab" class="static-entry-tabs">
+        <el-tab-pane :label="'固定桶（' + staticBucketCount(activeStaticBucketSnapshot) + '）'" name="buckets">
+          <el-table
+            v-if="activeStaticBucketSnapshot.items.length"
+            :data="activeStaticBucketSnapshot.items"
+            border
+            size="small">
+            <el-table-column label="ID" prop="id" width="66"></el-table-column>
+            <el-table-column label="注入时桶名称 / 类型" min-width="190">
+              <template #default="scope">
+                <div>{{ scope.row.name || ('桶 #' + scope.row.id) }}</div>
+                <div class="static-bucket-secondary">{{ staticBucketProviderLabel(scope.row) }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="注入时公开地址" min-width="330">
+              <template #default="scope">
+                <el-link
+                  v-if="safeStaticBucketUrl(scope.row.domain)"
+                  class="static-bucket-mono"
+                  type="primary"
+                  :href="safeStaticBucketUrl(scope.row.domain)"
+                  target="_blank"
+                  rel="noopener noreferrer">
+                  {{ scope.row.domain }}
+                </el-link>
+                <span v-else class="static-bucket-mono">{{ scope.row.domain || '-' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="当前状态" min-width="190">
+              <template #default="scope">
+                <el-tag size="small" effect="plain" :type="staticBucketCurrentStateType(scope.row)">
+                  {{ staticBucketCurrentStateLabel(scope.row) }}
+                </el-tag>
+                <div v-if="staticBucketCurrentChanged(scope.row)" class="static-bucket-secondary">
+                  当前名称：{{ scope.row.current_name || '-' }}<br>
+                  当前地址：{{ scope.row.current_domain || '-' }}
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-empty v-else :description="staticBucketEmptyText(activeStaticBucketSnapshot)"></el-empty>
+        </el-tab-pane>
+
+        <el-tab-pane :label="'API 域名（' + currentDynamicApiCount(activeCurrentDynamicApiUrls) + '）'" name="apis">
+          <div class="static-api-toolbar">
+            <div>
+              <div class="static-api-title">当前有效下发 API（后台控制面）</div>
+              <div class="static-bucket-secondary">
+                此处是服务端此刻生成 api_urls 的有效列表，不代表本次制品构建时写入的固定 API。
+              </div>
             </div>
-          </template>
-        </el-table-column>
-      </el-table>
-      <el-empty v-else :description="staticBucketEmptyText(activeStaticBucketSnapshot)"></el-empty>
+            <el-button
+              size="small"
+              :loading="staticEntryLoading"
+              :disabled="staticEntryLoading || !activeStaticBucketOwner.task_id"
+              @click="refreshStaticEntryDetails">
+              刷新当前列表
+            </el-button>
+          </div>
+
+          <el-alert
+            :title="dynamicApiSummaryText(activeCurrentDynamicApiUrls)"
+            :type="dynamicApiSummaryType(activeCurrentDynamicApiUrls)"
+            show-icon
+            :closable="false"
+            style="margin-bottom: 12px;">
+          </el-alert>
+          <el-alert
+            :title="dynamicApiCompatibilityText(activeStaticBucketSnapshot)"
+            :type="staticApiSupportsDynamic(activeStaticBucketSnapshot) ? 'success' : 'warning'"
+            show-icon
+            :closable="false"
+            style="margin-bottom: 12px;">
+          </el-alert>
+
+          <el-descriptions class="static-api-meta" :column="2" border size="small">
+            <el-descriptions-item label="网络配置版本">
+              {{ activeCurrentDynamicApiUrls.network_config_version ? ('network v' + activeCurrentDynamicApiUrls.network_config_version) : '-' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="当前有效数量">
+              {{ currentDynamicApiCount(activeCurrentDynamicApiUrls) }}
+            </el-descriptions-item>
+            <el-descriptions-item label="当前来源">
+              <el-tag size="small" effect="plain" :type="dynamicApiSourceType(activeCurrentDynamicApiUrls)">
+                {{ dynamicApiSourceLabel(activeCurrentDynamicApiUrls) }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="读取时间">
+              {{ activeCurrentDynamicApiUrls.checked_at || '-' }}
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <el-alert
+            v-if="activeCurrentDynamicApiUrls.message"
+            :title="activeCurrentDynamicApiUrls.message"
+            type="warning"
+            show-icon
+            :closable="false"
+            style="margin-bottom: 12px;">
+          </el-alert>
+
+          <div
+            class="static-api-table-zone"
+            v-loading="staticEntryLoading"
+            element-loading-text="正在读取当前 API 域名池">
+            <el-table
+              v-if="activeCurrentDynamicApiUrls.items.length"
+              :data="activeCurrentDynamicApiUrls.items"
+              border
+              size="small">
+            <el-table-column label="池 ID" width="82">
+              <template #default="scope">{{ scope.row.id || '-' }}</template>
+            </el-table-column>
+            <el-table-column label="名称 / 用途" min-width="160">
+              <template #default="scope">
+                <div>{{ scope.row.name || ('API #' + (scope.row.id || '-')) }}</div>
+                <el-tag size="small" effect="plain" type="info">
+                  {{ dynamicApiScopeLabel(scope.row.usage_scope) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="API Base URL" min-width="300">
+              <template #default="scope">
+                <span class="static-bucket-mono static-api-url">{{ safeDynamicApiUrl(scope.row.base_url) || '-' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="APK 当前收到的下发 URL" min-width="390">
+              <template #default="scope">
+                <span class="static-bucket-mono static-api-url">{{ safeDynamicApiUrl(scope.row.delivery_url) || '-' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="优先级" prop="priority" width="86"></el-table-column>
+            <el-table-column label="后台更新时间" width="176">
+              <template #default="scope">{{ scope.row.updated_at || '-' }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="104" fixed="right">
+              <template #default="scope">
+                <el-button
+                  link
+                  type="primary"
+                  :disabled="!safeDynamicApiUrl(scope.row.delivery_url)"
+                  @click="copyDynamicApiUrl(scope.row)">
+                  复制 URL
+                </el-button>
+              </template>
+            </el-table-column>
+            </el-table>
+            <el-empty
+              v-else-if="activeCurrentDynamicApiUrls.state !== 'loading'"
+              description="当前没有可展示的有效 API 入口">
+            </el-empty>
+          </div>
+
+          <div class="static-api-fixed-heading">
+            <span>本次制品固定 API 启动入口</span>
+            <el-tag size="small" effect="plain" :type="staticApiEvidenceType(activeStaticInjectedApiUrls)">
+              {{ staticApiEvidenceLabel(activeStaticInjectedApiUrls) }}
+            </el-tag>
+          </div>
+          <el-table
+            v-if="activeStaticInjectedApiUrls.items.length"
+            :data="activeStaticInjectedApiUrls.items"
+            border
+            size="small"
+            style="margin-top: 12px;">
+            <el-table-column label="来源" prop="source" width="180"></el-table-column>
+            <el-table-column label="固定 URL" min-width="420">
+              <template #default="scope">
+                <span class="static-bucket-mono static-api-url">{{ safeDynamicApiUrl(scope.row.url) || '-' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="证据" prop="evidence" min-width="220"></el-table-column>
+          </el-table>
+          <el-alert
+            class="static-api-evidence"
+            :title="staticApiEvidenceText(activeStaticInjectedApiUrls)"
+            :type="staticApiEvidenceType(activeStaticInjectedApiUrls)"
+            show-icon
+            :closable="false">
+          </el-alert>
+        </el-tab-pane>
+      </el-tabs>
+      <el-empty
+        v-else
+        description="该详情已过期，请关闭后刷新注入任务列表">
+      </el-empty>
 
       <template #footer>
         <el-button @click="staticBucketDialogVisible = false">关闭</el-button>
@@ -475,6 +677,13 @@
           task_id: 0, apk_id: 0, apk_name: '', template_version: '', completed_at: '',
         });
         const activeStaticBucketSnapshot = reactive(normalizeStaticBucketSnapshot(null));
+        const staticEntryActiveTab = ref('buckets');
+        const staticEntryLoading = ref(false);
+        const staticEntryStale = ref(false);
+        const staticEntryError = ref('');
+        let staticEntryRequestId = 0;
+        const activeStaticInjectedApiUrls = reactive(normalizeStaticInjectedApiUrls(null));
+        const activeCurrentDynamicApiUrls = reactive(normalizeCurrentDynamicApiUrls(null));
 
         /** 将接口快照限制为页面需要的公开字段，并为旧数据提供稳定默认值。 */
         function normalizeStaticBucketSnapshot(value) {
@@ -506,6 +715,76 @@
           };
         }
 
+        /** 固定 API 只接收与当次任务绑定的制品证据，与当前动态池严格分离。 */
+        function normalizeStaticInjectedApiUrls(value) {
+          const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+          const allowedStates = ['verified', 'not_recorded', 'unknown'];
+          const state = allowedStates.includes(String(source.state || '')) ? String(source.state) : 'not_recorded';
+          const items = Array.isArray(source.items) ? source.items.map(function (item) {
+            const row = item && typeof item === 'object' ? item : {};
+            return {
+              source: String(row.source || ''),
+              url: String(row.url || ''),
+              evidence: String(row.evidence || ''),
+            };
+          }).filter(function (item) {
+            return /^https?:\/\//i.test(item.url);
+          }) : [];
+          return {
+            state,
+            exact: source.exact === 1 || source.exact === '1' ? 1 : 0,
+            task_id: Number(source.task_id) > 0 ? Number(source.task_id) : 0,
+            attempt_no: Number(source.attempt_no) >= 0 ? Number(source.attempt_no) : 0,
+            template_version: String(source.template_version || ''),
+            count: items.length,
+            items,
+            message: String(source.message || ''),
+          };
+        }
+
+        /** 当前 API 列表只保留 APK 可见的公开入口与页面展示元数据。 */
+        function normalizeCurrentDynamicApiUrls(value) {
+          const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+          const allowedStates = ['loading', 'current_control_plane', 'unavailable'];
+          const state = allowedStates.includes(String(source.state || '')) ? String(source.state) : 'loading';
+          const allowedSources = ['domain_pool', 'bootstrap_fallback', 'unavailable', 'loading'];
+          const effectiveSource = allowedSources.includes(String(source.effective_source || ''))
+            ? String(source.effective_source)
+            : (state === 'unavailable' ? 'unavailable' : 'loading');
+          const items = Array.isArray(source.items) ? source.items.map(function (item) {
+            const row = item && typeof item === 'object' ? item : {};
+            const baseUrl = String(row.base_url || '').trim();
+            const deliveryUrl = String(row.delivery_url || '').trim();
+            const scope = ['all', 'config', 'report', 'click'].includes(String(row.usage_scope || '').toLowerCase())
+              ? String(row.usage_scope).toLowerCase()
+              : 'config';
+            return {
+              id: Number(row.id) > 0 ? Number(row.id) : 0,
+              name: String(row.name || ''),
+              base_url: /^https?:\/\//i.test(baseUrl) ? baseUrl : '',
+              usage_scope: scope,
+              delivery_scope: String(row.delivery_scope || 'config'),
+              delivery_url: /^https?:\/\//i.test(deliveryUrl) ? deliveryUrl : '',
+              priority: Number.isFinite(Number(row.priority)) ? Number(row.priority) : 0,
+              updated_at: String(row.updated_at || ''),
+            };
+          }).filter(function (item) {
+            return item.delivery_url !== '';
+          }) : [];
+          return {
+            state,
+            scope: 'config',
+            effective_source: effectiveSource,
+            network_config_version: Number(source.network_config_version) > 0
+              ? Number(source.network_config_version)
+              : null,
+            checked_at: String(source.checked_at || ''),
+            count: items.length,
+            items,
+            message: String(source.message || ''),
+          };
+        }
+
         function replaceReactiveObject(target, source) {
           Object.keys(target).forEach(function (key) { delete target[key]; });
           Object.assign(target, source);
@@ -530,6 +809,14 @@
         function staticBucketCount(snapshot) {
           const normalized = normalizeStaticBucketSnapshot(snapshot);
           return Math.max(normalized.count, normalized.items.length);
+        }
+
+        /** attempt_no=0 是旧任务的合法证据值，与字段缺失分开展示。 */
+        function staticBucketAttemptLabel(snapshot, owner) {
+          const normalized = normalizeStaticBucketSnapshot(snapshot);
+          const hasTask = normalized.task_id > 0 || Number(owner && owner.task_id) > 0;
+          if (!hasTask) return '-';
+          return normalized.attempt_no === 0 ? '0（历史任务）' : String(normalized.attempt_no);
         }
 
         function staticBucketPreviewItems(snapshot) {
@@ -615,6 +902,172 @@
           return 'info';
         }
 
+        function safeDynamicApiUrl(value) {
+          const url = String(value || '').trim();
+          return /^https?:\/\//i.test(url) ? url : '';
+        }
+
+        function currentDynamicApiCount(value) {
+          return normalizeCurrentDynamicApiUrls(value).items.length;
+        }
+
+        function dynamicApiScopeLabel(scope) {
+          const labels = { all: '全部用途', config: '配置获取', report: '上报', click: '点击' };
+          return labels[String(scope || '').toLowerCase()] || '配置获取';
+        }
+
+        function dynamicApiSourceLabel(value) {
+          const source = normalizeCurrentDynamicApiUrls(value).effective_source;
+          const labels = {
+            domain_pool: '后台 API 域名池',
+            bootstrap_fallback: '内置紧急入口',
+            unavailable: '读取异常',
+            loading: '正在读取',
+          };
+          return labels[source] || '正在读取';
+        }
+
+        function dynamicApiSourceType(value) {
+          const source = normalizeCurrentDynamicApiUrls(value).effective_source;
+          if (source === 'domain_pool') return 'success';
+          if (source === 'bootstrap_fallback') return 'warning';
+          return 'info';
+        }
+
+        function dynamicApiSummaryText(value) {
+          const normalized = normalizeCurrentDynamicApiUrls(value);
+          if (normalized.state === 'loading') return '正在读取后台当前有效的 API 下发列表。';
+          if (normalized.state === 'unavailable') return '当前 API 控制面读取异常，本次制品证据仍保留展示。';
+          if (normalized.effective_source === 'bootstrap_fallback') {
+            return '当前配置用途的启用节点为空，服务端实际使用内置紧急入口生成 api_urls。';
+          }
+          return '这是服务端此刻生成完整应用配置时下发的 API 列表，与本次制品固定证据分开展示。';
+        }
+
+        function dynamicApiSummaryType(value) {
+          const normalized = normalizeCurrentDynamicApiUrls(value);
+          if (normalized.state === 'unavailable' || normalized.effective_source === 'bootstrap_fallback') return 'warning';
+          return normalized.state === 'loading' ? 'info' : 'success';
+        }
+
+        function staticApiSupportsDynamic(snapshot) {
+          const match = String((snapshot && snapshot.template_version) || '').match(/\d+/);
+          return !!match && Number(match[0]) >= 153;
+        }
+
+        function dynamicApiCompatibilityText(snapshot) {
+          const rawVersion = String((snapshot && snapshot.template_version) || '').trim();
+          if (staticApiSupportsDynamic(snapshot)) {
+            return '该制品支持动态 api_urls；APK 从成功获取的桶或既有 API 配置中缓存此列表，从下一次配置请求开始参与 API 兜底。这里不代表某台设备已缓存或实际命中。';
+          }
+          if (rawVersion) {
+            return '该制品壳版本为 v' + rawVersion + '，该版本忽略动态 api_urls；以下当前列表仅用于后台配置对照。';
+          }
+          return '该任务的壳版本证据不足，以下当前列表仅用于后台配置对照。';
+        }
+
+        function staticApiEvidenceText(value) {
+          const normalized = normalizeStaticInjectedApiUrls(value);
+          if (normalized.state === 'verified' && normalized.exact === 1) {
+            return '本次制品已保存构建时固定 API 启动入口证据。';
+          }
+          return normalized.message || '该任务制品尚未保存构建时 DOMAINS / POST_URL_LIST 的不可变快照；上方当前列表不用于倒推该历史 APK。';
+        }
+
+        function staticApiEvidenceLabel(value) {
+          const normalized = normalizeStaticInjectedApiUrls(value);
+          return normalized.state === 'verified' && normalized.exact === 1 ? '已核验' : '历史证据未记录';
+        }
+
+        function staticApiEvidenceType(value) {
+          const normalized = normalizeStaticInjectedApiUrls(value);
+          return normalized.state === 'verified' && normalized.exact === 1 ? 'success' : 'warning';
+        }
+
+        /** 统一复制入口，兼容旧浏览器并核对备用路径的真实结果。 */
+        async function copyTextToClipboard(value) {
+          const text = String(value || '');
+          if (!text) throw new Error('没有可复制的内容');
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return;
+          }
+          const textarea = document.createElement('textarea');
+          textarea.value = text;
+          textarea.setAttribute('readonly', 'readonly');
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          try {
+            textarea.select();
+            if (!document.execCommand('copy')) throw new Error('浏览器未完成复制');
+          } finally {
+            document.body.removeChild(textarea);
+          }
+        }
+
+        async function copyDynamicApiUrl(row) {
+          const url = safeDynamicApiUrl(row && row.delivery_url);
+          if (!url) {
+            ElementPlus.ElMessage.warning('API URL 为空或协议格式错误');
+            return;
+          }
+          try {
+            await copyTextToClipboard(url);
+            ElementPlus.ElMessage.success('API URL 已复制');
+          } catch (error) {
+            ElementPlus.ElMessage.error(error && error.message ? error.message : '复制失败');
+          }
+        }
+
+        /** 只读取当前弹窗的任务与尝试号，旧响应由三重校验自动丢弃。 */
+        async function loadStaticEntryDetails(taskId, attemptNo) {
+          const requestId = ++staticEntryRequestId;
+          staticEntryLoading.value = true;
+          staticEntryStale.value = false;
+          staticEntryError.value = '';
+          try {
+            const response = await fetch('/api/index.php?module=app&method=getInjectTaskStaticEntries', {
+              method: 'POST',
+              cache: 'no-store',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ task_id: taskId, attempt_no: attemptNo }),
+            });
+            const json = await response.json();
+            if (json.code !== 200 || !json.data) throw new Error(json.message || '任务入口详情读取失败');
+            if (
+              requestId !== staticEntryRequestId
+              || Number(activeStaticBucketOwner.task_id) !== taskId
+              || Number(activeStaticBucketSnapshot.attempt_no) !== attemptNo
+            ) return;
+            if (String(json.data.state || '') === 'snapshot_stale') {
+              staticEntryStale.value = true;
+              staticEntryError.value = String(json.message || json.data.message || '本次制品快照已更新，请刷新任务列表后重新打开');
+              return;
+            }
+            if (Number(json.data.task_id) !== taskId || Number(json.data.attempt_no) !== attemptNo) {
+              throw new Error('返回的任务制品证据已变化，请刷新列表');
+            }
+            replaceReactiveObject(activeStaticBucketSnapshot, normalizeStaticBucketSnapshot(json.data.static_injected_buckets));
+            replaceReactiveObject(activeStaticInjectedApiUrls, normalizeStaticInjectedApiUrls(json.data.static_injected_api_urls));
+            replaceReactiveObject(activeCurrentDynamicApiUrls, normalizeCurrentDynamicApiUrls(json.data.current_dynamic_api_urls));
+          } catch (error) {
+            if (
+              requestId !== staticEntryRequestId
+              || Number(activeStaticBucketOwner.task_id) !== taskId
+              || Number(activeStaticBucketSnapshot.attempt_no) !== attemptNo
+            ) return;
+            staticEntryError.value = error && error.message ? error.message : '当前 API 域名列表读取异常';
+            replaceReactiveObject(activeCurrentDynamicApiUrls, normalizeCurrentDynamicApiUrls({
+              state: 'unavailable',
+              effective_source: 'unavailable',
+              message: staticEntryError.value,
+            }));
+          } finally {
+            if (requestId === staticEntryRequestId) staticEntryLoading.value = false;
+          }
+        }
+
         function openStaticBucketDetails(row) {
           replaceReactiveObject(activeStaticBucketOwner, {
             task_id: Number(row && row.id) || 0,
@@ -624,7 +1077,38 @@
             completed_at: String((row && row.completed_at) || ''),
           });
           replaceReactiveObject(activeStaticBucketSnapshot, normalizeStaticBucketSnapshot(row && row.static_injected_buckets));
+          replaceReactiveObject(activeStaticInjectedApiUrls, normalizeStaticInjectedApiUrls({
+            state: 'not_recorded',
+            task_id: activeStaticBucketOwner.task_id,
+            attempt_no: activeStaticBucketSnapshot.attempt_no,
+            template_version: activeStaticBucketSnapshot.template_version,
+          }));
+          replaceReactiveObject(activeCurrentDynamicApiUrls, normalizeCurrentDynamicApiUrls({ state: 'loading' }));
+          staticEntryStale.value = false;
+          staticEntryError.value = '';
+          staticEntryActiveTab.value = 'buckets';
           staticBucketDialogVisible.value = true;
+          loadStaticEntryDetails(activeStaticBucketOwner.task_id, activeStaticBucketSnapshot.attempt_no);
+        }
+
+        function refreshStaticEntryDetails() {
+          const taskId = Number(activeStaticBucketOwner.task_id) || 0;
+          const attemptNo = Math.max(0, Number(activeStaticBucketSnapshot.attempt_no) || 0);
+          if (taskId > 0) loadStaticEntryDetails(taskId, attemptNo);
+        }
+
+        function resetStaticEntryDetails() {
+          staticEntryRequestId++;
+          staticEntryLoading.value = false;
+          staticEntryStale.value = false;
+          staticEntryError.value = '';
+          staticEntryActiveTab.value = 'buckets';
+          replaceReactiveObject(activeStaticBucketOwner, {
+            task_id: 0, apk_id: 0, apk_name: '', template_version: '', completed_at: '',
+          });
+          replaceReactiveObject(activeStaticBucketSnapshot, normalizeStaticBucketSnapshot(null));
+          replaceReactiveObject(activeStaticInjectedApiUrls, normalizeStaticInjectedApiUrls(null));
+          replaceReactiveObject(activeCurrentDynamicApiUrls, normalizeCurrentDynamicApiUrls(null));
         }
 
         const dialogVisible = ref(false);
@@ -1101,10 +1585,17 @@ async function confirmLanzouUpload() {
           staticBucketDialogVisible,
           activeStaticBucketOwner,
           activeStaticBucketSnapshot,
+          staticEntryActiveTab,
+          staticEntryLoading,
+          staticEntryStale,
+          staticEntryError,
+          activeStaticInjectedApiUrls,
+          activeCurrentDynamicApiUrls,
           staticBucketStateLabel,
           staticBucketStateType,
           staticBucketAlertType,
           staticBucketCount,
+          staticBucketAttemptLabel,
           staticBucketPreviewItems,
           staticBucketHiddenCount,
           staticBucketCanInspect,
@@ -1115,10 +1606,25 @@ async function confirmLanzouUpload() {
           staticBucketEvidence,
           staticBucketEmptyText,
           safeStaticBucketUrl,
+          safeDynamicApiUrl,
+          currentDynamicApiCount,
+          dynamicApiScopeLabel,
+          dynamicApiSourceLabel,
+          dynamicApiSourceType,
+          dynamicApiSummaryText,
+          dynamicApiSummaryType,
+          staticApiSupportsDynamic,
+          dynamicApiCompatibilityText,
+          staticApiEvidenceText,
+          staticApiEvidenceLabel,
+          staticApiEvidenceType,
+          copyDynamicApiUrl,
           staticBucketCurrentChanged,
           staticBucketCurrentStateLabel,
           staticBucketCurrentStateType,
-          openStaticBucketDetails
+          openStaticBucketDetails,
+          refreshStaticEntryDetails,
+          resetStaticEntryDetails
 
         };
       }
