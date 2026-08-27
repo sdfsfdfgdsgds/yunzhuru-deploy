@@ -370,6 +370,120 @@ if (!function_exists('configDeliveryAppendQuery')) {
     }
 }
 
+if (!function_exists('configDeliveryEnabledApiDomainRows')) {
+    /**
+     * 读取当前会进入运行时配置的 API 域名池记录。
+     *
+     * 这是配置负载与管理页展示共用的单一数据源：只返回已启用的
+     * 前 24 个节点，排序与壳端最终收到的列表一致。
+     */
+    function configDeliveryEnabledApiDomainRows(PDO $pdo): array
+    {
+        return $pdo->query("SELECT id,name,base_url,usage_scope,priority,updated_at
+            FROM cainiao_api_domain_pool
+            WHERE enabled=1
+            ORDER BY priority DESC,id ASC
+            LIMIT 24")->fetchAll(PDO::FETCH_ASSOC);
+    }
+}
+
+if (!function_exists('configDeliveryApiDomainRowsForScope')) {
+    /**
+     * 将数据库域名行映射为某一用途的公开下发行。
+     *
+     * `base_url` 保留管理员填写的入口，`delivery_url` 则是 APK 实际收到的
+     * URL，并由服务端追加池 ID 和用途统计参数。
+     */
+    function configDeliveryApiDomainRowsForScope(array $rows, string $targetScope): array
+    {
+        $targetScope = strtolower(trim($targetScope));
+        if (!in_array($targetScope, ['config', 'report', 'click'], true)) {
+            throw new InvalidArgumentException('API 下发用途只允许 config/report/click');
+        }
+
+        $result = [];
+        foreach ($rows as $row) {
+            $scope = configDeliveryNormalizeScope($row['usage_scope'] ?? 'config');
+            if ($scope !== 'all' && $scope !== $targetScope) {
+                continue;
+            }
+            $id = max(0, (int)($row['id'] ?? 0));
+            if ($id <= 0) {
+                continue;
+            }
+            // 域名在写入管理接口时已完成校验；这里保留数据库原值，
+            // 使共享 helper 接入前后的壳端实际下发 URL 字节保持一致。
+            $baseUrl = (string)($row['base_url'] ?? '');
+            $result[] = [
+                'id' => $id,
+                'name' => trim((string)($row['name'] ?? '')),
+                'base_url' => $baseUrl,
+                'usage_scope' => $scope,
+                'delivery_scope' => $targetScope,
+                'delivery_url' => configDeliveryAppendQuery($baseUrl, [
+                    'api_pool_id' => $id,
+                    'api_pool_scope' => $targetScope,
+                ]),
+                'priority' => (int)($row['priority'] ?? 0),
+                'updated_at' => (string)($row['updated_at'] ?? ''),
+            ];
+        }
+        return $result;
+    }
+}
+
+if (!function_exists('configDeliveryAlignEffectiveApiRows')) {
+    /**
+     * 以同次 publicPools 产生的 URL 为权威集合，将管理行只作为展示元数据附加。
+     *
+     * 详情请求期间管理员可能刚好修改域名池；当两次读取不同步，
+     * 或 publicPools 因部分表尚未迁移而启用 bootstrap 时，页面仍严格展示
+     * effectiveUrls，不把第二次查询的非生效行标记为“当前有效”。
+     */
+    function configDeliveryAlignEffectiveApiRows(array $effectiveUrls, array $configuredItems): array
+    {
+        $byDeliveryUrl = [];
+        foreach ($configuredItems as $item) {
+            $url = trim((string)($item['delivery_url'] ?? ''));
+            if ($url !== '' && !isset($byDeliveryUrl[$url])) {
+                $byDeliveryUrl[$url] = $item;
+            }
+        }
+
+        $items = [];
+        foreach ($effectiveUrls as $rawUrl) {
+            $url = (string)$rawUrl;
+            if (isset($byDeliveryUrl[$url])) {
+                $items[] = $byDeliveryUrl[$url];
+                continue;
+            }
+            $items[] = [
+                'id' => 0,
+                'name' => '运行时有效入口',
+                'base_url' => $url,
+                'usage_scope' => 'config',
+                'delivery_scope' => 'config',
+                'delivery_url' => $url,
+                'priority' => 0,
+                'updated_at' => '',
+            ];
+        }
+
+        $normalizedEffectiveUrls = array_values(array_map('strval', $effectiveUrls));
+        $defaultBootstrapUrls = configDeliveryDefaultPublicPools()['api_urls'];
+        // 只有实际集合精确等于编译期紧急入口时才标记 fallback。
+        // 管理员并发改池造成的元数据未命中，仍保持 publicPools 已确定的真实来源。
+        $effectiveSource = !empty($normalizedEffectiveUrls) && $normalizedEffectiveUrls !== $defaultBootstrapUrls
+            ? 'domain_pool'
+            : 'bootstrap_fallback';
+
+        return [
+            'effective_source' => $effectiveSource,
+            'items' => $items,
+        ];
+    }
+}
+
 if (!function_exists('configDeliveryDefaultPublicPools')) {
     /** 数据库迁移前的运行时兜底，保持 v152 时代的节点集合。 */
     function configDeliveryDefaultPublicPools(): array
@@ -416,9 +530,7 @@ if (!function_exists('configDeliveryPublicPools')) {
     function configDeliveryPublicPools(PDO $pdo): array
     {
         try {
-            $domains = $pdo->query("SELECT id, base_url, usage_scope
-                FROM cainiao_api_domain_pool WHERE enabled=1 ORDER BY priority DESC, id ASC LIMIT 24")
-                ->fetchAll(PDO::FETCH_ASSOC);
+            $domains = configDeliveryEnabledApiDomainRows($pdo);
             $dohRows = $pdo->query("SELECT url FROM cainiao_doh_pool WHERE enabled=1 ORDER BY priority DESC, id ASC LIMIT 24")
                 ->fetchAll(PDO::FETCH_COLUMN);
             $dnsRows = $pdo->query("SELECT ip FROM cainiao_dns_pool WHERE enabled=1 ORDER BY priority DESC, id ASC LIMIT 24")
@@ -439,17 +551,9 @@ if (!function_exists('configDeliveryPublicPools')) {
                 'doh_pool_configured' => true,
                 'dns_pool_configured' => true,
             ];
-            foreach ($domains as $row) {
-                $scope = configDeliveryNormalizeScope($row['usage_scope']);
-                foreach (['config', 'report', 'click'] as $targetScope) {
-                    if ($scope !== 'all' && $scope !== $targetScope) {
-                        continue;
-                    }
-                    $url = configDeliveryAppendQuery((string)$row['base_url'], [
-                        'api_pool_id' => (int)$row['id'],
-                        'api_pool_scope' => $targetScope,
-                    ]);
-                    $result[$targetScope . '_urls'][] = $url;
+            foreach (['config', 'report', 'click'] as $targetScope) {
+                foreach (configDeliveryApiDomainRowsForScope($domains, $targetScope) as $row) {
+                    $result[$targetScope . '_urls'][] = (string)$row['delivery_url'];
                 }
             }
             foreach (['config_urls', 'report_urls', 'click_urls'] as $field) {
