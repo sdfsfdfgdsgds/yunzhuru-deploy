@@ -81,7 +81,11 @@
       background: var(--admin-sidebar);
       border-right: 1px solid var(--admin-border);
       box-shadow: 5px 0 18px rgb(16 24 40 / 2%);
-      transition: width 0.24s ease, flex-basis 0.24s ease;
+      /*
+       * Element Plus 菜单树在 collapse-transition=false 时会立即切换结构。
+       * 侧栏宽度同步切换，避免子菜单已收起而外框仍在缩放的错位帧。
+       */
+      transition: none;
     }
 
     .admin-shell.is-collapsed .admin-sidebar {
@@ -938,9 +942,11 @@
         <main class="content-stage">
           <div class="iframe-card" v-loading="iframeLoading" element-loading-text="页面加载中">
             <iframe
+              :key="iframeLoadToken"
               ref="contentIframe"
               class="iframe-wrapper"
               :class="{ 'is-ready': !iframeLoading }"
+              :data-load-token="iframeLoadToken"
               :src="iframeSrc"
               :title="pageTitle"
               @load="handleIframeLoaded"
@@ -1307,7 +1313,9 @@
         const iframeSrc = ref(pagePrefix + initialMenu + pageSuffix);
         const contentIframe = ref(null);
         const iframeLoading = ref(true);
-        let iframeLoadToken = 0;
+        // 每轮导航使用独立 iframe 节点，从 DOM 层隔离已取消页面的迟到 load 事件。
+        const iframeLoadToken = ref(0);
+        let activeIframeThemeCleanup = null;
         const isMobileViewport = ref(window.innerWidth <= 900);
         const mobileMenuVisible = ref(false);
         const openedTabs = ref([
@@ -1669,60 +1677,108 @@ function closeTab(path) {
  * iframe 每次完成导航后注入统一主题。注入过程严格幂等，并隔离跨域或 DOM 异常。
  */
 function handleIframeLoaded(event) {
-  const loadToken = iframeLoadToken;
+  const frameElement = event && event.currentTarget ? event.currentTarget : contentIframe.value;
+  const loadTokenValue = frameElement && frameElement.dataset ? frameElement.dataset.loadToken : '';
+  const loadToken = Number(loadTokenValue);
+
+  // 旧 iframe 节点即使在被移除后才触发 load，也不得参与当前页面的显示决策。
+  if (loadTokenValue === '' || !Number.isSafeInteger(loadToken) || loadToken !== iframeLoadToken.value) {
+    return;
+  }
+
+  if (activeIframeThemeCleanup) {
+    activeIframeThemeCleanup();
+    activeIframeThemeCleanup = null;
+  }
+
   let revealRequested = false;
   let fallbackTimer = null;
   let themeLink = null;
+  let handleThemeLoaded = null;
+  let handleThemeFailed = null;
+
+  /** 清理当前主题等待器，避免旧文档的事件与计时器残留。 */
+  const cleanupThemeWait = () => {
+    if (fallbackTimer !== null) {
+      window.clearTimeout(fallbackTimer);
+      fallbackTimer = null;
+    }
+    if (themeLink && handleThemeLoaded && handleThemeFailed) {
+      themeLink.removeEventListener('load', handleThemeLoaded);
+      themeLink.removeEventListener('error', handleThemeFailed);
+    }
+    if (activeIframeThemeCleanup === cleanupThemeWait) {
+      activeIframeThemeCleanup = null;
+    }
+  };
+  activeIframeThemeCleanup = cleanupThemeWait;
 
   /**
    * 在主题样式已解析后等待两帧再显示 iframe，
    * 确保浏览器先完成样式计算和绘制。令牌可防止上一个页面的延迟回调覆盖新导航状态。
    */
   const revealFrame = () => {
-    if (revealRequested || loadToken !== iframeLoadToken) {
+    if (revealRequested || loadToken !== iframeLoadToken.value) {
       return;
     }
     revealRequested = true;
-    if (fallbackTimer !== null) {
-      window.clearTimeout(fallbackTimer);
-      fallbackTimer = null;
-    }
+    cleanupThemeWait();
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
-        if (loadToken === iframeLoadToken) {
+        if (loadToken === iframeLoadToken.value) {
           iframeLoading.value = false;
         }
       });
     });
   };
 
+  /** 主题加载失败或超时时移除当前 link，保证兜底页面不再被迟到样式二次切换。 */
+  const revealWithoutTheme = () => {
+    try {
+      if (themeLink && themeLink.parentNode) {
+        themeLink.parentNode.removeChild(themeLink);
+      }
+    } finally {
+      revealFrame();
+    }
+  };
+
+  /** load 事件是动态 link 完成的权威信号，同时留下可复用的已就绪标记。 */
+  handleThemeLoaded = () => {
+    if (themeLink) {
+      themeLink.dataset.adminThemeLoaded = 'true';
+    }
+    revealFrame();
+  };
+  handleThemeFailed = revealWithoutTheme;
+
+  /**
+   * link.sheet 在某些 Chromium 状态下会在请求完成前存在，
+   * 因此必须同时确认已解析规则，或使用本页记录的 load 标记。
+   */
+  const isThemeLinkLoaded = (link) => {
+    if (!link) {
+      return false;
+    }
+    if (link.dataset.adminThemeLoaded === 'true') {
+      return true;
+    }
+    try {
+      return Boolean(link.sheet && link.sheet.cssRules && link.sheet.cssRules.length > 0);
+    } catch (error) {
+      return false;
+    }
+  };
+
   try {
-    const frameElement = event && event.currentTarget ? event.currentTarget : contentIframe.value;
     const frameDocument = frameElement && frameElement.contentDocument;
     if (!frameDocument || !frameDocument.documentElement) {
       revealFrame();
       return;
     }
 
-    // 快速连续切换标签时，忽略已被新导航取代的旧文档 load 事件。
-    const expectedUrl = new URL(iframeSrc.value, window.location.origin);
-    const loadedUrl = new URL(frameDocument.location.href, window.location.origin);
-    if (
-      expectedUrl.pathname !== loadedUrl.pathname
-      || expectedUrl.search !== loadedUrl.search
-      || expectedUrl.hash !== loadedUrl.hash
-    ) {
-      return;
-    }
-
-    // 仅当本次 load 确实属于当前导航时启动兜底，避免旧页迟到事件提前显示新页。
-    fallbackTimer = window.setTimeout(() => {
-      // 超时后移除仍未生效的 link，防止已显示原页面后又被迟到样式二次切换。
-      if (themeLink && !themeLink.sheet && themeLink.parentNode) {
-        themeLink.parentNode.removeChild(themeLink);
-      }
-      revealFrame();
-    }, 3000);
+    // 从当前文档 load 开始计时；主题失败时也会在有界时间内恢复页面操作。
+    fallbackTimer = window.setTimeout(revealWithoutTheme, 3000);
 
     frameDocument.documentElement.classList.add('admin-v2-frame');
     frameDocument.documentElement.dataset.theme = 'light';
@@ -1737,26 +1793,31 @@ function handleIframeLoaded(event) {
       themeLink.rel = 'stylesheet';
       themeLink.href = '/element/css/admin-theme-v2.css';
       themeLink.dataset.adminThemeV2 = 'true';
-      themeLink.addEventListener('load', revealFrame, { once: true });
-      themeLink.addEventListener('error', revealFrame, { once: true });
+      themeLink.addEventListener('load', handleThemeLoaded, { once: true });
+      themeLink.addEventListener('error', handleThemeFailed, { once: true });
       (frameDocument.head || frameDocument.documentElement).appendChild(themeLink);
-    } else if (themeLink.sheet) {
+    } else if (isThemeLinkLoaded(themeLink)) {
+      themeLink.dataset.adminThemeLoaded = 'true';
       revealFrame();
     } else {
-      themeLink.addEventListener('load', revealFrame, { once: true });
-      themeLink.addEventListener('error', revealFrame, { once: true });
+      themeLink.addEventListener('load', handleThemeLoaded, { once: true });
+      themeLink.addEventListener('error', handleThemeFailed, { once: true });
     }
   } catch (error) {
     // 同源业务页会正常注入；若未来出现跨域页面，仅跳过主题注入并保留页面访问。
     console.debug('子页面主题注入已跳过：', error);
-    revealFrame();
+    revealWithoutTheme();
   }
 }
 
 /** 标记新的 iframe 导航周期，使旧页面的异步样式回调自动失效。 */
 function beginIframeLoad() {
-  iframeLoadToken += 1;
+  if (activeIframeThemeCleanup) {
+    activeIframeThemeCleanup();
+    activeIframeThemeCleanup = null;
+  }
   iframeLoading.value = true;
+  iframeLoadToken.value += 1;
 }
 
 
@@ -2178,6 +2239,10 @@ async function clearS3Config() {
 
         onBeforeUnmount(() => {
           window.removeEventListener('resize', updateViewport);
+          if (activeIframeThemeCleanup) {
+            activeIframeThemeCleanup();
+            activeIframeThemeCleanup = null;
+          }
           if (unreadTimer) {
             window.clearInterval(unreadTimer);
           }
@@ -2192,6 +2257,7 @@ async function clearS3Config() {
           iframeSrc,
           contentIframe,
           iframeLoading,
+          iframeLoadToken,
           handleIframeLoaded,
           pageTitle,
           breadcrumbItems,

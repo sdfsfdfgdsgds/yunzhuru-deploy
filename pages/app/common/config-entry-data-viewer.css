@@ -1,0 +1,84 @@
+.config-entry-data-dialog {
+  width: min(1120px, 96vw) !important;
+}
+
+.config-entry-data-dialog .el-dialog__body {
+  max-height: 76vh;
+  overflow: auto;
+}
+
+.config-entry-data-code {
+  box-sizing: border-box;
+  width: 100%;
+  max-height: 34vh;
+  margin: 14px 0 0;
+  padding: 16px;
+  overflow: auto;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  background: #0d1117;
+  color: #e6edf3;
+  font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre;
+  overflow-wrap: normal;
+  tab-size: 2;
+}
+
+.config-entry-data-loading {
+  min-height: 120px;
+}
+
+.config-entry-data-section {
+  margin-top: 16px;
+}
+
+.config-entry-data-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #303133;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.config-entry-data-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.config-entry-data-mono {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.config-entry-data-hash-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.config-entry-data-hash-row .config-entry-data-mono {
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .config-entry-data-dialog {
+    width: 96vw !important;
+    margin-top: 3vh !important;
+  }
+
+  .config-entry-data-dialog .el-dialog__body {
+    padding: 12px;
+  }
+
+  .config-entry-data-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

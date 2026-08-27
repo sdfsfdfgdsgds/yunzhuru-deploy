@@ -5,8 +5,10 @@
   <title>注入任务管理</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="/element/css/index.css">
+  <link rel="stylesheet" href="/pages/app/common/config-entry-data-viewer.css">
   <script src="/element/js/vue.global.js"></script>
   <script src="/element/js/index.full.js"></script>
+  <script src="/pages/app/common/config-entry-data-viewer.js"></script>
   <script src="/config.js"></script>
   <style>
     body { padding: 20px; }
@@ -91,58 +93,11 @@
     .static-api-evidence {
       margin-top: 12px;
     }
-    .static-bucket-plaintext-dialog {
-      width: min(1120px, 96vw) !important;
-    }
-    .static-bucket-plaintext-dialog .el-dialog__body {
-      max-height: 76vh;
-      overflow: auto;
-    }
-    .static-bucket-plaintext {
-      box-sizing: border-box;
-      width: 100%;
-      max-height: 34vh;
-      margin: 14px 0 0;
-      padding: 16px;
-      overflow: auto;
-      border: 1px solid #30363d;
-      border-radius: 6px;
-      background: #0d1117;
-      color: #e6edf3;
-      font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      white-space: pre;
-      tab-size: 2;
-    }
-    .static-bucket-plaintext-loading {
-      min-height: 120px;
-    }
-    .api-payload-section {
-      margin-top: 16px;
-    }
-    .api-payload-section-heading {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      color: #303133;
-      font-size: 14px;
-      font-weight: 700;
-    }
-    .api-payload-section-actions {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 8px;
-    }
     @media (max-width: 640px) {
       body { margin: 0; padding: 12px; }
       .static-bucket-dialog { width: 96vw !important; margin-top: 3vh !important; }
       .static-bucket-dialog .el-dialog__body { padding: 12px; }
       .static-api-toolbar { flex-direction: column; }
-      .api-payload-section-heading { align-items: flex-start; flex-direction: column; }
-      .static-bucket-plaintext-dialog { width: 96vw !important; margin-top: 3vh !important; }
-      .static-bucket-plaintext-dialog .el-dialog__body { padding: 12px; }
     }
   </style>
 </head>
@@ -529,6 +484,20 @@
                 <span v-else class="static-bucket-mono">{{ scope.row.domain || '-' }}</span>
               </template>
             </el-table-column>
+            <el-table-column label="本应用文件地址" min-width="360">
+              <template #default="scope">
+                <el-link
+                  v-if="safeStaticBucketUrl(scope.row.app_file_url)"
+                  class="static-bucket-mono"
+                  type="primary"
+                  :href="safeStaticBucketUrl(scope.row.app_file_url)"
+                  target="_blank"
+                  rel="noopener noreferrer">
+                  {{ scope.row.app_file_url }}
+                </el-link>
+                <span v-else class="static-bucket-mono">{{ scope.row.app_file_url || '-' }}</span>
+              </template>
+            </el-table-column>
             <el-table-column label="当前状态" min-width="190">
               <template #default="scope">
                 <el-tag size="small" effect="plain" :type="staticBucketCurrentStateType(scope.row)">
@@ -538,6 +507,18 @@
                   当前名称：{{ scope.row.current_name || '-' }}<br>
                   当前地址：{{ scope.row.current_domain || '-' }}
                 </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="配置数据" width="118" fixed="right">
+              <template #default="scope">
+                <el-button
+                  type="primary"
+                  size="small"
+                  :loading="sharedBucketDataLoading(scope.row)"
+                  :disabled="!scope.row.id || sharedBucketDataBusy()"
+                  @click="openSharedBucketData(scope.row)">
+                  查看数据
+                </el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -648,9 +629,9 @@
                 <el-button
                   link
                   type="primary"
-                  :loading="apiPayloadLoading && apiPayloadActiveEntryKey === scope.row.entry_key"
-                  :disabled="!scope.row.entry_key || apiPayloadLoading"
-                  @click="viewDynamicApiPayload(scope.row)">
+                  :loading="sharedApiDataLoading(scope.row)"
+                  :disabled="!scope.row.entry_key || sharedApiDataBusy()"
+                  @click="openSharedApiData(scope.row)">
                   查看数据
                 </el-button>
               </template>
@@ -701,200 +682,16 @@
       </template>
     </el-dialog>
 
-    <!-- API 数据只在用户点击单个节点时请求；同一次响应同时保留原文和解密结果。 -->
-    <el-dialog
-      v-model="apiPayloadDialogVisible"
-      class="static-bucket-plaintext-dialog"
-      title="API 节点实际响应数据"
-      append-to-body
-      destroy-on-close
-      @closed="resetDynamicApiPayload">
-      <el-alert
-        title="这是当前控制面的即时诊断请求，与所选历史 task / attempt 制品证据分开；服务端固定模拟 shell_version=153，并使用应用当前资料。这里展示该次响应，不代表某台手机的本地缓存、DNS 或运营商链路。"
-        type="info"
-        show-icon
-        :closable="false"
-        style="margin-bottom: 14px;">
-      </el-alert>
-
-      <el-descriptions :column="2" border size="small">
-        <el-descriptions-item label="应用">
-          [{{ apiPayloadMeta.appId || '-' }}] {{ apiPayloadMeta.appName || '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="API 节点">
-          [{{ apiPayloadMeta.apiId || '-' }}] {{ apiPayloadMeta.apiName || '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="下发 URL" :span="2">
-          <span class="static-bucket-mono">{{ apiPayloadMeta.deliveryUrl || '-' }}</span>
-        </el-descriptions-item>
-        <el-descriptions-item label="本次实际 URL" :span="2">
-          <span class="static-bucket-mono">{{ apiPayloadMeta.requestUrl || '-' }}</span>
-        </el-descriptions-item>
-        <el-descriptions-item label="HTTP / Content-Type">
-          <el-tag size="small" effect="plain" :type="apiPayloadHttpType(apiPayloadMeta.httpCode)">
-            {{ apiPayloadMeta.httpCode || '-' }}
-          </el-tag>
-          <span style="margin-left: 8px;">{{ apiPayloadMeta.contentType || '-' }}</span>
-        </el-descriptions-item>
-        <el-descriptions-item label="响应来源">
-          {{ apiPayloadResponseSourceLabel(apiPayloadMeta) }}
-        </el-descriptions-item>
-        <el-descriptions-item label="请求状态">
-          <el-tag size="small" effect="plain" :type="apiPayloadRequestStateType(apiPayloadRequestState)">
-            {{ apiPayloadRequestStateLabel(apiPayloadRequestState) }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="解密状态">
-          <el-tag size="small" effect="plain" :type="apiPayloadPlainStateType(apiPayloadPlainState)">
-            {{ apiPayloadPlainStateLabel(apiPayloadPlainState) }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="缓存 TTL / 服务端耗时">
-          {{ apiPayloadMeta.dataSourceTtl || '-' }} / {{ apiPayloadMeta.dataTtl || '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="本次请求耗时">
-          {{ formatApiPayloadMilliseconds(apiPayloadMeta.elapsedMs) }}
-        </el-descriptions-item>
-        <el-descriptions-item label="读取时间">
-          {{ apiPayloadMeta.checkedAt || '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="响应原文 / 原始明文大小">
-          {{ apiPayloadMeta.responseBytes ? formatStaticBucketBytes(apiPayloadMeta.responseBytes) : '-' }}
-          /
-          {{ apiPayloadMeta.plainBytes ? formatStaticBucketBytes(apiPayloadMeta.plainBytes) : '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="响应展示编码">
-          {{ apiPayloadMeta.responseEncoding === 'base64' ? 'Base64（原响应为二进制字节）' : 'UTF-8 原文' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="格式化明文大小">
-          {{ apiPayloadMeta.prettyBytes ? formatStaticBucketBytes(apiPayloadMeta.prettyBytes) : '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="请求 APPID / 响应 APPID">
-          {{ apiPayloadMeta.appId || '-' }} / {{ apiPayloadMeta.payloadAppId || '-' }}
-          <el-tag
-            v-if="apiPayloadMeta.appIdMatches !== null"
-            size="small"
-            effect="plain"
-            :type="staticBucketPlainMatchType(apiPayloadMeta.appIdMatches)"
-            style="margin-left: 8px;">
-            {{ apiPayloadMeta.appIdMatches ? '一致' : '不一致' }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="配置版本">
-          delivery={{ apiPayloadMeta.configDeliveryVersion ?? '-' }}，network={{ apiPayloadMeta.networkConfigVersion ?? '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="配置解析来源">
-          {{ apiPayloadMeta.configResolution || '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="顶层字段数">
-          {{ apiPayloadMeta.fieldCount || '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="原始响应字节 SHA-256" :span="2">
-          <span class="static-bucket-mono">{{ apiPayloadMeta.responseSha256 || '-' }}</span>
-        </el-descriptions-item>
-        <el-descriptions-item label="原始明文 SHA-256" :span="2">
-          <span class="static-bucket-mono">{{ apiPayloadMeta.plainSha256 || '-' }}</span>
-        </el-descriptions-item>
-        <el-descriptions-item label="格式化明文 SHA-256" :span="2">
-          <span class="static-bucket-mono">{{ apiPayloadMeta.prettySha256 || '-' }}</span>
-        </el-descriptions-item>
-      </el-descriptions>
-
-      <el-alert
-        v-if="apiPayloadError"
-        :title="apiPayloadError"
-        type="error"
-        show-icon
-        :closable="false"
-        style="margin-top: 14px;">
-      </el-alert>
-      <el-alert
-        v-if="apiPayloadRequestError"
-        :title="apiPayloadRequestError"
-        type="warning"
-        show-icon
-        :closable="false"
-        style="margin-top: 14px;">
-      </el-alert>
-      <el-alert
-        v-if="apiPayloadIdentityError"
-        :title="apiPayloadIdentityError"
-        type="error"
-        show-icon
-        :closable="false"
-        style="margin-top: 14px;">
-      </el-alert>
-
-      <div
-        class="static-bucket-plaintext-loading"
-        v-loading="apiPayloadLoading"
-        element-loading-text="正在请求 API 并解密响应">
-        <div class="api-payload-section">
-          <div class="api-payload-section-heading">
-            <span v-if="apiPayloadMeta.responseEncoding === 'base64'">响应原文字节（Base64 编码展示）</span>
-            <span v-else>{{ apiPayloadIsCiphertext(apiPayloadPlainState) ? '响应原文（Base64 AES 密文）' : '响应原文' }}</span>
-            <el-button
-              size="small"
-              type="primary"
-              :disabled="!apiPayloadResponseBody"
-              @click="copyApiPayloadResponse">
-              复制响应原文
-            </el-button>
-          </div>
-          <pre v-if="apiPayloadResponseBody" class="static-bucket-plaintext">{{ apiPayloadResponseBody }}</pre>
-          <el-empty
-            v-else-if="!apiPayloadLoading && !apiPayloadError"
-            description="本次响应没有正文">
-          </el-empty>
-        </div>
-
-        <div class="api-payload-section">
-          <div class="api-payload-section-heading">
-            <span>解密明文</span>
-            <div class="api-payload-section-actions">
-              <el-radio-group
-                v-model="apiPayloadPlainViewMode"
-                size="small"
-                @change="changeApiPayloadPlainView">
-                <el-radio-button label="pretty">格式化 JSON</el-radio-button>
-                <el-radio-button label="raw">原始明文</el-radio-button>
-              </el-radio-group>
-              <el-button
-                size="small"
-                type="primary"
-                :disabled="!apiPayloadPlainText"
-                @click="copyApiPayloadPlaintext">
-                复制当前明文
-              </el-button>
-            </div>
-          </div>
-          <el-alert
-            v-if="apiPayloadDecodeError"
-            :title="apiPayloadDecodeError"
-            type="warning"
-            show-icon
-            :closable="false"
-            style="margin-top: 12px;">
-          </el-alert>
-          <pre v-if="apiPayloadPlainText" class="static-bucket-plaintext">{{ apiPayloadPlainText }}</pre>
-          <el-empty
-            v-else-if="!apiPayloadLoading && !apiPayloadDecodeError && !apiPayloadError"
-            description="本次响应没有可展示的解密明文">
-          </el-empty>
-        </div>
-      </div>
-
-      <template #footer>
-        <el-button @click="apiPayloadDialogVisible = false">关闭</el-button>
-      </template>
-    </el-dialog>
-    
+    <config-entry-data-viewer ref="configEntryDataViewerRef"></config-entry-data-viewer>
   </div>
 
   <script>
     const { createApp, ref, reactive, onMounted, watch } = Vue;
 
     createApp({
+      components: {
+        ConfigEntryDataViewer: window.YunzhuruConfigEntryDataViewer,
+      },
       setup() {
         const query = reactive({
           page: 1,
@@ -927,57 +724,7 @@
         let staticEntryRequestId = 0;
         const activeStaticInjectedApiUrls = reactive(normalizeStaticInjectedApiUrls(null));
         const activeCurrentDynamicApiUrls = reactive(normalizeCurrentDynamicApiUrls(null));
-        // API 实际响应采用独立状态和请求序号，避免与固定桶证据或并发节点互相覆盖。
-        const apiPayloadDialogVisible = ref(false);
-        const apiPayloadLoading = ref(false);
-        const apiPayloadError = ref('');
-        const apiPayloadRequestState = ref('pending');
-        const apiPayloadRequestError = ref('');
-        const apiPayloadDecodeError = ref('');
-        const apiPayloadIdentityError = ref('');
-        const apiPayloadResponseBody = ref('');
-        const apiPayloadPlainRaw = ref('');
-        const apiPayloadPlainPretty = ref('');
-        const apiPayloadPlainText = ref('');
-        const apiPayloadPlainViewMode = ref('pretty');
-        const apiPayloadPlainState = ref('pending');
-        const apiPayloadActiveEntryKey = ref('');
-        let apiPayloadRequestId = 0;
-        const apiPayloadMeta = reactive(createEmptyApiPayloadMeta());
-
-        /** 返回 API 数据弹窗的完整空态，关闭后据此清除响应正文和校验信息。 */
-        function createEmptyApiPayloadMeta() {
-          return {
-            appId: 0,
-            appName: '',
-            apiId: 0,
-            apiName: '',
-            entryKey: '',
-            deliveryUrl: '',
-            requestUrl: '',
-            httpCode: 0,
-            contentType: '',
-            responseEncoding: 'utf-8',
-            dataSource: '',
-            appDataSource: '',
-            dataSourceTtl: '',
-            dataTtl: '',
-            configResolution: '',
-            elapsedMs: null,
-            checkedAt: '',
-            responseBytes: 0,
-            plainBytes: 0,
-            prettyBytes: 0,
-            responseSha256: '',
-            plainSha256: '',
-            prettySha256: '',
-            fieldCount: 0,
-            payloadAppId: null,
-            appIdMatches: null,
-            configDeliveryVersion: null,
-            networkConfigVersion: null,
-          };
-        }
+        const configEntryDataViewerRef = ref(null);
 
         /** 将接口快照限制为页面需要的公开字段，并为旧数据提供稳定默认值。 */
         function normalizeStaticBucketSnapshot(value) {
@@ -992,6 +739,8 @@
               provider: String(row.provider || ''),
               provider_label: String(row.provider_label || ''),
               domain: String(row.domain || ''),
+              app_file_key: String(row.app_file_key || ''),
+              app_file_url: String(row.app_file_url || ''),
               current_state: String(row.current_state || ''),
               current_name: String(row.current_name || ''),
               current_domain: String(row.current_domain || ''),
@@ -999,6 +748,8 @@
           }) : [];
           return {
             state,
+            exact: source.exact === 1 || source.exact === '1' ? 1 : 0,
+            evidence: String(source.evidence || ''),
             task_id: Number(source.task_id) > 0 ? Number(source.task_id) : 0,
             attempt_no: Number(source.attempt_no) > 0 ? Number(source.attempt_no) : 0,
             template_version: String(source.template_version || ''),
@@ -1315,314 +1066,53 @@
           }
         }
 
-        function staticBucketPlainMatchType(value) {
-          if (value === true) return 'success';
-          if (value === false) return 'danger';
-          return 'info';
-        }
-
-        function formatStaticBucketBytes(value) {
-          const bytes = Math.max(0, Number(value) || 0);
-          if (bytes < 1024) return bytes + ' B';
-          if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KiB';
-          return (bytes / 1024 / 1024).toFixed(2) + ' MiB';
-        }
-
-        /** HTTP 状态只用于人工辨识本次节点响应，不把解密成功与 HTTP 成功混为一类。 */
-        function apiPayloadHttpType(value) {
-          const code = Number(value) || 0;
-          if (code >= 200 && code < 300) return 'success';
-          if (code >= 300 && code < 500) return 'warning';
-          if (code >= 500) return 'danger';
-          return 'info';
-        }
-
-        /** 请求链路状态与解密状态是两条独立诊断轴，页面分别展示。 */
-        function apiPayloadRequestStateLabel(value) {
-          const labels = {
-            pending: '等待请求',
-            received: '已取得响应',
-            timeout: '请求超时',
-            transport_error: '网络异常',
-            http_error: 'HTTP 异常',
-            empty_response: '响应为空',
-            too_large: '响应过大',
-            request_error: '请求异常',
-          };
-          return labels[String(value || '').toLowerCase()] || '状态未知';
-        }
-
-        function apiPayloadRequestStateType(value) {
-          const state = String(value || '').toLowerCase();
-          if (state === 'received') return 'success';
-          if (state === 'pending') return 'info';
-          if (state === 'timeout' || state === 'http_error' || state === 'empty_response') return 'warning';
-          return 'danger';
-        }
-
-        function apiPayloadPlainStateLabel(value) {
-          const labels = {
-            pending: '等待解密',
-            success: '解密成功',
-            payload_mismatch: '解密成功，APPID 不一致',
-            invalid_ciphertext: '密文或 JSON 校验异常',
-            unavailable: '本次没有可解密正文',
-          };
-          return labels[String(value || '').toLowerCase()] || '状态未知';
-        }
-
-        function apiPayloadPlainStateType(value) {
-          const state = String(value || '').toLowerCase();
-          if (state === 'success') return 'success';
-          if (state === 'payload_mismatch' || state === 'invalid_ciphertext') return 'danger';
-          if (state === 'unavailable') return 'warning';
-          return 'info';
-        }
-
-        function apiPayloadIsCiphertext(value) {
-          const state = String(value || '').toLowerCase();
-          return state === 'success' || state === 'payload_mismatch';
-        }
-
-        function formatApiPayloadMilliseconds(value) {
-          const milliseconds = Number(value);
-          return Number.isFinite(milliseconds) && milliseconds >= 0
-            ? milliseconds.toFixed(2) + ' ms'
-            : '-';
-        }
-
-        function apiPayloadResponseSourceLabel(meta) {
-          const parts = [];
-          if (meta.dataSource) parts.push('配置：' + meta.dataSource);
-          if (meta.appDataSource) parts.push('应用：' + meta.appDataSource);
-          return parts.length ? parts.join('，') : '-';
-        }
-
-        /** 从大小写可能不同的响应头对象中读取一个白名单字段。 */
-        function apiPayloadHeaderValue(headers, name) {
-          if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return '';
-          const target = String(name || '').toLowerCase();
-          const key = Object.keys(headers).find(function (headerName) {
-            return String(headerName).toLowerCase() === target;
-          });
-          return key ? String(headers[key] ?? '') : '';
-        }
-
-        /**
-         * 向选中的当前有效 API 节点发起一次真实诊断请求。
-         * 前端只提交应用 ID 与服务端生成的入口标识，URL 和请求凭据全部由后端恢复。
-         */
-        async function viewDynamicApiPayload(row) {
-          const appId = Number(activeStaticBucketOwner.apk_id) || 0;
-          const entryKey = String((row && row.entry_key) || '').trim().toLowerCase();
-          if (appId <= 0 || !entryKey) {
-            ElementPlus.ElMessage.warning('应用或 API 入口标识缺失，请刷新当前列表');
-            return;
-          }
-
-          const requestId = ++apiPayloadRequestId;
-          apiPayloadActiveEntryKey.value = entryKey;
-          apiPayloadLoading.value = true;
-          apiPayloadError.value = '';
-          apiPayloadRequestState.value = 'pending';
-          apiPayloadRequestError.value = '';
-          apiPayloadDecodeError.value = '';
-          apiPayloadIdentityError.value = '';
-          apiPayloadResponseBody.value = '';
-          apiPayloadPlainRaw.value = '';
-          apiPayloadPlainPretty.value = '';
-          apiPayloadPlainText.value = '';
-          apiPayloadPlainViewMode.value = 'pretty';
-          apiPayloadPlainState.value = 'pending';
-          replaceReactiveObject(apiPayloadMeta, Object.assign(createEmptyApiPayloadMeta(), {
-            appId,
+        /** 两个业务页共用同一个配置数据组件，任务页只提供精确任务快照上下文。 */
+        function openSharedBucketData(row) {
+          const viewer = configEntryDataViewerRef.value;
+          if (!viewer) return;
+          viewer.openBucket({
+            appId: Number(activeStaticBucketOwner.apk_id) || 0,
             appName: String(activeStaticBucketOwner.apk_name || ''),
-            apiId: Number((row && row.id) || 0),
-            apiName: String((row && row.name) || ''),
-            entryKey,
-            deliveryUrl: String((row && row.delivery_url) || ''),
-          }));
-          apiPayloadDialogVisible.value = true;
-
-          try {
-            const response = await fetch('/api/index.php?module=app&method=getAppApiConfigPayload', {
-              method: 'POST',
-              cache: 'no-store',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ app_id: appId, entry_key: entryKey }),
-            });
-            const json = await response.json();
-            if (json.code !== 200 || !json.data) {
-              throw new Error(json.message || 'API 节点数据读取失败');
-            }
-            const entryStillCurrent = activeCurrentDynamicApiUrls.items.some(function (item) {
-              return String(item.entry_key || '').trim().toLowerCase() === entryKey;
-            });
-            if (requestId !== apiPayloadRequestId
-              || !staticBucketDialogVisible.value
-              || !apiPayloadDialogVisible.value
-              || Number(activeStaticBucketOwner.apk_id) !== appId
-              || apiPayloadActiveEntryKey.value !== entryKey
-              || !entryStillCurrent) return;
-
-            const data = json.data || {};
-            const api = data.api || data.endpoint || {};
-            const responseAppId = Number(data.app_id) || 0;
-            const responseEntryKey = String(api.entry_key || '').trim().toLowerCase();
-            if (responseAppId !== appId || responseEntryKey !== entryKey) {
-              throw new Error('API 节点响应身份校验异常，请刷新当前列表后重试');
-            }
-            const ciphertext = data.ciphertext || {};
-            const responseData = data.response || ciphertext || {};
-            const plaintext = data.plaintext || {};
-            const headers = responseData.headers || data.headers || {};
-            const responseBody = String(
-              responseData.body ?? responseData.raw_body ?? ciphertext.body ?? ciphertext.text ?? ''
-            );
-            const rawPlaintext = String(plaintext.json ?? plaintext.raw_json ?? plaintext.text ?? '');
-            const prettyPlaintext = String(plaintext.pretty_json ?? rawPlaintext);
-            const payloadAppId = plaintext.payload_app_id === null || plaintext.payload_app_id === undefined
-              ? (data.payload_app_id === null || data.payload_app_id === undefined ? null : String(data.payload_app_id))
-              : String(plaintext.payload_app_id);
-            let appIdMatches = plaintext.app_id_matches === true
-              ? true
-              : (plaintext.app_id_matches === false ? false : null);
-            if (appIdMatches === null && payloadAppId !== null) {
-              appIdMatches = String(payloadAppId) === String(appId);
-            }
-            const declaredSource = typeof responseData.source === 'string' ? responseData.source : '';
-            const plainState = String(
-              plaintext.state || ((rawPlaintext || prettyPlaintext) ? 'success' : 'failed')
-            ).toLowerCase();
-            const requestState = String(responseData.state || data.state || 'received').toLowerCase();
-            const requestError = String(
-              responseData.error
-              || (plainState === 'unavailable' ? (plaintext.error || '') : '')
-              || ''
-            );
-
-            replaceReactiveObject(apiPayloadMeta, {
-              appId: Number(data.app_id) || appId,
-              appName: String(data.app_name || activeStaticBucketOwner.apk_name || ''),
-              apiId: Number(api.id || (row && row.id)) || 0,
-              apiName: String(api.name || (row && row.name) || ''),
-              entryKey: String(api.entry_key || entryKey),
-              deliveryUrl: String(api.delivery_url || (row && row.delivery_url) || ''),
-              requestUrl: String(api.request_url || responseData.request_url || responseData.url || ''),
-              httpCode: Number(responseData.http_code || responseData.status_code) || 0,
-              contentType: String(
-                responseData.content_type || apiPayloadHeaderValue(headers, 'content-type') || ''
-              ),
-              responseEncoding: String(responseData.body_encoding || ciphertext.encoding || 'utf-8').toLowerCase(),
-              dataSource: String(
-                responseData.data_source || declaredSource || apiPayloadHeaderValue(headers, 'x-data-source') || ''
-              ),
-              appDataSource: String(
-                responseData.app_data_source || apiPayloadHeaderValue(headers, 'x-data-source-apk') || ''
-              ),
-              dataSourceTtl: String(
-                responseData.data_source_ttl ?? apiPayloadHeaderValue(headers, 'x-data-source-ttl') ?? ''
-              ),
-              dataTtl: String(responseData.data_ttl ?? apiPayloadHeaderValue(headers, 'x-data-ttl') ?? ''),
-              configResolution: String(
-                responseData.config_resolution || apiPayloadHeaderValue(headers, 'x-config-resolution') || ''
-              ),
-              elapsedMs: responseData.elapsed_ms ?? data.elapsed_ms ?? null,
-              checkedAt: String(data.checked_at || ''),
-              responseBytes: Number(
-                responseData.byte_size || ciphertext.byte_size || (responseBody ? new Blob([responseBody]).size : 0)
-              ) || 0,
-              plainBytes: Number(plaintext.byte_size) || 0,
-              prettyBytes: Number(plaintext.pretty_byte_size) || 0,
-              responseSha256: String(
-                responseData.sha256 || responseData.cipher_sha256 || ciphertext.sha256 || ciphertext.cipher_sha256 || ''
-              ),
-              plainSha256: String(plaintext.sha256 || ''),
-              prettySha256: String(plaintext.pretty_sha256 || ''),
-              fieldCount: Number(plaintext.field_count) || 0,
-              payloadAppId,
-              appIdMatches,
-              configDeliveryVersion: plaintext.config_delivery_version ?? null,
-              networkConfigVersion: plaintext.network_config_version ?? null,
-            });
-            apiPayloadResponseBody.value = responseBody;
-            apiPayloadPlainRaw.value = rawPlaintext;
-            apiPayloadPlainPretty.value = prettyPlaintext;
-            apiPayloadPlainText.value = prettyPlaintext || rawPlaintext;
-            apiPayloadRequestState.value = requestState;
-            apiPayloadRequestError.value = requestError;
-            apiPayloadPlainState.value = plainState;
-            apiPayloadIdentityError.value = plainState === 'payload_mismatch'
-              ? String(plaintext.error || '响应已解密，但 APPID 与请求应用不一致')
-              : '';
-            apiPayloadDecodeError.value = plainState === 'invalid_ciphertext'
-              ? String(plaintext.decode_error || plaintext.error || data.decode_error || '响应原文未通过配置解密或 JSON 校验')
-              : '';
-          } catch (error) {
-            if (requestId !== apiPayloadRequestId
-              || !apiPayloadDialogVisible.value
-              || Number(activeStaticBucketOwner.apk_id) !== appId
-              || apiPayloadActiveEntryKey.value !== entryKey) return;
-            apiPayloadError.value = String((error && error.message) || 'API 节点数据读取失败');
-            apiPayloadRequestState.value = 'request_error';
-            apiPayloadPlainState.value = 'unavailable';
-          } finally {
-            if (requestId === apiPayloadRequestId && apiPayloadActiveEntryKey.value === entryKey) {
-              apiPayloadLoading.value = false;
-            }
-          }
+            snapshot: activeStaticBucketSnapshot,
+            bucket: row,
+          });
         }
 
-        /** 关闭后作废在途请求，并清除完整 API 响应及解密明文。 */
-        function resetDynamicApiPayload() {
-          apiPayloadRequestId++;
-          apiPayloadLoading.value = false;
-          apiPayloadError.value = '';
-          apiPayloadRequestState.value = 'pending';
-          apiPayloadRequestError.value = '';
-          apiPayloadDecodeError.value = '';
-          apiPayloadIdentityError.value = '';
-          apiPayloadResponseBody.value = '';
-          apiPayloadPlainRaw.value = '';
-          apiPayloadPlainPretty.value = '';
-          apiPayloadPlainText.value = '';
-          apiPayloadPlainViewMode.value = 'pretty';
-          apiPayloadPlainState.value = 'pending';
-          apiPayloadActiveEntryKey.value = '';
-          replaceReactiveObject(apiPayloadMeta, createEmptyApiPayloadMeta());
+        function openSharedApiData(row) {
+          const viewer = configEntryDataViewerRef.value;
+          if (!viewer) return;
+          viewer.openApi({
+            appId: Number(activeStaticBucketOwner.apk_id) || 0,
+            appName: String(activeStaticBucketOwner.apk_name || ''),
+            api: row,
+          });
         }
 
-        function changeApiPayloadPlainView(mode) {
-          apiPayloadPlainText.value = mode === 'raw'
-            ? apiPayloadPlainRaw.value
-            : apiPayloadPlainPretty.value;
+        function closeSharedConfigData() {
+          const viewer = configEntryDataViewerRef.value;
+          if (viewer) viewer.closeAll();
         }
 
-        async function copyApiPayloadResponse() {
-          const text = String(apiPayloadResponseBody.value || '');
-          if (!text) return;
-          try {
-            await copyTextToClipboard(text);
-            ElementPlus.ElMessage.success(
-              apiPayloadMeta.responseEncoding === 'base64'
-                ? '响应原文字节的 Base64 展示已复制'
-                : '响应原文已复制'
-            );
-          } catch (error) {
-            ElementPlus.ElMessage.error('复制失败，请在响应原文区域手动选择复制');
-          }
+        function sharedBucketDataLoading(row) {
+          const viewer = configEntryDataViewerRef.value;
+          return !!(viewer && viewer.isBucketLoading(Number(row && row.id)));
         }
 
-        async function copyApiPayloadPlaintext() {
-          const text = String(apiPayloadPlainText.value || '');
-          if (!text) return;
-          try {
-            await copyTextToClipboard(text);
-            ElementPlus.ElMessage.success('解密明文已复制');
-          } catch (error) {
-            ElementPlus.ElMessage.error('复制失败，请在解密明文区域手动选择复制');
-          }
+        function sharedBucketDataBusy() {
+          const viewer = configEntryDataViewerRef.value;
+          return !!(viewer && viewer.isBucketBusy());
         }
+
+        function sharedApiDataLoading(row) {
+          const viewer = configEntryDataViewerRef.value;
+          return !!(viewer && viewer.isApiLoading(String((row && row.entry_key) || '')));
+        }
+
+        function sharedApiDataBusy() {
+          const viewer = configEntryDataViewerRef.value;
+          return !!(viewer && viewer.isApiBusy());
+        }
+
 
         /** 只读取当前弹窗的任务与尝试号，旧响应由三重校验自动丢弃。 */
         async function loadStaticEntryDetails(taskId, attemptNo) {
@@ -1647,8 +1137,7 @@
             if (String(json.data.state || '') === 'snapshot_stale') {
               staticEntryStale.value = true;
               staticEntryError.value = String(json.message || json.data.message || '本次制品快照已更新，请刷新任务列表后重新打开');
-              apiPayloadDialogVisible.value = false;
-              resetDynamicApiPayload();
+              closeSharedConfigData();
               return;
             }
             if (Number(json.data.task_id) !== taskId || Number(json.data.attempt_no) !== attemptNo) {
@@ -1675,8 +1164,7 @@
         }
 
         function openStaticBucketDetails(row) {
-          apiPayloadDialogVisible.value = false;
-          resetDynamicApiPayload();
+          closeSharedConfigData();
           replaceReactiveObject(activeStaticBucketOwner, {
             task_id: Number(row && row.id) || 0,
             apk_id: Number(row && row.apk_id) || 0,
@@ -1707,8 +1195,7 @@
 
         function resetStaticEntryDetails() {
           staticEntryRequestId++;
-          apiPayloadDialogVisible.value = false;
-          resetDynamicApiPayload();
+          closeSharedConfigData();
           staticEntryLoading.value = false;
           staticEntryStale.value = false;
           staticEntryError.value = '';
@@ -2077,7 +1564,6 @@ async function loadLanzouSubDirs(node, resolve) {
 }
 
 
-
 function selectLanzouDir(node) {
   selectedFolderId.value = node.fol_id;
 }
@@ -2201,6 +1687,13 @@ async function confirmLanzouUpload() {
           staticEntryError,
           activeStaticInjectedApiUrls,
           activeCurrentDynamicApiUrls,
+          configEntryDataViewerRef,
+          openSharedBucketData,
+          openSharedApiData,
+          sharedBucketDataLoading,
+          sharedBucketDataBusy,
+          sharedApiDataLoading,
+          sharedApiDataBusy,
           staticBucketStateLabel,
           staticBucketStateType,
           staticBucketAlertType,
@@ -2229,36 +1722,6 @@ async function confirmLanzouUpload() {
           staticApiEvidenceLabel,
           staticApiEvidenceType,
           copyDynamicApiUrl,
-          apiPayloadDialogVisible,
-          apiPayloadLoading,
-          apiPayloadError,
-          apiPayloadRequestState,
-          apiPayloadRequestError,
-          apiPayloadDecodeError,
-          apiPayloadIdentityError,
-          apiPayloadResponseBody,
-          apiPayloadPlainRaw,
-          apiPayloadPlainPretty,
-          apiPayloadPlainText,
-          apiPayloadPlainViewMode,
-          apiPayloadPlainState,
-          apiPayloadActiveEntryKey,
-          apiPayloadMeta,
-          viewDynamicApiPayload,
-          resetDynamicApiPayload,
-          staticBucketPlainMatchType,
-          formatStaticBucketBytes,
-          apiPayloadHttpType,
-          apiPayloadRequestStateLabel,
-          apiPayloadRequestStateType,
-          apiPayloadPlainStateLabel,
-          apiPayloadPlainStateType,
-          apiPayloadIsCiphertext,
-          apiPayloadResponseSourceLabel,
-          formatApiPayloadMilliseconds,
-          changeApiPayloadPlainView,
-          copyApiPayloadResponse,
-          copyApiPayloadPlaintext,
           staticBucketCurrentChanged,
           staticBucketCurrentStateLabel,
           staticBucketCurrentStateType,

@@ -694,6 +694,13 @@ function getInjectTaskStaticEntries(PDO $pdo, array $input)
         ];
     }
 
+    // 只拼接所选任务快照的公开对象地址；正文仍在用户点击单桶后按需读取。
+    $snapshot['items'] = bucketAttachAppFileFields(
+        is_array($snapshot['items'] ?? null) ? $snapshot['items'] : [],
+        (int)($task['apk_id'] ?? 0)
+    );
+    $snapshot['count'] = count($snapshot['items']);
+
     $checkedAt = (new DateTimeImmutable('now', new DateTimeZone('Asia/Shanghai')))->format('Y-m-d H:i:s');
     $staticInjectedApiUrls = appBuildStaticInjectedApiUrls($snapshot);
     $dynamicApiUrls = appBuildCurrentDynamicApiUrls($pdo, $user, $checkedAt);
@@ -717,15 +724,26 @@ function getInjectTaskStaticEntries(PDO $pdo, array $input)
 }
 
 /**
- * 读取并解密某个应用最近成功制品中的单个固定桶对象。
+ * 读取并解密某次精确制品中的单个固定桶对象。
  *
- * 请求只允许提交 app_id、bucket_id 以及当前已展示的 task_id/attempt_no；
- * 对象路径与公开 URL 必须由服务端从制品证据恢复，避免任意 URL 读取和
- * 当前桶记录改写已核验的历史 APK 事实。
+ * “我的应用”传入最近成功制品，“注入管理”传入当前点击任务；两页共用
+ * app_id + task_id + attempt_no + bucket_id 合同。对象路径与公开 URL 始终
+ * 由服务端从该任务的不可变快照恢复，避免当前桶记录改写历史 APK 事实。
  */
 function getAppStaticBucketFileContent(PDO $pdo, array $input)
 {
     $user = Auth::check($pdo);
+    if (!headers_sent()) {
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
+    }
+    $allowedKeys = ['app_id', 'bucket_id', 'task_id', 'attempt_no'];
+    $actualKeys = array_values(array_map('strval', array_keys($input)));
+    sort($allowedKeys);
+    sort($actualKeys);
+    if ($actualKeys !== $allowedKeys) {
+        throw new InvalidArgumentException('固定桶数据请求参数不合法');
+    }
     $parseInteger = static function ($value, bool $allowZero = false): ?int {
         if (is_int($value)) {
             $parsed = $value;
@@ -753,34 +771,60 @@ function getAppStaticBucketFileContent(PDO $pdo, array $input)
     }
 
     ensureApkDeleteMarkerTable($pdo);
-    $stmt = $pdo->prepare("SELECT a.id, a.user_id, a.name
+    $stmt = $pdo->prepare("SELECT a.id, a.user_id, a.name AS app_name
         FROM cainiao_apk a
         LEFT JOIN cainiao_apk_deleted d ON d.apk_id=a.id
-        WHERE a.id=:id AND d.apk_id IS NULL
+        WHERE a.id=:app_id AND d.apk_id IS NULL
         LIMIT 1");
-    $stmt->execute([':id' => $appId]);
+    $stmt->execute([':app_id' => $appId]);
     $app = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$app || (($user['role'] ?? '') !== 'admin' && (int)$app['user_id'] !== (int)$user['id'])) {
         throw new RuntimeException('应用不存在或当前账号无权查看');
     }
 
     ensureBucketFeatureSchema($pdo);
-    $rows = [[
-        'id' => $appId,
+    $exactTask = [
+        'id' => $requestedTaskId,
+        'task_id' => $requestedTaskId,
         'apk_id' => $appId,
-        'name' => (string)$app['name'],
-    ]];
-    bucketAttachLatestAppSnapshots($pdo, $rows);
-    $snapshot = is_array($rows[0]['static_injected_buckets'] ?? null)
-        ? $rows[0]['static_injected_buckets']
+        'user_id' => (int)$app['user_id'],
+        'app_name' => (string)$app['app_name'],
+        'bucket_ids' => null,
+        'status_text' => '',
+        'completed_at' => null,
+        'created_at' => null,
+        'template_version' => '',
+    ];
+    if ($requestedAttemptNo === 0) {
+        // attempt=0 没有独立快照行，需要从仍保留的旧任务 bucket_ids 恢复推算证据。
+        $legacyStmt = $pdo->prepare("SELECT
+                t.id, t.id AS task_id, t.apk_id, t.user_id, t.bucket_ids,
+                t.status_text, t.completed_at, t.created_at,
+                COALESCE(tpl.version, '') AS template_version
+            FROM cainiao_inject_task t
+            LEFT JOIN cainiao_template tpl ON tpl.id=t.template_id
+            WHERE t.id=:task_id AND t.apk_id=:app_id
+            LIMIT 1");
+        $legacyStmt->execute([':task_id' => $requestedTaskId, ':app_id' => $appId]);
+        $legacyTask = $legacyStmt->fetch(PDO::FETCH_ASSOC);
+        if (!is_array($legacyTask)
+            || (($user['role'] ?? '') !== 'admin' && (int)$legacyTask['user_id'] !== (int)$user['id'])) {
+            throw new RuntimeException('旧制品任务记录不存在或当前账号无权查看');
+        }
+        $exactTask = array_merge($exactTask, $legacyTask);
+    }
+    if (!bucketAttachExactTaskSnapshot($pdo, $exactTask, $requestedTaskId, $requestedAttemptNo)) {
+        throw new RuntimeException('所选制品快照记录不存在，请刷新详情后重试');
+    }
+    $snapshot = is_array($exactTask['static_injected_buckets'] ?? null)
+        ? $exactTask['static_injected_buckets']
         : [];
-    // 详情弹窗打开后可能刚好有新制品完成；此时停止旧行读取，
-    // 避免用新快照的域名回答旧弹窗中的桶。
+    // 重试会产生新的 attempt；旧弹窗继续携带旧号时立即终止读取。
     if ((int)($snapshot['task_id'] ?? 0) !== $requestedTaskId) {
-        throw new RuntimeException('最近成功制品已更新，请关闭详情后重新打开');
+        throw new RuntimeException('本次制品快照已更新，请关闭详情后重新打开');
     }
     if ((int)($snapshot['attempt_no'] ?? 0) !== $requestedAttemptNo) {
-        throw new RuntimeException('最近成功制品的构建尝试已更新，请关闭详情后重新打开');
+        throw new RuntimeException('本次制品的构建尝试已更新，请关闭详情后重新打开');
     }
     $items = bucketAttachAppFileFields(
         is_array($snapshot['items'] ?? null) ? $snapshot['items'] : [],
@@ -795,31 +839,38 @@ function getAppStaticBucketFileContent(PDO $pdo, array $input)
         }
     }
     if (!is_array($selected)) {
-        throw new RuntimeException('该桶不在此应用最近成功制品的固定桶快照中');
+        throw new RuntimeException('该桶不在所选制品的固定桶快照中');
     }
 
     $fileUrl = (string)($selected['app_file_url'] ?? '');
     if ($fileUrl === '') {
         throw new RuntimeException('该历史固定桶未保留可用的公开对象地址');
     }
-    $object = bucketReadPublicObjectBody($fileUrl, 1048576);
-    $payload = bucketDecryptAppConfigPayload((string)$object['body']);
-    $config = is_array($payload['config'] ?? null) ? $payload['config'] : [];
+    // 桶对象读取和 API 真实探测共用同一服务端并发预算，
+    // 避免登录账号并发占满 PHP worker。合成入口键不包含 URL 或凭据。
+    $guardEntryKey = hash('sha256', implode('|', [
+        'bucket-object',
+        (string)$requestedTaskId,
+        (string)$requestedAttemptNo,
+        (string)$bucketId,
+    ]));
+    $guard = apiConfigProbeAcquireGuard((int)$user['id'], $appId, $guardEntryKey);
+    try {
+        $object = bucketReadPublicObjectBody($fileUrl, 1048576);
+        $payload = bucketDecryptAppConfigPayload((string)$object['body']);
+        $config = is_array($payload['config'] ?? null) ? $payload['config'] : [];
 
-    // 在任何明文进入 API 响应前强制校验对象内 APPID，防止错误路由造成跨应用配置泄露。
-    $payloadAppId = bucketRequireMatchingAppConfigId($config, $appId);
-    $appIdMatches = true;
-
-    // 明文中包含应用的完整远程配置，禁止浏览器和中间层持久缓存。
-    if (!headers_sent()) {
-        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-        header('Pragma: no-cache');
+        // 在任何明文进入 API 响应前强制校验对象内 APPID，防止错误路由造成跨应用配置泄露。
+        $payloadAppId = bucketRequireMatchingAppConfigId($config, $appId);
+        $appIdMatches = true;
+    } finally {
+        apiConfigProbeReleaseGuard($guard);
     }
 
     return [
         'message' => '已读取并解密该桶当前实际对象',
         'app_id' => $appId,
-        'app_name' => (string)$app['name'],
+        'app_name' => (string)($app['app_name'] ?? ''),
         'snapshot' => [
             'state' => (string)($snapshot['state'] ?? 'unknown'),
             'exact' => (int)($snapshot['exact'] ?? 0),
@@ -1021,17 +1072,22 @@ function getAppApiConfigPayload(PDO $pdo, array $input)
                 'state' => $appIdMatches ? 'success' : 'payload_mismatch',
                 'error' => $appIdMatches ? '' : 'API 响应 APPID 与请求应用不一致，可能存在重定向或兜底解析',
                 'decode_error' => '',
-                'json' => (string)($payload['plain_text'] ?? ''),
-                'pretty_json' => (string)($payload['pretty_json'] ?? ''),
-                'byte_size' => (int)($payload['plain_byte_size'] ?? 0),
-                'sha256' => (string)($payload['plain_sha256'] ?? ''),
-                'pretty_byte_size' => (int)($payload['pretty_byte_size'] ?? 0),
-                'pretty_sha256' => (string)($payload['pretty_sha256'] ?? ''),
-                'field_count' => count($config),
+                // APPID 不一致时仅保留路由诊断信息，不向当前账号展开另一应用的明文配置。
+                'json' => $appIdMatches ? (string)($payload['plain_text'] ?? '') : '',
+                'pretty_json' => $appIdMatches ? (string)($payload['pretty_json'] ?? '') : '',
+                'byte_size' => $appIdMatches ? (int)($payload['plain_byte_size'] ?? 0) : 0,
+                'sha256' => $appIdMatches ? (string)($payload['plain_sha256'] ?? '') : '',
+                'pretty_byte_size' => $appIdMatches ? (int)($payload['pretty_byte_size'] ?? 0) : 0,
+                'pretty_sha256' => $appIdMatches ? (string)($payload['pretty_sha256'] ?? '') : '',
+                'field_count' => $appIdMatches ? count($config) : 0,
                 'payload_app_id' => $payloadAppIdString,
                 'app_id_matches' => $appIdMatches,
-                'config_delivery_version' => isset($config['config_delivery_version']) ? (int)$config['config_delivery_version'] : null,
-                'network_config_version' => isset($config['network_config_version']) ? (int)$config['network_config_version'] : null,
+                'config_delivery_version' => $appIdMatches && isset($config['config_delivery_version'])
+                    ? (int)$config['config_delivery_version']
+                    : null,
+                'network_config_version' => $appIdMatches && isset($config['network_config_version'])
+                    ? (int)$config['network_config_version']
+                    : null,
             ];
         } catch (Throwable $decodeError) {
             $message = $decodeError->getMessage();
@@ -1042,6 +1098,13 @@ function getAppApiConfigPayload(PDO $pdo, array $input)
     } else {
         $plaintext['error'] = (string)($response['error'] ?? '本次 API 请求没有可解密的响应');
         $plaintext['decode_error'] = $plaintext['error'];
+    }
+
+    // 密文使用客户端协议密钥，APPID 不一致时同样不把原响应正文交给页面。
+    // 保留响应大小、哈希、HTTP 与来源字段，足够判断路由异常且不扩大明文边界。
+    if ((string)($plaintext['state'] ?? '') === 'payload_mismatch') {
+        $response['body'] = '';
+        $response['body_encoding'] = 'utf-8';
     }
 
     // raw_body 只用于同进程解密；浏览器只收到经过 UTF-8/Base64 保护的 body 字段。

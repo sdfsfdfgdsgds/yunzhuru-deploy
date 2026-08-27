@@ -454,6 +454,11 @@ if (!function_exists('bucketReadPublicObjectBody')) {
                 return $chunkLength;
             },
         ];
+        // 显式清除 PHP/libcurl 运行环境代理，确保实际连接仍由
+        // 上方已校验的公网 IP 与 CURLOPT_RESOLVE 固定，不经中间代理重新解析。
+        $options[CURLOPT_PROXY] = '';
+        if (defined('CURLOPT_NOPROXY')) $options[CURLOPT_NOPROXY] = '*';
+
         // URL 中已是公网 IP 字面量时无需 RESOLVE，尤其 IPv6 主机会与
         // libcurl 的 host:port:[address] 格式产生冒号歧义；域名才固定到已校验 IP。
         if (filter_var($host, FILTER_VALIDATE_IP) === false) {
@@ -668,6 +673,11 @@ if (!function_exists('bucketLoadAppFileMetadata')) {
                     return $length;
                 },
             ];
+            // 元数据 Range GET 与正文 GET 共用同一 DNS 固定边界：
+            // 清空环境代理，防止代理端对桶域名再次解析。
+            $options[CURLOPT_PROXY] = '';
+            if (defined('CURLOPT_NOPROXY')) $options[CURLOPT_NOPROXY] = '*';
+
             if (filter_var($host, FILTER_VALIDATE_IP) === false) {
                 $pinnedIp = (string)$safeIps[0];
                 if (strpos($pinnedIp, ':') !== false) $pinnedIp = '[' . $pinnedIp . ']';
@@ -1879,6 +1889,65 @@ if (!function_exists('bucketAttachTaskSnapshots')) {
                 );
             }
         }
+    }
+}
+
+if (!function_exists('bucketAttachExactTaskSnapshot')) {
+    /**
+     * 为单条任务行附加指定 attempt 的制品快照。
+     *
+     * 列表页使用“该任务最新 attempt”用于发现重试竞态；正文读取则必须
+     * 定位用户点击时看到的 task_id + attempt_no。这样同一任务后续又产生
+     * 失败重试时，“最近成功制品”仍可读取原成功 attempt 的固定桶证据。
+     *
+     * attempt_no=0 仅用于未持久化快照的旧任务，沿用原有历史推算合同。
+     */
+    function bucketAttachExactTaskSnapshot(PDO $pdo, array &$row, int $taskId, int $attemptNo): bool {
+        bucketSnapshotSetDefaults($row);
+        $appId = (int)($row['apk_id'] ?? 0);
+        if ($taskId <= 0 || $attemptNo < 0 || $appId <= 0) return false;
+        if ((string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') return false;
+
+        ensureInjectBucketSnapshotSchema($pdo);
+        if ($attemptNo === 0) {
+            $rows = [$row];
+            bucketAttachTaskSnapshots($pdo, $rows);
+            $row = $rows[0];
+            $legacy = is_array($row['static_injected_buckets'] ?? null)
+                ? $row['static_injected_buckets']
+                : [];
+            return (int)($legacy['task_id'] ?? 0) === $taskId
+                && (int)($legacy['attempt_no'] ?? -1) === 0;
+        }
+
+        $stmt = $pdo->prepare("SELECT * FROM cainiao_inject_bucket_snapshot
+            WHERE task_id=:task_id AND attempt_no=:attempt_no AND apk_id=:apk_id
+            ORDER BY id DESC
+            LIMIT 1");
+        $stmt->execute([
+            ':task_id' => $taskId,
+            ':attempt_no' => $attemptNo,
+            ':apk_id' => $appId,
+        ]);
+        $record = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!is_array($record)) return false;
+
+        $bucketIds = [];
+        foreach (bucketSnapshotDecodeBucketsJson($record['buckets_json'] ?? '[]') as $bucket) {
+            $bucketId = (int)($bucket['id'] ?? 0);
+            if ($bucketId > 0) $bucketIds[$bucketId] = $bucketId;
+        }
+        $currentBuckets = bucketSnapshotLoadCurrentRows(
+            $pdo,
+            array_values($bucketIds),
+            true
+        );
+        bucketSnapshotApplyRecord($row, $record, $currentBuckets);
+        $attached = is_array($row['static_injected_buckets'] ?? null)
+            ? $row['static_injected_buckets']
+            : [];
+        return (int)($attached['task_id'] ?? 0) === $taskId
+            && (int)($attached['attempt_no'] ?? -1) === $attemptNo;
     }
 }
 
