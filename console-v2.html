@@ -1,0 +1,2242 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>菜鸟云注入 - 新版后台</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <link rel="stylesheet" href="/element/css/index.css" />
+  <script src="/element/js/vue.global.js"></script>
+  <script src="/element/js/index.full.js"></script>
+  <script src="/element/js/index.iife.min.js"></script>
+  <script src="/config.js"></script>
+
+  <style>
+    :root {
+      --admin-primary: #3b82f6;
+      --admin-primary-dark: #2563eb;
+      --admin-primary-soft: #eff6ff;
+      --admin-sidebar: #ffffff;
+      --admin-canvas: #f4f7fb;
+      --admin-border: #e7edf5;
+      --admin-text: #182230;
+      --admin-muted: #667085;
+      --admin-sidebar-width: 238px;
+      --admin-sidebar-collapsed-width: 72px;
+      --admin-topbar-height: 64px;
+      --admin-tabs-height: 44px;
+      --el-color-primary: var(--admin-primary);
+      --el-border-radius-base: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body,
+    #app {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    body {
+      color: var(--admin-text);
+      background: var(--admin-canvas);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "PingFang SC", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button,
+    input,
+    textarea,
+    select {
+      font: inherit;
+    }
+
+    [v-cloak] {
+      display: none;
+    }
+
+    .admin-shell {
+      display: flex;
+      width: 100%;
+      height: 100%;
+      background: var(--admin-canvas);
+    }
+
+    /* 侧栏只负责导航，业务页面仍由原有同源 iframe 承载。 */
+    .admin-sidebar {
+      position: relative;
+      z-index: 20;
+      display: flex;
+      flex: 0 0 var(--admin-sidebar-width);
+      flex-direction: column;
+      width: var(--admin-sidebar-width);
+      height: 100%;
+      overflow: hidden;
+      background: var(--admin-sidebar);
+      border-right: 1px solid var(--admin-border);
+      box-shadow: 5px 0 18px rgb(16 24 40 / 2%);
+      transition: width 0.24s ease, flex-basis 0.24s ease;
+    }
+
+    .admin-shell.is-collapsed .admin-sidebar {
+      flex-basis: var(--admin-sidebar-collapsed-width);
+      width: var(--admin-sidebar-collapsed-width);
+    }
+
+    .brand-button {
+      display: flex;
+      flex: 0 0 var(--admin-topbar-height);
+      align-items: center;
+      width: 100%;
+      min-width: 0;
+      padding: 0 18px;
+      color: inherit;
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--admin-border);
+      cursor: pointer;
+    }
+
+    .brand-logo {
+      display: grid;
+      flex: 0 0 38px;
+      width: 38px;
+      height: 38px;
+      overflow: hidden;
+      place-items: center;
+      color: #ffffff;
+      font-size: 18px;
+      font-weight: 800;
+      background: linear-gradient(145deg, #60a5fa, #2563eb);
+      border-radius: 11px;
+      box-shadow: 0 7px 16px rgb(37 99 235 / 22%);
+    }
+
+    .brand-logo img {
+      width: 24px;
+      height: 24px;
+      object-fit: contain;
+    }
+
+    .brand-copy {
+      min-width: 0;
+      margin-left: 11px;
+      white-space: nowrap;
+      transition: opacity 0.16s ease;
+    }
+
+    .brand-title {
+      display: block;
+      overflow: hidden;
+      color: #172033;
+      font-size: 15px;
+      font-weight: 700;
+      line-height: 20px;
+      text-overflow: ellipsis;
+    }
+
+    .brand-subtitle {
+      display: block;
+      margin-top: 1px;
+      color: #98a2b3;
+      font-size: 11px;
+      letter-spacing: 0.02em;
+    }
+
+    .admin-shell.is-collapsed .brand-button {
+      justify-content: center;
+      padding: 0;
+    }
+
+    .admin-shell.is-collapsed .brand-copy,
+    .admin-shell.is-collapsed .sidebar-status-copy,
+    .admin-shell.is-collapsed .sidebar-version {
+      display: none;
+    }
+
+    .sidebar-scroll {
+      flex: 1;
+      min-height: 0;
+      padding: 12px 9px;
+      overflow-x: hidden;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #d8e1ec transparent;
+    }
+
+    .sidebar-scroll::-webkit-scrollbar {
+      width: 5px;
+    }
+
+    .sidebar-scroll::-webkit-scrollbar-thumb {
+      background: #d8e1ec;
+      border-radius: 999px;
+    }
+
+    .el-menu-vertical {
+      width: 100%;
+      background: transparent !important;
+      border-right: 0 !important;
+    }
+
+    .el-menu-vertical:not(.el-menu--collapse) {
+      width: 100%;
+    }
+
+    .el-menu-vertical .el-menu-item,
+    .el-menu-vertical .el-sub-menu__title {
+      height: 44px;
+      margin: 3px 0;
+      color: #475467 !important;
+      line-height: 44px;
+      border-radius: 9px;
+    }
+
+    .el-menu-vertical .el-menu-item:hover,
+    .el-menu-vertical .el-sub-menu__title:hover {
+      color: var(--admin-primary-dark) !important;
+      background: #f5f8fd !important;
+    }
+
+    .el-menu-vertical .el-menu-item.is-active {
+      color: var(--admin-primary-dark) !important;
+      font-weight: 600;
+      background: var(--admin-primary-soft) !important;
+    }
+
+    .el-menu-vertical .el-menu-item.is-active::before {
+      position: absolute;
+      top: 11px;
+      left: 0;
+      width: 3px;
+      height: 22px;
+      background: var(--admin-primary);
+      border-radius: 0 4px 4px 0;
+      content: "";
+    }
+
+    .el-menu-vertical .el-sub-menu .el-menu {
+      background: transparent !important;
+    }
+
+    .el-menu-vertical .el-menu-item .el-icon,
+    .el-menu-vertical .el-sub-menu__title .el-icon {
+      color: #7f8da3;
+      font-size: 18px;
+    }
+
+    .el-menu-vertical .el-menu-item.is-active .el-icon {
+      color: var(--admin-primary-dark);
+    }
+
+    .sidebar-footer {
+      display: flex;
+      flex: 0 0 58px;
+      align-items: center;
+      min-width: 0;
+      margin: 0 10px 10px;
+      padding: 10px 11px;
+      background: #f8fafc;
+      border: 1px solid #eef2f6;
+      border-radius: 11px;
+    }
+
+    .sidebar-status {
+      flex: 0 0 8px;
+      width: 8px;
+      height: 8px;
+      background: #12b76a;
+      border: 2px solid #d1fadf;
+      border-radius: 50%;
+      box-shadow: 0 0 0 2px #ecfdf3;
+    }
+
+    .sidebar-status-copy {
+      min-width: 0;
+      margin-left: 10px;
+    }
+
+    .sidebar-status-title {
+      display: block;
+      color: #344054;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .sidebar-status-desc {
+      display: block;
+      margin-top: 2px;
+      color: #98a2b3;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .sidebar-version {
+      margin-left: auto;
+      color: #98a2b3;
+      font-size: 10px;
+    }
+
+    .admin-shell.is-collapsed .sidebar-footer {
+      justify-content: center;
+      padding: 0;
+    }
+
+    .admin-workspace {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      min-width: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    .topbar {
+      position: relative;
+      z-index: 15;
+      display: flex;
+      flex: 0 0 var(--admin-topbar-height);
+      align-items: center;
+      justify-content: space-between;
+      height: var(--admin-topbar-height);
+      padding: 0 22px;
+      background: rgb(255 255 255 / 96%);
+      border-bottom: 1px solid var(--admin-border);
+      backdrop-filter: blur(12px);
+    }
+
+    .topbar-left,
+    .topbar-actions,
+    .user-trigger,
+    .avatar-wrap {
+      display: flex;
+      align-items: center;
+    }
+
+    .topbar-left {
+      min-width: 0;
+      gap: 14px;
+    }
+
+    .shell-icon-button {
+      display: inline-grid;
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      place-items: center;
+      color: #475467;
+      background: #ffffff;
+      border: 1px solid #e4eaf2;
+      border-radius: 9px;
+      cursor: pointer;
+      transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+    }
+
+    .shell-icon-button:hover {
+      color: var(--admin-primary-dark);
+      background: #f8fbff;
+      border-color: #bfdbfe;
+    }
+
+    .shell-icon-button .el-icon {
+      font-size: 18px;
+    }
+
+    .breadcrumb-wrap {
+      min-width: 0;
+    }
+
+    .breadcrumb-wrap .el-breadcrumb__inner {
+      color: #98a2b3;
+      font-size: 13px;
+      font-weight: 400;
+    }
+
+    .breadcrumb-wrap .el-breadcrumb__item:last-child .el-breadcrumb__inner {
+      color: #344054;
+      font-weight: 600;
+    }
+
+    .topbar-actions {
+      gap: 8px;
+    }
+
+    .top-action-button {
+      position: relative;
+    }
+
+    .top-action-button img {
+      width: 18px;
+      height: 18px;
+      object-fit: contain;
+    }
+
+    .message-badge .el-badge__content {
+      border: 2px solid #ffffff;
+      transform: translate(55%, -46%) scale(0.86);
+    }
+
+    .topbar-divider {
+      width: 1px;
+      height: 25px;
+      margin: 0 4px;
+      background: #e6ebf2;
+    }
+
+    .user-trigger {
+      min-width: 0;
+      padding: 4px 7px 4px 5px;
+      border-radius: 10px;
+      cursor: pointer;
+      outline: none;
+      transition: background 0.16s ease;
+    }
+
+    .user-trigger:hover {
+      background: #f5f8fd;
+    }
+
+    .avatar-wrap {
+      position: relative;
+      justify-content: center;
+    }
+
+    .vip-mark {
+      position: absolute;
+      right: -4px;
+      bottom: -2px;
+      width: 17px;
+      height: 10px;
+      object-fit: contain;
+    }
+
+    .user-copy {
+      min-width: 0;
+      margin: 0 9px;
+      line-height: 1.2;
+    }
+
+    .user-name {
+      display: block;
+      max-width: 112px;
+      overflow: hidden;
+      color: #344054;
+      font-size: 13px;
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .user-role {
+      display: block;
+      max-width: 112px;
+      margin-top: 3px;
+      overflow: hidden;
+      color: #98a2b3;
+      font-size: 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .workspace-tabs {
+      display: flex;
+      flex: 0 0 var(--admin-tabs-height);
+      align-items: flex-end;
+      min-width: 0;
+      height: var(--admin-tabs-height);
+      padding: 0 16px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      background: #ffffff;
+      border-bottom: 1px solid var(--admin-border);
+      scrollbar-width: none;
+    }
+
+    .workspace-tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .workspace-tab {
+      position: relative;
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      height: 35px;
+      margin-right: 5px;
+      padding: 0 12px;
+      color: #667085;
+      font-size: 12px;
+      white-space: nowrap;
+      background: transparent;
+      border: 0;
+      border-radius: 8px 8px 0 0;
+      cursor: pointer;
+    }
+
+    .workspace-tab:hover {
+      color: #344054;
+      background: #f7f9fc;
+    }
+
+    .workspace-tab.is-active {
+      color: var(--admin-primary-dark);
+      font-weight: 600;
+      background: #f1f6ff;
+    }
+
+    .workspace-tab.is-active::after {
+      position: absolute;
+      right: 9px;
+      bottom: 0;
+      left: 9px;
+      height: 2px;
+      background: var(--admin-primary);
+      border-radius: 2px 2px 0 0;
+      content: "";
+    }
+
+    .tab-dot {
+      width: 6px;
+      height: 6px;
+      margin-right: 7px;
+      background: #c5ced9;
+      border-radius: 50%;
+    }
+
+    .workspace-tab.is-active .tab-dot {
+      background: var(--admin-primary);
+      box-shadow: 0 0 0 3px rgb(59 130 246 / 12%);
+    }
+
+    .tab-close {
+      display: inline-grid;
+      width: 17px;
+      height: 17px;
+      margin-left: 7px;
+      place-items: center;
+      color: #98a2b3;
+      border-radius: 5px;
+    }
+
+    .tab-close:hover {
+      color: #344054;
+      background: #dce8f9;
+    }
+
+    .tab-close .el-icon {
+      font-size: 12px;
+    }
+
+    .content-stage {
+      position: relative;
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      padding: 12px 14px 10px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 100% 0, rgb(219 234 254 / 45%), transparent 27%),
+        var(--admin-canvas);
+    }
+
+    .iframe-card {
+      position: relative;
+      flex: 1;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: #ffffff;
+      border: 1px solid #e4eaf2;
+      border-radius: 12px;
+      box-shadow: 0 7px 22px rgb(16 24 40 / 4%);
+    }
+
+    .iframe-wrapper {
+      display: block;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #ffffff;
+      border: 0;
+      scrollbar-width: none;
+    }
+
+    .iframe-wrapper::-webkit-scrollbar {
+      display: none;
+    }
+
+    .workspace-footer {
+      display: flex;
+      flex: 0 0 27px;
+      align-items: center;
+      justify-content: center;
+      color: #98a2b3;
+      font-size: 10px;
+      background: var(--admin-canvas);
+    }
+
+    .mobile-nav-drawer .el-drawer__body {
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      overflow: hidden;
+      background: #ffffff;
+    }
+
+    .mobile-drawer-menu {
+      flex: 1;
+      min-height: 0;
+      padding: 12px 9px;
+      overflow-y: auto;
+    }
+
+    .mobile-drawer-footer {
+      margin: 10px 14px 14px;
+      color: #98a2b3;
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .rotate-half-ccw {
+      animation: rotate-half-ccw 0.4s linear;
+    }
+
+    @keyframes rotate-half-ccw {
+      from {
+        transform: rotate(0deg);
+      }
+      to {
+        transform: rotate(-180deg);
+      }
+    }
+
+    /* 对旧弹窗只做外观与响应式收口，字段和请求合同继续沿用原实现。 */
+    .el-dialog {
+      max-width: calc(100vw - 28px);
+      border-radius: 13px;
+    }
+
+    .el-dialog__header {
+      margin-right: 0;
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid #eef2f6;
+    }
+
+    .el-dialog__body {
+      padding: 20px;
+    }
+
+    .el-dialog__footer {
+      padding: 13px 20px 18px;
+      border-top: 1px solid #eef2f6;
+    }
+
+    @media (max-width: 900px) {
+      .admin-sidebar {
+        display: none;
+      }
+
+      .topbar {
+        padding: 0 14px;
+      }
+
+      .breadcrumb-wrap {
+        max-width: 42vw;
+      }
+
+      .topbar-divider,
+      .user-role,
+      .user-copy {
+        display: none;
+      }
+
+      .content-stage {
+        padding: 8px;
+      }
+
+      .iframe-card {
+        border-radius: 9px;
+      }
+    }
+
+    @media (max-width: 600px) {
+      :root {
+        --admin-topbar-height: 56px;
+        --admin-tabs-height: 40px;
+      }
+
+      .topbar {
+        padding: 0 10px;
+      }
+
+      .topbar-left {
+        gap: 8px;
+      }
+
+      .breadcrumb-wrap .el-breadcrumb__item:not(:last-child) {
+        display: none;
+      }
+
+      .topbar-actions {
+        gap: 4px;
+      }
+
+      .shell-icon-button {
+        width: 34px;
+        height: 34px;
+      }
+
+      .user-trigger {
+        padding: 2px;
+      }
+
+      .workspace-tabs {
+        padding: 0 8px;
+      }
+
+      .workspace-tab {
+        height: 33px;
+        padding: 0 10px;
+      }
+
+      .content-stage {
+        padding: 0;
+      }
+
+      .iframe-card {
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+
+      .workspace-footer {
+        display: none;
+      }
+
+      .el-dialog__body {
+        max-height: 70vh;
+        overflow-y: auto;
+      }
+    }
+
+    @media (max-width: 420px) {
+      .breadcrumb-wrap {
+        display: none;
+      }
+    }
+
+    @media (max-width: 350px) {
+      .topbar-actions .refresh-btn {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="app" v-cloak>
+    <div class="admin-shell" :class="{ 'is-collapsed': isCollapse }">
+      <aside class="admin-sidebar" aria-label="主导航">
+        <button class="brand-button" type="button" title="回到工作台" @click="goHome">
+          <span class="brand-logo">
+            <img src="/logo.png" alt="" />
+          </span>
+          <span class="brand-copy">
+            <span class="brand-title">菜鸟云注入</span>
+            <span class="brand-subtitle">云端注入控制台</span>
+          </span>
+        </button>
+
+        <div class="sidebar-scroll">
+          <el-menu
+            :default-active="activeMenu"
+            class="el-menu-vertical"
+            background-color="transparent"
+            text-color="#475467"
+            active-text-color="#2563eb"
+            @select="handleMenuSelect"
+            :collapse="isCollapse"
+            :collapse-transition="false"
+            :default-openeds="defaultOpeneds"
+          >
+            <template v-for="item in menuList" :key="item.id">
+              <menu-item :item="item"></menu-item>
+            </template>
+          </el-menu>
+        </div>
+
+        <div class="sidebar-footer" title="后台界面 V2">
+          <span class="sidebar-status"></span>
+          <span class="sidebar-status-copy">
+            <span class="sidebar-status-title">控制台 V2</span>
+            <span class="sidebar-status-desc">{{ iframeLoading ? '正在加载业务页面' : '业务页面已加载' }}</span>
+          </span>
+          <span class="sidebar-version">V2</span>
+        </div>
+      </aside>
+
+      <section class="admin-workspace">
+        <header class="topbar">
+          <div class="topbar-left">
+            <el-popover
+              placement="bottom-start"
+              trigger="manual"
+              content="点击可展开或折叠菜单"
+              v-model:visible="showMenuTip"
+            >
+              <template #reference>
+                <button
+                  class="shell-icon-button"
+                  type="button"
+                  :aria-label="isMobileViewport ? '打开导航菜单' : (isCollapse ? '展开导航菜单' : '折叠导航菜单')"
+                  @click.stop="toggleCollapse"
+                >
+                  <el-icon>
+                    <component :is="isMobileViewport || isCollapse ? 'Expand' : 'Fold'"></component>
+                  </el-icon>
+                </button>
+              </template>
+            </el-popover>
+
+            <div class="breadcrumb-wrap" aria-label="面包屑导航">
+              <el-breadcrumb separator="/">
+                <el-breadcrumb-item @click="goHome">控制台</el-breadcrumb-item>
+                <el-breadcrumb-item
+                  v-for="item in breadcrumbItems"
+                  :key="item"
+                >{{ item }}</el-breadcrumb-item>
+              </el-breadcrumb>
+            </div>
+          </div>
+
+          <div class="topbar-actions">
+            <el-tooltip content="下载客户端 APP" placement="bottom">
+              <button
+                class="shell-icon-button top-action-button android-action"
+                type="button"
+                aria-label="下载客户端 APP"
+                @click="handleAndroidClick"
+              >
+                <img src="/logo.png" alt="" />
+              </button>
+            </el-tooltip>
+
+            <el-tooltip content="刷新当前页面" placement="bottom">
+              <button
+                class="shell-icon-button top-action-button refresh-btn"
+                type="button"
+                aria-label="刷新当前页面"
+                @click="refreshIframe"
+                @mouseenter="animateRefresh"
+                @mouseleave="animateRefresh"
+              >
+                <el-icon><refresh></refresh></el-icon>
+              </button>
+            </el-tooltip>
+
+            <el-dropdown @command="handleMessageMenu">
+              <el-badge
+                :value="unreadCount"
+                :hidden="unreadCount <= 0"
+                :max="99"
+                class="message-badge"
+              >
+                <button
+                  class="shell-icon-button top-action-button"
+                  type="button"
+                  aria-label="站内消息"
+                >
+                  <el-icon><chat-dot-round></chat-dot-round></el-icon>
+                </button>
+              </el-badge>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="received">我收到的消息</el-dropdown-item>
+                  <el-dropdown-item command="sent">我发出的消息</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+
+            <span class="topbar-divider"></span>
+
+            <el-dropdown @command="handleUserCommand">
+              <span class="user-trigger">
+                <span class="avatar-wrap">
+                  <el-avatar :src="adminInfo.profile" :size="34">
+                    {{ (adminInfo.name || '管').slice(0, 1) }}
+                  </el-avatar>
+                  <img
+                    v-if="adminInfo.vip_days > 0"
+                    class="vip-mark"
+                    src="/images/vip-icon.png"
+                    alt="VIP"
+                  />
+                </span>
+                <span class="user-copy">
+                  <span class="user-name">{{ adminInfo.name || '管理员' }}</span>
+                  <span class="user-role">{{ adminInfo.role || '控制台用户' }}</span>
+                </span>
+                <el-icon><arrow-down></arrow-down></el-icon>
+              </span>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="profile">个人中心</el-dropdown-item>
+                  <el-dropdown-item command="lanzou">蓝奏云盘</el-dropdown-item>
+                  <el-dropdown-item command="s3">S3 桶配置</el-dropdown-item>
+                  <el-dropdown-item command="password">修改密码</el-dropdown-item>
+                  <el-dropdown-item command="legacy">切换经典版</el-dropdown-item>
+                  <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
+        </header>
+
+        <nav class="workspace-tabs" aria-label="已打开页面">
+          <button
+            v-for="tab in openedTabs"
+            :key="tab.path"
+            class="workspace-tab"
+            :class="{ 'is-active': activeMenu === tab.path }"
+            type="button"
+            @click="switchTab(tab.path)"
+          >
+            <span class="tab-dot"></span>
+            <span>{{ tab.title }}</span>
+            <span
+              v-if="tab.closable"
+              class="tab-close"
+              role="button"
+              tabindex="0"
+              :aria-label="'关闭' + tab.title"
+              @click.stop="closeTab(tab.path)"
+              @keydown.enter.stop="closeTab(tab.path)"
+            >
+              <el-icon><close></close></el-icon>
+            </span>
+          </button>
+        </nav>
+
+        <main class="content-stage">
+          <div class="iframe-card" v-loading="iframeLoading" element-loading-text="页面加载中">
+            <iframe
+              ref="contentIframe"
+              class="iframe-wrapper"
+              :src="iframeSrc"
+              :title="pageTitle"
+              @load="handleIframeLoaded"
+            ></iframe>
+          </div>
+        </main>
+
+        <footer class="workspace-footer">
+          © {{ currentYear }} {{ siteTitle }} · V2 · v{{ appVersion }}
+        </footer>
+      </section>
+    </div>
+
+    <el-drawer
+      v-model="mobileMenuVisible"
+      class="mobile-nav-drawer"
+      direction="ltr"
+      size="280px"
+      :with-header="false"
+      append-to-body
+    >
+      <button class="brand-button" type="button" @click="goHome">
+        <span class="brand-logo"><img src="/logo.png" alt="" /></span>
+        <span class="brand-copy">
+          <span class="brand-title">菜鸟云注入</span>
+          <span class="brand-subtitle">云端注入控制台</span>
+        </span>
+      </button>
+      <div class="mobile-drawer-menu">
+        <el-menu
+          :default-active="activeMenu"
+          class="el-menu-vertical"
+          background-color="transparent"
+          text-color="#475467"
+          active-text-color="#2563eb"
+          @select="handleMenuSelect"
+          :default-openeds="defaultOpeneds"
+        >
+          <template v-for="item in menuList" :key="'mobile-' + item.id">
+            <menu-item :item="item"></menu-item>
+          </template>
+        </el-menu>
+      </div>
+      <div class="mobile-drawer-footer">V2 · v{{ appVersion }} · {{ siteTitle }}</div>
+    </el-drawer>
+
+    <el-dialog v-model="passwordDialogVisible" title="修改密码" width="400px">
+      <el-form :model="passwordForm" label-width="100px">
+        <el-form-item label="原密码">
+          <el-input v-model="passwordForm.old_password" type="password"></el-input>
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input v-model="passwordForm.new_password" type="password"></el-input>
+        </el-form-item>
+        <el-form-item label="确认密码">
+          <el-input v-model="passwordForm.confirm_password" type="password"></el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="passwordDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitPassword">确认修改</el-button>
+      </template>
+    </el-dialog>
+
+
+<el-dialog v-model="profileDialogVisible" title="个人中心" width="400px">
+  <template #default>
+    <div style="text-align: center; margin-bottom: 20px;">
+      <el-avatar :src="adminInfo.profile" size="large"></el-avatar>
+    </div>
+    <el-descriptions column="1" border>
+      <el-descriptions-item label="昵称" width="50px">
+        {{ adminInfo.name }}
+        <el-link type="primary" @click="editNickname" style="margin-left: 8px">修改</el-link>
+      </el-descriptions-item>
+          <el-descriptions-item label="账号" width="50px">{{ adminInfo.account }}</el-descriptions-item>
+          <el-descriptions-item label="权限" width="50px">{{ adminInfo.role }}</el-descriptions-item>
+          <el-descriptions-item label="VIP" width="50px">
+              {{ adminInfo.vip_days }} 天
+              <el-link type="primary" style="margin-left: 8px" @click="openVipDialog">{{ adminInfo.vip_days > 0 ? '续费' : '开通' }}</el-link>
+            </el-descriptions-item>
+          <el-descriptions-item label="余额" width="50px">
+            {{ balanceInYuan }} 元
+          <el-link type="primary" style="margin-left: 8px" @click="handleRecharge">充值</el-link>
+      </el-descriptions-item>
+    </el-descriptions>
+  </template>
+  <template #footer>
+    <el-button @click="loadAdminInfo">刷新用户信息</el-button>
+    <el-button @click="profileDialogVisible = false">关闭</el-button>
+  </template>
+</el-dialog>
+
+<el-dialog v-model="vipDialogVisible" title="会员续费" width="400px">
+  <!-- VIP 权益卡片 -->
+    <el-card shadow="never" style="margin-bottom: 15px; background: #f9f9f9;">
+      <div style="font-weight: bold; font-size: 15px; margin-bottom: 10px;">
+        会员专属权益
+      </div>
+      <ul style="padding-left: 18px; list-style: none; font-size: 14px; color: #555;">
+        <li style="margin: 6px 0;">
+          📦 <b>专属大存储空间</b>
+        </li>
+        <li style="margin: 6px 0;">
+        📁 <b>上传的安装包永久保存(会员过期删除)</b>（不含注入任务安装包以及未成功注入的应用）
+        </li>
+        <li style="margin: 6px 0;">
+          🔓 <b>全站功能无限制使用</b>
+        </li>
+        <li style="margin: 6px 0;">
+          ⬇️ <b>下载次数无限制</b>
+        </li>
+      </ul>
+    </el-card>
+
+
+  <!-- 月份选择 -->
+  <div style="margin: 10px 0;">
+    <el-select v-model="vipMonths" placeholder="请选择续费月份" style="width: 100%;">
+      <el-option
+        v-for="n in 12"
+        :key="n"
+        :label="n + ' 个月'"
+        :value="n"
+      ></el-option>
+    </el-select>
+  </div>
+
+  <!-- 价格计算 -->
+  <div style="margin: 10px 0;">每月价格：<b>{{ vipPrice }}</b> 元(每个月按31天计算)</div>
+  <div style="margin: 10px 0;">应付金额：<b style="color: #e06c00;">{{ (vipPrice * vipMonths).toFixed(2) }}</b> 元</div>
+  <div style="margin: 10px 0;">当前余额：<b>{{ balanceInYuan }}</b> 元</div>
+
+  <!-- 操作按钮 -->
+  <template #footer>
+    <el-button @click="vipDialogVisible = false">取消</el-button>
+    <el-button type="primary" @click="submitVipRenew" :disabled="!vipMonths">确认续费</el-button>
+  </template>
+</el-dialog>
+
+
+
+
+<el-dialog v-model="editNicknameDialogVisible" title="修改昵称" width="300px">
+  <el-form :model="nicknameForm" label-width="60px">
+    <el-form-item label="新昵称">
+      <el-input v-model="nicknameForm.name"></el-input>
+    </el-form-item>
+  </el-form>
+  <template #footer>
+    <el-button @click="editNicknameDialogVisible = false">取消</el-button>
+    <el-button type="primary" @click="submitNickname">提交</el-button>
+  </template>
+</el-dialog>
+
+<el-dialog v-model="lanzouDialogVisible" title="蓝奏云盘账号配置" width="400px">
+    <el-alert
+        title="您的蓝奏账号密码会被储存，但是请放心你的文件安全，平台不会查看和窃取你的文件，也没有那个闲情逸致管你的文件，通常登录之后是长期有效的,也不会挤掉你的网页登录"
+        type="info"
+        style="margin-bottom: 10px;"
+        :closable="false"
+      ></el-alert>
+  <el-form :model="lanzouForm" label-width="100px">
+    <el-form-item label="账号">
+      <el-input v-model="lanzouForm.account" placeholder="请输入手机号"></el-input>
+    </el-form-item>
+    <el-form-item label="密码">
+      <el-input v-model="lanzouForm.password" placeholder="请输入密码" type="password"></el-input>
+    </el-form-item>
+    <el-form-item label="登录状态">
+      <el-tag :type="lanzouForm.uid ? 'success' : 'danger'">
+        {{ lanzouForm.uid ? '已登录' : '未登录' }}
+      </el-tag>
+    </el-form-item>
+  </el-form>
+  <template #footer>
+    <el-button @click="lanzouDialogVisible = false">取消</el-button>
+    <el-button type="primary" @click="submitLanzou">登录蓝奏</el-button>
+  </template>
+</el-dialog>
+
+<!-- S3 桶配置弹窗 -->
+<el-dialog v-model="s3DialogVisible" title="S3 桶配置" width="500px">
+    <el-alert
+        title="配置 S3 兼容存储（AWS S3、Cloudflare R2、Backblaze B2），注入完成后自动上传 APK 到桶中"
+        type="info"
+        style="margin-bottom: 15px;"
+        :closable="false"
+    ></el-alert>
+  <el-form :model="s3Form" label-width="110px">
+    <el-form-item label="端点 (Endpoint)">
+      <el-input v-model="s3Form.endpoint" placeholder="如 https://xxx.r2.cloudflarestorage.com"></el-input>
+    </el-form-item>
+    <el-form-item label="Access Key">
+      <el-input v-model="s3Form.accessKey" placeholder="Access Key ID"></el-input>
+    </el-form-item>
+    <el-form-item label="Secret Key">
+      <el-input v-model="s3Form.secretKey" placeholder="Secret Access Key" type="password" show-password></el-input>
+    </el-form-item>
+    <el-form-item label="桶名 (Bucket)">
+      <el-input v-model="s3Form.bucket" placeholder="桶名称"></el-input>
+    </el-form-item>
+    <el-form-item label="区域 (Region)">
+      <el-input v-model="s3Form.region" placeholder="R2 填 auto，S3 填 us-east-1 等"></el-input>
+    </el-form-item>
+    <el-form-item label="上传路径前缀">
+      <el-input v-model="s3Form.uploadPath" placeholder="如 apk/injected（可选，不填则传到桶根目录）"></el-input>
+    </el-form-item>
+    <el-form-item label="公开访问地址">
+      <el-input v-model="s3Form.publicUrl" placeholder="如 https://cdn.example.com（用于拼接下载链接）"></el-input>
+    </el-form-item>
+  </el-form>
+  <template #footer>
+    <el-button @click="s3DialogVisible = false">取消</el-button>
+    <el-button type="danger" @click="clearS3Config">清除配置</el-button>
+    <el-button type="primary" @click="submitS3" :loading="s3Saving">保存并测试</el-button>
+  </template>
+</el-dialog>
+
+
+
+<el-dialog
+  v-model="messageDialogVisible"
+  :title="messageMode === 'received' ? '我收到的消息' : '我发出的消息'"
+  width="800px"
+  destroy-on-close
+>
+  <div style="display: flex; height: 400px; overflow: hidden;">
+    <!-- 消息列表 -->
+    <el-scrollbar style="width: 180px; border-right: 1px solid #eee; padding-right: 10px;">
+      <el-list>
+        <el-list-item
+          v-for="msg in messageList"
+          :key="msg.id"
+          @click="loadMessageDetail(msg.id)"
+          style="cursor: pointer; padding: 10px; border-bottom: 1px solid #f0f0f0;"
+        >
+          <div style="display: flex;">
+            <el-badge is-dot v-if="msg.read == 0">
+              <el-avatar :src="messageMode === 'received' ? msg.send_avatar : msg.receive_avatar" size="small"></el-avatar>
+            </el-badge>
+            <el-avatar v-else :src="messageMode === 'received' ? msg.send_avatar : msg.receive_avatar" size="small"></el-avatar>
+
+            <div style="margin-left: 10px; flex: 1;">
+              <div style="font-weight: bold;">
+                {{ messageMode === 'received' ? '来自:'+msg.send_nickname : '发给:'+msg.receive_nickname }}
+              </div>
+              <div style="color: #666; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                {{ msg.message }}
+              </div>
+              <div style="color: #999; font-size: 11px;">{{ msg.upload_time }}</div>
+            </div>
+          </div>
+        </el-list-item>
+      </el-list>
+    </el-scrollbar>
+
+    <!-- 消息详情 -->
+    <div style="flex: 1; padding: 10px;">
+      <div v-if="selectedMessage">
+        <div style="display: flex; align-items: center; margin-bottom: 10px;">
+          <el-avatar :src="selectedMessage.send_avatar" size="small"></el-avatar>
+          <div style="margin-left: 10px;">
+            <div style="font-weight: bold;">{{ selectedMessage.send_nickname }}</div>
+            <div style="font-size: 12px; color: #888;">{{ selectedMessage.upload_time }}</div>
+          </div>
+        </div>
+        <el-card style="margin-bottom: 15px;">
+          <div>{{ selectedMessage.message }}</div>
+        </el-card>
+        <!-- 回复输入框 -->
+        <el-input
+          type="textarea"
+          rows="3"
+          v-model="replyContent"
+          placeholder="回复内容（不超过1024字）"
+          maxlength="1024"
+          show-word-limit
+        ></el-input>
+        <div style="text-align: right; margin-top: 10px;">
+          <el-button type="primary" @click="sendReply" :disabled="!replyContent.trim()">发送</el-button>
+        </div>
+      </div>
+      <div v-else style="color: #888;">请选择一条消息查看详情</div>
+    </div>
+  </div>
+
+  <template #footer>
+      <el-button @click="openSendMessageDialog">发送消息</el-button>
+      <el-button @click="messageDialogVisible = false">关闭</el-button>
+  </template>
+</el-dialog>
+
+
+<el-dialog v-model="sendMessageDialogVisible" title="发送消息" width="400px">
+  <el-form :model="sendMessageForm" label-width="80px">
+    <el-form-item label="用户ID">
+      <el-input v-model="sendMessageForm.user_id" placeholder="请输入接收方用户ID"></el-input>
+    </el-form-item>
+    <el-form-item label="消息内容">
+      <el-input
+        v-model="sendMessageForm.message"
+        type="textarea"
+        :rows="4"
+        maxlength="1024"
+        show-word-limit
+        placeholder="请输入消息内容（最多1024字）"
+      ></el-input>
+    </el-form-item>
+  </el-form>
+  <template #footer>
+    <el-button @click="sendMessageDialogVisible = false">取消</el-button>
+    <el-button type="primary" @click="submitSendMessage">发送</el-button>
+  </template>
+</el-dialog>
+
+  </div>
+  <script>
+    const tokenKey = config.tokenKey;
+
+    // 获取 cookie 中的 token
+    const cookieToken = document.cookie
+      .split('; ')
+      .find(row => row.startsWith(tokenKey + '='))
+      ?.split('=')[1] || '';
+
+    // 获取 localStorage 中的 token
+    const localToken = localStorage.getItem(tokenKey) || '';
+
+    // 判断是否跳转登录页
+    const shouldRedirect = (
+      !cookieToken ||                  // cookie 不存在或为空
+      !localToken ||                  // localStorage 不存在或为空
+      (cookieToken && localToken && cookieToken !== localToken) // 值不一致
+    );
+
+    if (!cookieToken || !localToken) {
+      // 缺任何一个直接跳登录
+      const loginUrl = config.pagePath + config.loginPage + config.pageSuffix;
+      window.location.href = loginUrl;
+    } else if (cookieToken !== localToken) {
+      // 值不一致，更新 localStorage
+      localStorage.setItem(tokenKey, cookieToken);
+    }
+  </script>
+
+
+  <script>
+    const { createApp, ref, reactive, onMounted, onBeforeUnmount, computed } = Vue;
+
+    const app = createApp({
+      setup() {
+        const siteTitle = config.siteTitle;
+        const pagePrefix = config.pagePath;
+        const pageSuffix = config.pageSuffix;
+        const appVersion = config.version || '2.0.0';
+        const currentYear = new Date().getFullYear();
+
+        const menuList = ref([]);
+        const activeMenu = ref(config.defaultPage);
+        const iframeSrc = ref(pagePrefix + config.defaultPage + pageSuffix);
+        const contentIframe = ref(null);
+        const iframeLoading = ref(true);
+        const isMobileViewport = ref(window.innerWidth <= 900);
+        const mobileMenuVisible = ref(false);
+        const openedTabs = ref([
+          {
+            path: config.defaultPage,
+            title: '工作台',
+            closable: false
+          }
+        ]);
+        const adminInfo = ref({
+            logo: '',
+            name: '',
+            profile: ''
+        });
+        const passwordDialogVisible = ref(false);
+        const passwordForm = reactive({
+          old_password: '',
+          new_password: '',
+          confirm_password: ''
+        });
+        const defaultOpeneds = ref([]);
+        const showMenuTip = ref(false);
+
+
+const vipDialogVisible = ref(false);
+const vipMonths = ref(1);
+const vipPrice = ref(0);
+
+
+async function submitVipRenew() {
+  try {
+    const res = await fetch(`/api/?module=user&method=renewvip`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ months: vipMonths.value })
+    });
+    const json = await res.json();
+    if (json.code === 200) {
+      ElementPlus.ElMessage.success('续费成功');
+      vipDialogVisible.value = false;
+      loadAdminInfo(); // 刷新用户信息
+    } else {
+      ElementPlus.ElMessage.error(json.message || '续费失败');
+    }
+  } catch (err) {
+    ElementPlus.ElMessage.error('请求失败');
+  }
+}
+async function loadVipPrice() {
+  try {
+    const res = await fetch('/api/?module=user&method=getvipprice');
+    const json = await res.json();
+    if (json.code === 200) {
+      vipPrice.value = parseFloat(json.data) || 0;
+    } else {
+      ElementPlus.ElMessage.error(json.message || '获取VIP价格失败');
+    }
+  } catch (e) {
+    console.error('获取VIP价格异常', e);
+    ElementPlus.ElMessage.error('网络错误，获取VIP价格失败');
+  }
+}
+function openVipDialog() {
+  loadVipPrice();
+  vipDialogVisible.value = true;
+}
+const handleRecharge = () => {
+  ElementPlus.ElMessageBox.alert(
+    '本平台为免费公益平台，无需充值即可免费使用，如有疑问请联系QQ:2380494437',
+    '充值提示',
+    {
+      confirmButtonText: '我知道了',
+      type: 'info',
+    }
+  );
+};
+
+
+//站内信消息代码
+const messageDialogVisible = ref(false);
+const messageMode = ref('received');
+const messageList = ref([]);
+const selectedMessage = ref(null);
+const replyContent = ref('');
+const unreadCount = ref(0);
+
+// 加载消息列表
+async function loadMessageList() {
+  const method = messageMode.value === 'received' ? 'getreceivemsg' : 'getsendemsg';
+  const res = await fetch(`/api/?module=message&method=${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ page: 1 })
+  });
+  const json = await res.json();
+  if (json.code === 200) {
+    messageList.value = json.data.list || [];
+  }
+}
+
+// 加载消息详情
+async function loadMessageDetail(id) {
+  const res = await fetch('/api/?module=message&method=getmsgdetail', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messageid: id })
+  });
+  const json = await res.json();
+  if (json.code === 200) {
+    selectedMessage.value = json.data;
+
+    const msg = messageList.value.find(m => m.id === id);
+    if (msg) msg.read = 1;
+    loadUnreadCount();
+  }
+}
+
+
+// 回复消息
+async function sendReply() {
+  const msg = replyContent.value.trim();
+  if (!msg) return;
+  const targetId = messageMode.value === 'received'
+    ? selectedMessage.value.send_user_id
+    : selectedMessage.value.receive_user_id;
+
+  const res = await fetch('/api/?module=message&method=sendmsg', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      receive_user_id: targetId,
+      message: msg
+    })
+  });
+  const json = await res.json();
+  if (json.code === 200) {
+    ElementPlus.ElMessage.success('发送成功');
+    replyContent.value = '';
+    loadMessageDetail(selectedMessage.value.id);
+  } else {
+    ElementPlus.ElMessage.error(json.message || '发送失败');
+  }
+}
+async function handleMessageMenu(command) {
+  messageMode.value = command;
+  selectedMessage.value = null;
+  replyContent.value = '';
+  await loadMessageList();
+  messageDialogVisible.value = true;
+}
+async function loadUnreadCount() {
+  try {
+    const res = await fetch('/api/?module=message&method=getreceivemsg', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page: 1 })
+    });
+    const json = await res.json();
+    if (json.code === 200) {
+      unreadCount.value = json.data.unread || 0;
+    }
+  } catch (e) {
+    console.error('获取未读消息数量失败', e);
+  }
+}
+
+
+
+
+const sendMessageDialogVisible = ref(false);
+const sendMessageForm = reactive({
+  user_id: '',
+  message: ''
+});
+
+function openSendMessageDialog() {
+  sendMessageForm.user_id = '';
+  sendMessageForm.message = '';
+  sendMessageDialogVisible.value = true;
+}
+
+async function submitSendMessage() {
+  if (!sendMessageForm.user_id.trim() || !sendMessageForm.message.trim()) {
+    ElementPlus.ElMessage.warning('请输入完整内容');
+    return;
+  }
+
+  const res = await fetch('/api/?module=message&method=sendmsg', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      receive_user_id: sendMessageForm.user_id.trim(),
+      message: sendMessageForm.message.trim()
+    })
+  });
+
+  const json = await res.json();
+  if (json.code === 200) {
+    ElementPlus.ElMessage.success('消息发送成功');
+    sendMessageDialogVisible.value = false;
+    loadMessageList(); // 重新加载消息列表
+  } else {
+    ElementPlus.ElMessage.error(json.message || '发送失败');
+  }
+}
+
+//站内信消息代码结束
+
+const profileDialogVisible = ref(false);
+const editNicknameDialogVisible = ref(false);
+const nicknameForm = reactive({ name: '' });
+
+const balanceInYuan = computed(() => {
+  const val = parseInt(adminInfo.value.balance || 0);
+  return (val / 100).toFixed(2);
+});
+
+function openProfileDialog() {
+  profileDialogVisible.value = true;
+}
+
+function editNickname() {
+  nicknameForm.name = adminInfo.value.name || '';
+  editNicknameDialogVisible.value = true;
+}
+
+async function submitNickname() {
+  if (!nicknameForm.name.trim()) {
+    ElementPlus.ElMessage.warning('请输入新昵称');
+    return;
+  }
+  const res = await fetch('/api/?module=user&method=updateNickname', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: nicknameForm.name })
+  });
+  const json = await res.json();
+  if (json.code === 200) {
+    ElementPlus.ElMessage.success('昵称修改成功');
+    editNicknameDialogVisible.value = false;
+    loadAdminInfo();
+  } else {
+    ElementPlus.ElMessage.error(json.message || '修改失败');
+  }
+}
+
+
+const isCollapse = ref(localStorage.getItem('admin_sidebar_collapsed_v2') === '1');
+
+/**
+ * 根据当前视口决定折叠按钮的行为：桌面端折叠侧栏，移动端打开抽屉导航。
+ */
+function toggleCollapse() {
+  if (isMobileViewport.value) {
+    mobileMenuVisible.value = true;
+    return;
+  }
+
+  isCollapse.value = !isCollapse.value;
+  localStorage.setItem('admin_sidebar_collapsed_v2', isCollapse.value ? '1' : '0');
+}
+
+/**
+ * 同步响应式视口状态。移动端关闭后回到桌面时，同时收起残留的抽屉层。
+ */
+function updateViewport() {
+  isMobileViewport.value = window.innerWidth <= 900;
+  if (!isMobileViewport.value) {
+    mobileMenuVisible.value = false;
+  }
+}
+
+/**
+ * 在动态菜单树中查找目标页面的完整名称路径，用于标签页和面包屑显示。
+ */
+function findMenuTrail(menu, path, parents = []) {
+  for (const item of menu) {
+    const trail = [...parents, item.name].filter(Boolean);
+    if (item.path === path) {
+      return trail;
+    }
+    if (item.menu && item.menu.length) {
+      const childTrail = findMenuTrail(item.menu, path, trail);
+      if (childTrail.length) {
+        return childTrail;
+      }
+    }
+  }
+  return [];
+}
+
+const breadcrumbItems = computed(() => {
+  const trail = findMenuTrail(menuList.value, activeMenu.value);
+  if (trail.length) {
+    return trail;
+  }
+  return activeMenu.value === config.defaultPage ? ['工作台'] : ['当前页面'];
+});
+
+const pageTitle = computed(() => {
+  const trail = breadcrumbItems.value;
+  return trail[trail.length - 1] || siteTitle;
+});
+
+function getMenuTitle(path) {
+  const trail = findMenuTrail(menuList.value, path);
+  if (trail.length) {
+    return trail[trail.length - 1];
+  }
+  return path === config.defaultPage ? '工作台' : '业务页面';
+}
+
+/**
+ * 将当前页面加入多标签栏。相同路径只保留一个标签，避免重复打开。
+ */
+function ensureTab(path) {
+  const existing = openedTabs.value.find(tab => tab.path === path);
+  if (existing) {
+    existing.title = getMenuTitle(path);
+    return;
+  }
+  openedTabs.value.push({
+    path,
+    title: getMenuTitle(path),
+    closable: path !== config.defaultPage
+  });
+}
+
+function syncTabTitles() {
+  openedTabs.value.forEach(tab => {
+    tab.title = getMenuTitle(tab.path);
+  });
+}
+
+function switchTab(path) {
+  handleMenuSelect(path);
+}
+
+/**
+ * 关闭标签后，若关闭的是当前页，则切换到左侧最近的可用标签。
+ */
+function closeTab(path) {
+  const index = openedTabs.value.findIndex(tab => tab.path === path);
+  if (index < 0 || openedTabs.value[index].closable === false) {
+    return;
+  }
+
+  const wasActive = activeMenu.value === path;
+  openedTabs.value.splice(index, 1);
+  if (wasActive) {
+    const nextTab = openedTabs.value[Math.max(0, index - 1)] || openedTabs.value[0];
+    if (nextTab) {
+      handleMenuSelect(nextTab.path);
+    }
+  }
+}
+
+/**
+ * iframe 每次完成导航后注入统一主题。注入过程严格幂等，并隔离跨域或 DOM 异常。
+ */
+function handleIframeLoaded() {
+  iframeLoading.value = false;
+
+  try {
+    const frameDocument = contentIframe.value && contentIframe.value.contentDocument;
+    if (!frameDocument || !frameDocument.documentElement) {
+      return;
+    }
+
+    frameDocument.documentElement.classList.add('admin-v2-frame');
+    frameDocument.documentElement.dataset.theme = 'light';
+    if (frameDocument.body) {
+      frameDocument.body.classList.add('admin-v2-frame');
+      frameDocument.body.dataset.theme = 'light';
+    }
+
+    let themeLink = frameDocument.querySelector('link[data-admin-theme-v2="true"]');
+    if (!themeLink) {
+      themeLink = frameDocument.createElement('link');
+      themeLink.rel = 'stylesheet';
+      themeLink.href = '/element/css/admin-theme-v2.css';
+      themeLink.dataset.adminThemeV2 = 'true';
+      (frameDocument.head || frameDocument.documentElement).appendChild(themeLink);
+    }
+  } catch (error) {
+    // 同源业务页会正常注入；若未来出现跨域页面，仅跳过主题注入并保留页面访问。
+    console.debug('子页面主题注入已跳过：', error);
+  }
+}
+
+
+const lanzouDialogVisible = ref(false);
+const lanzouForm = reactive({
+  account: '',
+  password: '',
+  uid: ''
+});
+
+async function openLanzouDialog() {
+  const res = await fetch('/api/?module=lanzou&method=getlanzou');
+  const json = await res.json();
+  if (json.code === 200) {
+    lanzouForm.account = json.data.lanzou_account || '';
+    lanzouForm.password = json.data.lanzou_password || '';
+    lanzouForm.uid = json.data.lanzou_uid || '';
+    lanzouDialogVisible.value = true;
+  } else {
+    ElementPlus.ElMessage.error(json.message || '加载失败');
+  }
+}
+
+async function submitLanzou() {
+  if (!lanzouForm.account || !lanzouForm.password) {
+    ElementPlus.ElMessage.warning('请输入账号和密码');
+    return;
+  }
+  const res = await fetch('/api/?module=lanzou&method=editlanzou', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      account: lanzouForm.account,
+      password: lanzouForm.password
+    })
+  });
+  const json = await res.json();
+  if (json.code === 200) {
+    ElementPlus.ElMessage.success(json.data || '登录成功');
+    lanzouDialogVisible.value = false;
+  } else {
+    ElementPlus.ElMessage.error(json.message || '登录失败');
+  }
+}
+
+// ===== S3 桶配置 =====
+const s3DialogVisible = ref(false);
+const s3Saving = ref(false);
+const s3Form = reactive({
+  endpoint: '',
+  accessKey: '',
+  secretKey: '',
+  bucket: '',
+  region: 'auto',
+  uploadPath: '',
+  publicUrl: '',
+});
+
+async function openS3Dialog() {
+  const res = await fetch('/api/?module=s3config&method=getS3Config');
+  const json = await res.json();
+  if (json.code === 200) {
+    s3Form.endpoint = json.data.s3_endpoint || '';
+    s3Form.accessKey = json.data.s3_access_key || '';
+    s3Form.secretKey = json.data.s3_secret_key || '';
+    s3Form.bucket = json.data.s3_bucket || '';
+    s3Form.region = json.data.s3_region || 'auto';
+    s3Form.uploadPath = json.data.s3_upload_path || '';
+    s3Form.publicUrl = json.data.s3_public_url || '';
+    s3DialogVisible.value = true;
+  } else {
+    ElementPlus.ElMessage.error(json.message || '加载失败');
+  }
+}
+
+async function submitS3() {
+  if (!s3Form.endpoint || !s3Form.accessKey || !s3Form.secretKey || !s3Form.bucket) {
+    ElementPlus.ElMessage.warning('请填写端点、Access Key、Secret Key 和桶名');
+    return;
+  }
+  s3Saving.value = true;
+  try {
+    const res = await fetch('/api/?module=s3config&method=editS3Config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        endpoint: s3Form.endpoint,
+        access_key: s3Form.accessKey,
+        secret_key: s3Form.secretKey,
+        bucket: s3Form.bucket,
+        region: s3Form.region,
+        upload_path: s3Form.uploadPath,
+        public_url: s3Form.publicUrl,
+      })
+    });
+    const json = await res.json();
+    if (json.code === 200) {
+      ElementPlus.ElMessage.success(json.data || '保存成功');
+      s3DialogVisible.value = false;
+    } else {
+      ElementPlus.ElMessage.error(json.message || '保存失败');
+    }
+  } finally {
+    s3Saving.value = false;
+  }
+}
+
+async function clearS3Config() {
+  const res = await fetch('/api/?module=s3config&method=editS3Config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  });
+  const json = await res.json();
+  if (json.code === 200) {
+    s3Form.endpoint = '';
+    s3Form.accessKey = '';
+    s3Form.secretKey = '';
+    s3Form.bucket = '';
+    s3Form.region = 'auto';
+    s3Form.uploadPath = '';
+    s3Form.publicUrl = '';
+    ElementPlus.ElMessage.success('配置已清除');
+    s3DialogVisible.value = false;
+  } else {
+    ElementPlus.ElMessage.error(json.message || '清除失败');
+  }
+}
+
+
+        function openPasswordDialog() {
+          passwordForm.old_password = '';
+          passwordForm.new_password = '';
+          passwordForm.confirm_password = '';
+          passwordDialogVisible.value = true;
+        }
+
+        async function submitPassword() {
+          if (!passwordForm.old_password || !passwordForm.new_password || !passwordForm.confirm_password) {
+            ElementPlus.ElMessage.warning('请填写完整');
+            return;
+          }
+
+          if (passwordForm.new_password !== passwordForm.confirm_password) {
+            ElementPlus.ElMessage.error('两次新密码不一致');
+            return;
+          }
+
+          const res = await fetch('/api/?module=user&method=changePassword', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(passwordForm)
+          });
+
+          const json = await res.json();
+          if (json.code === 200) {
+            ElementPlus.ElMessage.success(json.message || '密码修改成功');
+            passwordDialogVisible.value = false;
+          } else {
+            ElementPlus.ElMessage.error(json.message || '密码修改失败');
+          }
+        }
+        function handleMenuSelect(path) {
+            if (!validateToken()) {
+                ElementPlus.ElMessage.warning('登录状态已失效，即将跳转到登录页...');
+                setTimeout(() => {
+                window.location.href = config.pagePath + "/" + config.loginPage + config.pageSuffix;
+                }, 3000);
+                return;
+            }
+
+            if (!path) {
+              return;
+            }
+
+            activeMenu.value = path;
+            iframeLoading.value = true;
+            iframeSrc.value = pagePrefix + path + pageSuffix;
+            ensureTab(path);
+            localStorage.setItem('active_menu', path);
+            mobileMenuVisible.value = false;
+            if (isCollapse.value) {
+                defaultOpeneds.value = [];
+              }
+
+        }
+        function refreshIframe() {
+          // 强制刷新 iframe，并保持 URL 结构干净，避免多次刷新把查询串拼乱。
+          iframeLoading.value = true;
+          const url = new URL(iframeSrc.value || (pagePrefix + config.defaultPage + pageSuffix), window.location.origin);
+          url.searchParams.set('_t', Date.now());
+          iframeSrc.value = url.pathname.replace(/^\//, '') + url.search + url.hash;
+        }
+        function goHome() {
+            activeMenu.value = config.defaultPage;
+            iframeLoading.value = true;
+            iframeSrc.value = pagePrefix + config.defaultPage + pageSuffix;
+            ensureTab(config.defaultPage);
+            mobileMenuVisible.value = false;
+            localStorage.setItem('active_menu', config.defaultPage);
+        }
+        function handleUserCommand(command) {
+              if (command === 'profile') {
+                  openProfileDialog();
+              } else if (command === 'password') {
+                  openPasswordDialog();
+              } else if (command === 'lanzou') {
+                  openLanzouDialog();
+              } else if (command === 's3') {
+                  openS3Dialog();
+              } else if (command === 'legacy') {
+                  window.location.href = '/console.html';
+              } else if (command === 'logout') {
+                  // 清除 token 和缓存
+                  document.cookie = config.tokenKey + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
+                  localStorage.removeItem(config.tokenKey);
+                  localStorage.removeItem('adminInfo');
+
+                  // 跳转到登录页（自动拼接配置路径）
+                  window.location.href = '/' + config.pagePath + config.loginPage + config.pageSuffix;
+              }
+          }
+        function animateRefresh(event) {
+          const icon = event.currentTarget.querySelector('i');
+          if (icon) {
+            icon.classList.remove('rotate-half-ccw'); // 先移除，防止重复动画
+            void icon.offsetWidth; // 强制重绘，重新触发动画
+            icon.classList.add('rotate-half-ccw');
+          }
+        }
+
+        function validateToken() {
+            const tokenKey = config.tokenKey;
+            const localToken = localStorage.getItem(tokenKey) || '';
+            const cookieToken = document.cookie
+                .split('; ')
+                .find(row => row.startsWith(tokenKey + '='))
+                ?.split('=')[1] || '';
+
+            if (!cookieToken || !localToken) {
+                return false;
+            }
+
+            if (cookieToken !== localToken) {
+                localStorage.setItem(tokenKey, cookieToken);
+            }
+
+            return true;
+        }
+        // 过滤 hidden 菜单
+        function filterVisibleMenu(menu) {
+          return menu
+            .filter(item => item.hidden !== true)
+            .map(item => ({
+              ...item,
+              menu: item.menu ? filterVisibleMenu(item.menu) : []
+            }));
+        }
+        async function loadAdminInfo() {
+            try {
+                const res = await fetch('/api/?module=user&method=getInfo');
+                const json = await res.json();
+                if (json.code === 200) {
+                adminInfo.value = json.data;
+                }
+            } catch (e) {
+                console.error('管理员信息加载失败：', e);
+            }
+        }
+
+
+
+        async function handleAndroidClick() {
+          try {
+            // 先弹窗确认
+            await ElementPlus.ElMessageBox.confirm(
+              '是否下载安卓APP客户端？',
+              '提示',
+              {
+                confirmButtonText: '确定',
+                cancelButtonText: '取消',
+                type: 'warning'
+              }
+            );
+          } catch {
+            // 用户取消
+            return;
+          }
+
+          // 显示加载中提示
+          const loading = ElementPlus.ElLoading.service({
+            lock: true,
+            text: '正在获取最新版本，请稍候…',
+            background: 'rgba(0, 0, 0, 0.4)'
+          });
+
+          try {
+            const res = await fetch('/api/index.php?module=site&method=getAndroidUrl', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: "{}"
+            });
+
+            const json = await res.json();
+            loading.close();
+
+            if (json.code !== 200) {
+              ElementPlus.ElMessage.error(json.message || '获取下载地址失败');
+              return;
+            }
+
+            if (!json.data || !json.data.download) {
+              ElementPlus.ElMessage.error('后端未返回有效下载地址');
+              return;
+            }
+
+            // 打开下载
+            window.open(json.data.download, '_blank');
+
+          } catch (err) {
+            loading.close();
+            ElementPlus.ElMessage.error('网络错误，请稍后再试');
+          }
+        }
+
+        async function loadMenu() {
+          try {
+            const res = await fetch('/api/?module=menu&method=getMenu');
+            const json = await res.json();
+            if (json.code === 200) {
+              menuList.value = filterVisibleMenu(json.data);
+              syncTabTitles();
+              // 可选：加载第一个页面
+              const firstPath = findFirstPath(menuList.value);
+              /* if (firstPath) {
+                handleMenuSelect(firstPath);
+              } */
+
+              updateViewport();
+            }
+          } catch (e) {
+            console.error('菜单加载失败：', e);
+          }
+        }
+
+
+        function findFirstPath(menu) {
+          for (const item of menu) {
+            if (item.path) return item.path;
+            if (item.menu) {
+              const sub = findFirstPath(item.menu);
+              if (sub) return sub;
+            }
+          }
+          return '';
+        }
+
+
+        let unreadTimer = null;
+
+        onMounted(() => {
+          updateViewport();
+          window.addEventListener('resize', updateViewport);
+          loadMenu();
+          loadAdminInfo();
+          loadUnreadCount();
+          unreadTimer = window.setInterval(loadUnreadCount, 180000);
+
+          // 弹出公告提示（只显示一次）
+          /*const noticeKey = 'admin_notice_shown';
+          if (!localStorage.getItem(noticeKey)) {
+            ElementPlus.ElMessageBox.alert(
+              '注入服务已重构,支持注入大部分混淆/加固应用,注入非常快,如有问题,请加QQ群反馈：793107266 (菜鸟云注入交流群2群)',
+              '系统公告',
+              {
+                confirmButtonText: '我知道了',
+                type: 'info'
+              }
+            );
+            localStorage.setItem(noticeKey, '1');
+          }*/
+
+          const savedMenu = localStorage.getItem('active_menu');
+          if (savedMenu) {
+            activeMenu.value = savedMenu;
+            iframeLoading.value = true;
+            iframeSrc.value = pagePrefix + savedMenu + pageSuffix;
+            ensureTab(savedMenu);
+          }
+          const ua = navigator.userAgent.toLowerCase();
+            const isMobile = /iphone|ipad|android|mobile|phone/.test(ua);
+
+            if (isMobile) {
+              ElementPlus.ElMessageBox.alert(
+                '推荐下载APP客户端操作更方便,点击上方小图标可下载',
+                '提示',
+                {
+                  confirmButtonText: '知道了',
+                  type: 'warning'
+                }
+              );
+            }
+          showMenuTip.value = true;
+            setTimeout(() => {
+              showMenuTip.value = false;
+            }, 3000);
+
+
+
+
+
+
+
+
+        });
+
+        onBeforeUnmount(() => {
+          window.removeEventListener('resize', updateViewport);
+          if (unreadTimer) {
+            window.clearInterval(unreadTimer);
+          }
+        });
+
+        return {
+          siteTitle,
+          appVersion,
+          currentYear,
+          menuList,
+          activeMenu,
+          iframeSrc,
+          contentIframe,
+          iframeLoading,
+          handleIframeLoaded,
+          pageTitle,
+          breadcrumbItems,
+          openedTabs,
+          switchTab,
+          closeTab,
+          isMobileViewport,
+          mobileMenuVisible,
+          handleMenuSelect,
+          adminInfo,
+          handleUserCommand,
+          goHome,
+          refreshIframe,
+          animateRefresh,passwordDialogVisible,
+          passwordForm,
+          openPasswordDialog,
+          submitPassword,profileDialogVisible,
+          editNicknameDialogVisible,
+          nicknameForm,
+          openProfileDialog,
+          editNickname,
+          submitNickname,
+          balanceInYuan,
+          isCollapse,
+          toggleCollapse,
+          lanzouDialogVisible,
+          lanzouForm,
+          openLanzouDialog,
+          submitLanzou,
+          // S3 桶配置
+          s3DialogVisible,
+          s3Saving,
+          s3Form,
+          openS3Dialog,
+          submitS3,
+          clearS3Config,
+          //站内信
+          handleMessageMenu,
+          messageDialogVisible,
+          messageMode,
+          messageList,
+          selectedMessage,
+          replyContent,
+          loadMessageDetail,
+          sendReply,
+          unreadCount,
+          sendMessageDialogVisible,
+          sendMessageForm,
+          openSendMessageDialog,
+          submitSendMessage,
+          defaultOpeneds,
+          showMenuTip,
+          loadAdminInfo,
+          vipDialogVisible,   // 控制会员弹窗显示
+          vipMonths,          // 用户选择的月份
+          vipPrice,           // 每月VIP单价
+          submitVipRenew,      // 提交续费方法
+          loadVipPrice,
+          openVipDialog,
+          handleRecharge,
+          handleAndroidClick
+        };
+      }
+    });
+
+    app.use(ElementPlus);
+
+    // 注册递归组件
+    app.component('menu-item', {
+  props: ['item'],
+  setup(props) {
+    return () => {
+      const h = Vue.h;
+      const item = props.item;
+
+      if (item.menu && item.menu.length) {
+        return h(
+          ElementPlus.ElSubMenu,
+          { index: item.id },
+          {
+            title: () => [
+              item.icon
+                ? h(ElementPlus.ElIcon, { style: 'margin-right: 5px' }, () =>
+                    h(app._context.components[item.icon])
+                  )
+                : null,
+              h('span', item.name)
+            ],
+            default: () =>
+              item.menu.map(child =>
+                h(app._context.components['menu-item'], { item: child, key: child.id })
+              )
+          }
+        );
+      } else {
+        return h(
+              ElementPlus.ElMenuItem,
+              {
+                index: item.path
+              },
+              {
+                default: () => [
+                  item.icon
+                    ? h(ElementPlus.ElIcon, {}, () =>
+                        h(app._context.components[item.icon])
+                      )
+                    : null,
+                  h('span', {}, item.name)
+                ]
+              }
+            );
+
+      }
+    };
+  }
+});
+
+
+    // 自动注册所有图标组件
+    for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
+      app.component(key, component);
+    }
+
+    app.mount('#app');
+  </script>
+  <script> var _mtj = _mtj || []; (function () { var mtj = document.createElement("script"); mtj.src = "https://node91.aizhantj.com:21233/tjjs/?k=pvatfxy1rf8"; var s = document.getElementsByTagName("script")[0]; s.parentNode.insertBefore(mtj, s); })(); </script>
+</body>
+</html>
