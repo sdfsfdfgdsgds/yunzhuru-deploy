@@ -1,8 +1,13 @@
 <?php
 function login(PDO $pdo, array $input)
 {
-    // 参数检查
-    if (empty($input['username']) || empty($input['password']) || empty($input['captcha'])) {
+    // 参数检查：Pure Admin 在未启用图形验证码时以字符串 "0" 作为占位值。
+    // PHP 的 empty('0') 会被判定为空，因此单独保留该占位值；经典页面
+    // 继续要求真实填写验证码（空字符串、null、false 等仍按缺失处理）。
+    $captchaInput = $input['captcha'] ?? null;
+    $captchaIsDisabledSentinel = is_scalar($captchaInput) && (string)$captchaInput === '0';
+    if (empty($input['username']) || empty($input['password']) ||
+        (empty($captchaInput) && !$captchaIsDisabledSentinel)) {
         throw new Exception('账号、密码和验证码均不能为空');
     }
     
