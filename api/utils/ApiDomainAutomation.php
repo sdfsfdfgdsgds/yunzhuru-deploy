@@ -433,6 +433,7 @@ if (!function_exists('ensureApiDomainAutomationSchema')) {
             verified_at datetime DEFAULT NULL,
             disabled_at datetime DEFAULT NULL,
             delete_not_before datetime DEFAULT NULL,
+            delete_requested_at datetime DEFAULT NULL,
             archived_at datetime DEFAULT NULL,
             created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -568,6 +569,7 @@ if (!function_exists('ensureApiDomainAutomationSchema')) {
             'price_class' => "varchar(32) NOT NULL DEFAULT 'PriceClass_All' AFTER `usage_scope`",
             'ipv6_enabled' => 'tinyint(1) NOT NULL DEFAULT 1 AFTER `price_class`',
             'delete_not_before' => 'datetime DEFAULT NULL AFTER `disabled_at`',
+            'delete_requested_at' => 'datetime DEFAULT NULL AFTER `delete_not_before`',
         ];
         foreach ($resourceColumns as $column => $definition) {
             apiDomainAutomationEnsureTableColumn(
@@ -1683,9 +1685,11 @@ if (!function_exists('apiDomainAutomationRefreshLifecycle')) {
     {
         $groupId = (int)$group['id'];
         $stmt = $pdo->prepare("SELECT p.*,
+                MAX(cr.delete_requested_at) AS delete_requested_at,
                 COALESCE(SUM(s.ok_count),0) AS lifetime_access_count,
                 MAX(CASE WHEN s.ok_count>0 THEN s.last_seen_at ELSE NULL END) AS aggregated_last_access_at
             FROM cainiao_api_domain_pool p
+            LEFT JOIN cainiao_api_domain_cloud_resource cr ON cr.domain_pool_id=p.id
             LEFT JOIN cainiao_api_domain_stats s ON s.domain_pool_id=p.id
             WHERE p.automation_group_id=:group_id AND p.origin='aws_auto'
             GROUP BY p.id
@@ -1761,6 +1765,10 @@ if (!function_exists('apiDomainAutomationRefreshLifecycle')) {
             $nodeId = (int)$row['id'];
             $state = (string)($row['lifecycle_status'] ?? 'active');
             if (in_array($state, ['archived', 'cleanup_failed'], true)) continue;
+
+            // 管理员已明确请求删除的资源由删除队列接管，生命周期刷新不再将
+            // pending_verification 或 cleanup_pending 节点重新激活。
+            if (!empty($row['delete_requested_at'])) continue;
 
             $lifetimeAccess = max(
                 (int)($row['access_count'] ?? 0),
@@ -2985,31 +2993,64 @@ if (!function_exists('apiDomainAutomationCleanupGuard')) {
     /** 每次云端清理前后都重查成功访问和保护位，不依赖 worker 旧快照。 */
     function apiDomainAutomationCleanupGuard(PDO $pdo, int $resourceId): array
     {
-        $stmt = $pdo->prepare("SELECT p.id AS domain_pool_id,p.lifecycle_status,p.cleanup_protected,
+        $stmt = $pdo->prepare("SELECT r.delete_requested_at,
+                p.id AS domain_pool_id,p.origin,p.lifecycle_status,p.cleanup_protected,
                 p.pinned,p.reserved,p.access_count,
                 COALESCE(SUM(s.ok_count),0) AS stats_ok_count
             FROM cainiao_api_domain_cloud_resource r
-            INNER JOIN cainiao_api_domain_pool p ON p.id=r.domain_pool_id
+            LEFT JOIN cainiao_api_domain_pool p ON p.id=r.domain_pool_id
             LEFT JOIN cainiao_api_domain_stats s ON s.domain_pool_id=p.id
             WHERE r.id=:resource_id
-            GROUP BY p.id,p.lifecycle_status,p.cleanup_protected,p.pinned,p.reserved,p.access_count");
+            GROUP BY r.id,r.delete_requested_at,p.id,p.origin,p.lifecycle_status,p.cleanup_protected,
+                p.pinned,p.reserved,p.access_count");
         $stmt->execute([':resource_id' => $resourceId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         $lifetimeAccess = $row
             ? max((int)$row['access_count'], (int)$row['stats_ok_count'])
             : 0;
-        $allowed = $row
+        // 未绑定 pool 的 verifying/deploying 资源没有访问统计行；只有明确的
+        // delete_requested_at 标记才能进入云端清理，避免 worker 误操作外部资源。
+        $explicitUnboundDelete = $row
+            && (int)($row['domain_pool_id'] ?? 0) === 0
+            && !empty($row['delete_requested_at']);
+        $allowed = $explicitUnboundDelete || ($row
+            && (string)($row['origin'] ?? '') === 'aws_auto'
             && (string)$row['lifecycle_status'] === 'cleanup_pending'
             && (int)$row['cleanup_protected'] === 0
             && (int)$row['pinned'] === 0
             && (int)$row['reserved'] === 0
-            && $lifetimeAccess === 0;
+            && $lifetimeAccess === 0);
         return [
             'allowed' => $allowed ? 1 : 0,
             'domain_pool_id' => (int)($row['domain_pool_id'] ?? 0),
             'lifecycle_status' => (string)($row['lifecycle_status'] ?? ''),
             'lifetime_access_count' => $lifetimeAccess,
         ];
+    }
+}
+
+if (!function_exists('apiDomainAutomationCancelArchivedCloudJob')) {
+    /**
+     * 资源已经归档时仅收口当前持有租约的作业，不触碰资源、池组或批次统计。
+     * 调用方必须已经建立事务；通过 lock_token 限制只能关闭当前 worker 的租约。
+     */
+    function apiDomainAutomationCancelArchivedCloudJob(
+        PDO $pdo,
+        array $job,
+        string $requestId = ''
+    ): bool {
+        $stmt = $pdo->prepare("UPDATE cainiao_api_domain_cloud_job SET
+                status='cancelled',cancel_requested=1,lock_token='',locked_at=NULL,
+                finished_at=:finished_at,last_error_code='resource_archived',
+                last_aws_request_id=:request_id
+            WHERE id=:id AND status='running' AND lock_token=:lock_token");
+        $stmt->execute([
+            ':finished_at' => apiDomainAutomationDateText(apiDomainAutomationNow()),
+            ':request_id' => apiDomainAutomationLimitText($requestId, 128),
+            ':id' => (int)$job['id'],
+            ':lock_token' => (string)$job['lock_token'],
+        ]);
+        return $stmt->rowCount() === 1;
     }
 }
 
@@ -3033,7 +3074,7 @@ if (!function_exists('apiDomainAutomationLockCloudLedger')) {
             $poolLock = $pdo->prepare('SELECT * FROM cainiao_api_domain_pool WHERE id=:id FOR UPDATE');
             $poolLock->execute([':id' => $poolId]);
             $pool = $poolLock->fetch(PDO::FETCH_ASSOC);
-            if (!$pool) return null;
+            if (!$pool || (string)($pool['origin'] ?? '') !== 'aws_auto') return null;
         }
         $resourceLock = $pdo->prepare('SELECT * FROM cainiao_api_domain_cloud_resource
             WHERE id=:id FOR UPDATE');
@@ -3051,15 +3092,35 @@ if (!function_exists('apiDomainAutomationLockCloudLedger')) {
         $jobLock->execute([':id' => (int)$job['id'], ':lock_token' => (string)$job['lock_token']]);
         $lockedJob = $jobLock->fetch(PDO::FETCH_ASSOC);
         if (!$lockedJob) return null;
-        return ['pool_id' => $poolId, 'pool' => $pool, 'resource' => $resource, 'job' => $lockedJob];
+        return [
+            'pool_id' => $poolId,
+            'pool' => $pool,
+            'resource' => $resource,
+            'job' => $lockedJob,
+            // 归档是不可逆终态；上层拿到该标记后只收口当前租约，不能再写资源账本。
+            'resource_archived' => (string)($resource['workflow_state'] ?? '') === 'archived' ? 1 : 0,
+        ];
     }
 }
 
 if (!function_exists('apiDomainAutomationLockedCleanupAllowed')) {
     /** 已持有 pool 行锁时再次核对访问、保护和生命周期，供 AWS 回执落账前使用。 */
-    function apiDomainAutomationLockedCleanupAllowed(PDO $pdo, int $poolId, array $pool): bool
+    function apiDomainAutomationLockedCleanupAllowed(
+        PDO $pdo,
+        int $poolId,
+        array $pool,
+        int $resourceId = 0
+    ): bool
     {
-        if ($poolId <= 0
+        if ($poolId <= 0) {
+            if ($resourceId <= 0) return false;
+            $explicit = $pdo->prepare('SELECT delete_requested_at
+                FROM cainiao_api_domain_cloud_resource WHERE id=:id LIMIT 1');
+            $explicit->execute([':id' => $resourceId]);
+            // 无 pool 资源只能由本次管理员删除请求创建的 marker 进入清理。
+            return trim((string)$explicit->fetchColumn()) !== '';
+        }
+        if ((string)($pool['origin'] ?? '') !== 'aws_auto'
             || (string)($pool['lifecycle_status'] ?? '') !== 'cleanup_pending'
             || (int)($pool['cleanup_protected'] ?? 1) === 1
             || (int)($pool['pinned'] ?? 1) === 1
@@ -3086,6 +3147,16 @@ if (!function_exists('apiDomainAutomationHandleSuccessfulReceipt')) {
         $resource = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$resource) return ['resource_found' => 0, 'provider_ready' => 1, 'restore_queued' => 0];
         $resourceId = (int)$resource['id'];
+        // 管理员明确提交删除后，后续访问只记录事实，不应撤销删除标记或
+        // 把节点重新启用；调用方会继续保持 cleanup_pending 隔离状态。
+        if (!empty($resource['delete_requested_at'])) {
+            return [
+                'resource_found' => 1,
+                'provider_ready' => 0,
+                'restore_queued' => 0,
+                'deletion_requested' => 1,
+            ];
+        }
         $pdo->prepare("UPDATE cainiao_api_domain_cloud_job SET
                 status='cancelled',cancel_requested=1,lock_token='',locked_at=NULL,
                 finished_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),
@@ -3104,7 +3175,8 @@ if (!function_exists('apiDomainAutomationHandleSuccessfulReceipt')) {
             && !in_array((string)$resource['workflow_state'], ['disabling', 'delete_pending', 'restore_pending', 'restoring'], true);
         if ($providerReady) {
             $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
-                    workflow_state='ready',delete_not_before=NULL,next_action_at=NULL,last_error_code=''
+                    workflow_state='ready',delete_not_before=NULL,next_action_at=NULL,last_error_code='',
+                    delete_requested_at=NULL
                 WHERE id=:id")->execute([':id' => $resourceId]);
             return ['resource_found' => 1, 'provider_ready' => 1, 'restore_queued' => 0];
         }
@@ -3161,7 +3233,7 @@ if (!function_exists('apiDomainAutomationCancelCleanupJob')) {
                     return false;
                 }
             }
-            $resourceLock = $pdo->prepare('SELECT domain_pool_id FROM cainiao_api_domain_cloud_resource
+            $resourceLock = $pdo->prepare('SELECT domain_pool_id,workflow_state FROM cainiao_api_domain_cloud_resource
                 WHERE id=:id FOR UPDATE');
             $resourceLock->execute([':id' => (int)$job['resource_id']]);
             $resource = $resourceLock->fetch(PDO::FETCH_ASSOC);
@@ -3174,6 +3246,16 @@ if (!function_exists('apiDomainAutomationCancelCleanupJob')) {
                 // 关联关系在提示读取后发生变化时交给上层重试，避免反向加锁。
                 if ($ownTransaction) $pdo->rollBack();
                 return false;
+            }
+            if ((string)($resource['workflow_state'] ?? '') === 'archived') {
+                // 归档后的清理回执只收口当前租约，避免恢复已归档资源。
+                $closed = apiDomainAutomationCancelArchivedCloudJob($pdo, $job);
+                if (!$closed) {
+                    if ($ownTransaction) $pdo->rollBack();
+                    return false;
+                }
+                if ($ownTransaction) $pdo->commit();
+                return true;
             }
             $stmt = $pdo->prepare("UPDATE cainiao_api_domain_cloud_job SET
                     status='cancelled',cancel_requested=1,lock_token='',locked_at=NULL,
@@ -3190,7 +3272,7 @@ if (!function_exists('apiDomainAutomationCancelCleanupJob')) {
             if ($providerStillEnabled) {
                 $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
                         workflow_state='ready',provider_enabled=1,delete_not_before=NULL,
-                        next_action_at=NULL,last_error_code=''
+                        next_action_at=NULL,last_error_code='',delete_requested_at=NULL
                     WHERE id=:id")->execute([':id' => (int)$job['resource_id']]);
                 if ($poolId > 0) {
                     $pdo->prepare("UPDATE cainiao_api_domain_pool SET enabled=1,
@@ -3200,9 +3282,19 @@ if (!function_exists('apiDomainAutomationCancelCleanupJob')) {
                         WHERE id=:id AND origin='aws_auto'")->execute([
                             ':updated_at' => apiDomainAutomationDateText(apiDomainAutomationNow()),
                             ':id' => $poolId,
-                        ]);
+                    ]);
                 }
             } else {
+                if ($poolId <= 0) {
+                    // 未绑定 pool 的资源没有本地分发入口，清理门禁变化时只
+                    // 保留失败事实，不创建 restore_enable，等待管理员重新提交。
+                    $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
+                            workflow_state='cleanup_failed',next_action_at=NULL,
+                            last_error_code='cleanup_guard_changed'
+                        WHERE id=:id")->execute([':id' => (int)$job['resource_id']]);
+                    if ($ownTransaction) $pdo->commit();
+                    return true;
+                }
                 $active = $pdo->prepare("SELECT COUNT(*) FROM cainiao_api_domain_cloud_job
                     WHERE resource_id=:id AND job_type IN ('restore_enable','poll_restore')
                       AND status IN ('pending','running','retry_wait')");
@@ -3219,7 +3311,7 @@ if (!function_exists('apiDomainAutomationCancelCleanupJob')) {
                 }
                 $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
                         workflow_state='restore_pending',provider_enabled=0,delete_not_before=NULL,
-                        next_action_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)
+                        next_action_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),delete_requested_at=NULL
                     WHERE id=:id")->execute([':id' => (int)$job['resource_id']]);
                 if ($poolId > 0) {
                     $pdo->prepare("UPDATE cainiao_api_domain_pool SET
@@ -3260,15 +3352,32 @@ if (!function_exists('apiDomainAutomationClaimCloudJob')) {
         $nowText = apiDomainAutomationDateText($now);
         $pdo->beginTransaction();
         try {
+            $pdo->exec("UPDATE cainiao_api_domain_cloud_job j
+                LEFT JOIN cainiao_api_domain_cloud_resource r ON r.id=j.resource_id
+                SET j.status='retry_wait',j.lock_token='',j.locked_at=NULL,
+                    j.cancel_requested=CASE
+                        WHEN r.delete_requested_at IS NOT NULL
+                             AND j.job_type IN ('create','poll_deploy','probe') THEN 0
+                        ELSE j.cancel_requested END,
+                    j.next_attempt_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),
+                    j.last_error_code='lease_expired'
+                WHERE j.status='running'
+                  AND j.locked_at<DATE_SUB(DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),INTERVAL 10 MINUTE)");
+            // 管理员批量删除会先把未开始作业标记为 cancel_requested；在领取前
+            // 将其落为 cancelled，避免已经取消的 create/probe 再次被 worker 执行。
             $pdo->exec("UPDATE cainiao_api_domain_cloud_job SET
-                    status='retry_wait',lock_token='',locked_at=NULL,
-                    next_attempt_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),
-                    last_error_code='lease_expired'
-                WHERE status='running'
-                  AND locked_at<DATE_SUB(DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),INTERVAL 10 MINUTE)");
+                    status='cancelled',lock_token='',locked_at=NULL,
+                    finished_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),
+                    last_error_code='manual_delete_requested'
+                WHERE status IN ('pending','retry_wait') AND cancel_requested=1");
             $stmt = $pdo->query("SELECT j.* FROM cainiao_api_domain_cloud_job j
                 WHERE j.status IN ('pending','retry_wait')
+                  AND j.cancel_requested=0
                   AND j.next_attempt_at<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM cainiao_api_domain_cloud_resource ar
+                      WHERE ar.id=j.resource_id AND ar.workflow_state='archived'
+                  )
                 ORDER BY CASE j.job_type
                     WHEN 'probe' THEN 0
                     WHEN 'poll_deploy' THEN 1
@@ -3285,7 +3394,7 @@ if (!function_exists('apiDomainAutomationClaimCloudJob')) {
             $update = $pdo->prepare("UPDATE cainiao_api_domain_cloud_job SET
                     status='running',attempt_count=attempt_count+1,lock_token=:lock_token,
                     locked_at=:locked_at,started_at=COALESCE(started_at,:started_at)
-                WHERE id=:id AND status IN ('pending','retry_wait')");
+                WHERE id=:id AND status IN ('pending','retry_wait') AND cancel_requested=0");
             $update->execute([
                 ':lock_token' => $token, ':locked_at' => $nowText,
                 ':started_at' => $nowText, ':id' => (int)$job['id'],
@@ -3372,7 +3481,7 @@ if (!function_exists('apiDomainAutomationRescheduleCloudJob')) {
                     return false;
                 }
             }
-            $resourceLock = $pdo->prepare('SELECT id,domain_pool_id FROM cainiao_api_domain_cloud_resource
+            $resourceLock = $pdo->prepare('SELECT * FROM cainiao_api_domain_cloud_resource
                 WHERE id=:id FOR UPDATE');
             $resourceLock->execute([':id' => (int)$job['resource_id']]);
             $resource = $resourceLock->fetch(PDO::FETCH_ASSOC);
@@ -3380,13 +3489,29 @@ if (!function_exists('apiDomainAutomationRescheduleCloudJob')) {
                 if ($ownTransaction) $pdo->rollBack();
                 return false;
             }
+            if ((string)($resource['workflow_state'] ?? '') === 'archived') {
+                // 归档后的迟到租约只收口当前作业；不重排队，也不回写资源重试计数。
+                $closed = apiDomainAutomationCancelArchivedCloudJob($pdo, $job, $requestId);
+                if (!$closed) {
+                    if ($ownTransaction) $pdo->rollBack();
+                    return false;
+                }
+                if ($ownTransaction) $pdo->commit();
+                return true;
+            }
+            // 删除标记与外部请求竞态时，创建、部署轮询、探针和清理作业必须保留一次可恢复租约；
+            // 将 cancel_requested 清零后由 marker-aware 分支重新核对并收口，避免
+            // CloudFront 已创建但账本尚未来得及落账时被直接取消。
+            $markerRecovery = !empty($resource['delete_requested_at'])
+                && in_array((string)$job['job_type'], ['create', 'poll_deploy', 'probe', 'disable', 'poll_disable', 'delete'], true);
             $stmt = $pdo->prepare("UPDATE cainiao_api_domain_cloud_job SET
                     status='retry_wait',lock_token='',locked_at=NULL,
-                    next_attempt_at=:next_attempt_at,last_error_code=:error_code,
+                    cancel_requested=:cancel_requested,next_attempt_at=:next_attempt_at,last_error_code=:error_code,
                     last_aws_request_id=:request_id
                 WHERE id=:id AND status='running' AND lock_token=:lock_token
                   AND attempt_count<max_attempts");
             $stmt->execute([
+                ':cancel_requested' => $markerRecovery ? 0 : (int)($job['cancel_requested'] ?? 0),
                 ':next_attempt_at' => apiDomainAutomationDateText($next),
                 ':error_code' => apiDomainAutomationLimitText($reasonCode, 64),
                 ':request_id' => apiDomainAutomationLimitText($requestId, 128),
@@ -3442,13 +3567,23 @@ if (!function_exists('apiDomainAutomationFailCloudJob')) {
                     return false;
                 }
             }
-            $resourceLock = $pdo->prepare('SELECT id,domain_pool_id FROM cainiao_api_domain_cloud_resource
+            $resourceLock = $pdo->prepare('SELECT * FROM cainiao_api_domain_cloud_resource
                 WHERE id=:id FOR UPDATE');
             $resourceLock->execute([':id' => (int)$job['resource_id']]);
             $resourceRow = $resourceLock->fetch(PDO::FETCH_ASSOC);
             if (!$resourceRow || (int)($resourceRow['domain_pool_id'] ?? 0) !== $poolId) {
                 if ($ownTransaction) $pdo->rollBack();
                 return false;
+            }
+            if ((string)($resourceRow['workflow_state'] ?? '') === 'archived') {
+                // 归档后的迟到错误只收口当前租约，避免恢复失败状态或批次失败计数。
+                $closed = apiDomainAutomationCancelArchivedCloudJob($pdo, $job, $requestId);
+                if (!$closed) {
+                    if ($ownTransaction) $pdo->rollBack();
+                    return false;
+                }
+                if ($ownTransaction) $pdo->commit();
+                return true;
             }
             $stmt = $pdo->prepare("UPDATE cainiao_api_domain_cloud_job SET
                     status='failed',lock_token='',locked_at=NULL,last_error_code=:error_code,
@@ -3478,6 +3613,55 @@ if (!function_exists('apiDomainAutomationFailCloudJob')) {
                     ':request_id' => apiDomainAutomationLimitText($requestId, 128),
                     ':id' => (int)$job['resource_id'],
                 ]);
+            if (!$cleanupJob && !empty($resourceRow['delete_requested_at'])) {
+                // 失败收口前取消同资源其它尚未开始的作业，避免归档后仍被领取。
+                apiDomainAutomationCancelResourceJobs($pdo, (int)$job['resource_id']);
+                // 删除标记下的终态失败不能悬挂在普通失败状态：无分配的 slot
+                // 直接记为 Cancelled；已有分配则重新排清理链等待人工删除完成。
+                $failedDistributionId = trim((string)($resourceRow['distribution_id'] ?? ''));
+                if ($failedDistributionId === '') {
+                    apiDomainAutomationArchiveRequestedResource(
+                        $pdo,
+                        $resourceRow,
+                        $poolId > 0 ? ['id' => $poolId] : null,
+                        apiDomainAutomationDateText(apiDomainAutomationNow())
+                    );
+                } else {
+                        $failedProviderEnabled = (int)($resourceRow['provider_enabled'] ?? 0) === 1;
+                    $failedProviderStatus = strtolower(trim((string)($resourceRow['provider_status'] ?? '')));
+                    // CloudFront 仍在 InProgress 时先轮询，只有明确 Deployed 才能停用或删除。
+                    $failedCleanupType = $failedProviderStatus === 'deployed'
+                        ? ($failedProviderEnabled ? 'disable' : 'delete')
+                        : 'poll_deploy';
+                    $failedCleanupAt = apiDomainAutomationNow();
+                    if ($failedCleanupType === 'delete') $failedCleanupAt = $failedCleanupAt->modify('+24 hours');
+                    $activeCleanup = $pdo->prepare("SELECT COUNT(*) FROM cainiao_api_domain_cloud_job
+                        WHERE resource_id=:resource_id AND job_type IN ('disable','poll_disable','delete','poll_deploy')
+                          AND status IN ('pending','running','retry_wait')");
+                    $activeCleanup->execute([':resource_id' => (int)$job['resource_id']]);
+                    if ((int)$activeCleanup->fetchColumn() === 0) {
+                        apiDomainAutomationQueueCloudJob(
+                            $pdo,
+                            (int)$job['resource_id'],
+                            (int)$resourceRow['group_id'],
+                            (int)$resourceRow['cloud_account_id'],
+                            $failedCleanupType,
+                            $failedCleanupAt
+                        );
+                    }
+                    $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
+                            workflow_state=:workflow_state,next_action_at=:next_action_at,
+                            delete_not_before=IF(:is_delete=1,:delete_at,delete_not_before)
+                        WHERE id=:id")->execute([
+                        ':workflow_state' => $failedCleanupType === 'disable' ? 'disable_pending'
+                            : ($failedCleanupType === 'delete' ? 'delete_pending' : 'deploying'),
+                        ':next_action_at' => apiDomainAutomationDateText($failedCleanupAt),
+                        ':delete_at' => apiDomainAutomationDateText($failedCleanupAt),
+                        ':is_delete' => $failedCleanupType === 'delete' ? 1 : 0,
+                        ':id' => (int)$job['resource_id'],
+                    ]);
+                }
+            }
             if ($cleanupJob && $poolId > 0) {
                 $pdo->prepare("UPDATE cainiao_api_domain_pool SET
                         lifecycle_status='cleanup_failed',cloud_cleanup_state='failed',
@@ -3597,6 +3781,82 @@ if (!function_exists('apiDomainAutomationCompleteProbe')) {
                 $pdo->rollBack();
                 return false;
             }
+            if ((string)($resource['workflow_state'] ?? '') === 'archived') {
+                // 探针回执晚于归档时只关闭当前租约，跳过建池、资源及批次回写。
+                if (!apiDomainAutomationCancelArchivedCloudJob($pdo, $job)) {
+                    $pdo->rollBack();
+                    return false;
+                }
+                $pdo->commit();
+                return false;
+            }
+            if (!empty($resource['delete_requested_at'])) {
+                // 删除请求与探针回执并发时，禁止创建/启用 API 池节点；当前租约
+                // 直接转入 CloudFront 清理链。CloudFront 仍在 InProgress 时先轮询，
+                // 明确 Deployed 后才停用或进入删除宽限期。
+                apiDomainAutomationCancelResourceJobs($pdo, (int)$resource['id'], (int)$job['id']);
+                $pdo->prepare("UPDATE cainiao_api_domain_cloud_job SET
+                        status='cancelled',cancel_requested=1,lock_token='',locked_at=NULL,
+                        finished_at=:finished_at,last_error_code='manual_delete_requested'
+                    WHERE id=:id AND status='running' AND lock_token=:lock_token")->execute([
+                    ':finished_at' => $nowText,
+                    ':id' => (int)$job['id'], ':lock_token' => (string)$job['lock_token'],
+                ]);
+                $providerEnabled = (int)($resource['provider_enabled'] ?? 0) === 1;
+                $providerStatus = strtolower(trim((string)($resource['provider_status'] ?? '')));
+                // CloudFront 仍在 InProgress 时先轮询，只有明确 Deployed 才能停用或删除。
+                $cleanupJobType = $providerStatus === 'deployed'
+                    ? ($providerEnabled ? 'disable' : 'delete')
+                    : 'poll_deploy';
+                $cleanupState = $cleanupJobType === 'disable' ? 'disable_pending'
+                    : ($cleanupJobType === 'delete' ? 'delete_pending' : 'deploying');
+                $cleanupQueueAt = $cleanupJobType === 'delete'
+                    ? $now->modify('+24 hours')
+                    : $now;
+                $activeCleanup = $pdo->prepare("SELECT COUNT(*) FROM cainiao_api_domain_cloud_job
+                    WHERE resource_id=:resource_id AND job_type IN ('disable','poll_disable','delete','poll_deploy')
+                      AND status IN ('pending','running','retry_wait')");
+                $activeCleanup->execute([':resource_id' => (int)$resource['id']]);
+                if ((int)$activeCleanup->fetchColumn() === 0) {
+                    $cleanupJobId = apiDomainAutomationQueueCloudJob(
+                        $pdo,
+                        (int)$resource['id'],
+                        (int)$resource['group_id'],
+                        (int)$resource['cloud_account_id'],
+                        $cleanupJobType,
+                        $cleanupQueueAt
+                    );
+                }
+                $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
+                        workflow_state=:workflow_state,next_action_at=:next_action_at,
+                        delete_not_before=IF(:is_delete=1,:delete_not_before_at,delete_not_before),
+                        probe_state='succeeded',probe_http_code=:probe_http_code,
+                        last_error_code='manual_delete_requested'
+                    WHERE id=:id")->execute([
+                    ':workflow_state' => $cleanupState,
+                    ':next_action_at' => apiDomainAutomationDateText($cleanupQueueAt),
+                    ':delete_not_before_at' => apiDomainAutomationDateText($cleanupQueueAt),
+                    ':is_delete' => $cleanupJobType === 'delete' ? 1 : 0,
+                    ':probe_http_code' => (int)($probe['http_code'] ?? 200),
+                    ':id' => (int)$resource['id'],
+                ]);
+                if ($domainPoolId > 0) {
+                    $pdo->prepare("UPDATE cainiao_api_domain_pool SET enabled=0,
+                            lifecycle_status='cleanup_pending',cloud_cleanup_state='queued',
+                            cleanup_requested_at=COALESCE(cleanup_requested_at,:requested_at),
+                            lifecycle_updated_at=:updated_at,cleanup_reason='manual_resource_delete'
+                        WHERE id=:id AND origin='aws_auto'")->execute([
+                        ':requested_at' => $nowText,
+                        ':updated_at' => $nowText,
+                        ':id' => $domainPoolId,
+                    ]);
+                }
+                $pdo->commit();
+                if (function_exists('configDeliveryInvalidateAndSync')) {
+                    configDeliveryInvalidateAndSync($pdo);
+                }
+                return false;
+            }
             if ($domainPoolId <= 0) {
                 $duplicate = $pdo->prepare('SELECT id,origin FROM cainiao_api_domain_pool WHERE base_url=:base_url LIMIT 1 FOR UPDATE');
                 $duplicate->execute([':base_url' => (string)$resource['public_api_url']]);
@@ -3682,15 +3942,38 @@ if (!function_exists('apiDomainAutomationArchiveCloudResource')) {
             // 归档“资源不存在”也必须重新检查访问和保护位，不能用旧快照越过清理门禁。
             $pool = null;
             if ($poolId > 0) {
-                $poolLock = $pdo->prepare('SELECT lifecycle_status,cleanup_protected,pinned,reserved,access_count
+                $poolLock = $pdo->prepare('SELECT origin,lifecycle_status,cleanup_protected,pinned,reserved,access_count
                     FROM cainiao_api_domain_pool WHERE id=:id FOR UPDATE');
                 $poolLock->execute([':id' => $poolId]);
                 $pool = $poolLock->fetch(PDO::FETCH_ASSOC);
+                // 先锁 resource 并检查不可逆终态，避免迟到的 not-found 回执把
+                // 已归档资源改写成 cleanup_failed 或重复增加批次归档数。
+                $resourceStateLock = $pdo->prepare('SELECT id,workflow_state
+                    FROM cainiao_api_domain_cloud_resource WHERE id=:id FOR UPDATE');
+                $resourceStateLock->execute([':id' => (int)$job['resource_id']]);
+                $resourceState = $resourceStateLock->fetch(PDO::FETCH_ASSOC);
+                if (!$resourceState) {
+                    $pdo->rollBack();
+                    return false;
+                }
+                if ((string)($resourceState['workflow_state'] ?? '') === 'archived') {
+                    $jobLock = $pdo->prepare("SELECT id FROM cainiao_api_domain_cloud_job
+                        WHERE id=:id AND status='running' AND lock_token=:lock_token FOR UPDATE");
+                    $jobLock->execute([':id' => (int)$job['id'], ':lock_token' => (string)$job['lock_token']]);
+                    if (!$jobLock->fetchColumn()
+                        || !apiDomainAutomationCancelArchivedCloudJob($pdo, $job, $requestId)) {
+                        $pdo->rollBack();
+                        return false;
+                    }
+                    $pdo->commit();
+                    return false;
+                }
                 $stats = $pdo->prepare('SELECT COALESCE(SUM(ok_count),0)
                     FROM cainiao_api_domain_stats WHERE domain_pool_id=:id');
                 $stats->execute([':id' => $poolId]);
                 $lifetimeAccess = max((int)($pool['access_count'] ?? 0), (int)$stats->fetchColumn());
                 $allowed = $pool
+                    && (string)($pool['origin'] ?? '') === 'aws_auto'
                     && (string)$pool['lifecycle_status'] === 'cleanup_pending'
                     && (int)$pool['cleanup_protected'] === 0
                     && (int)$pool['pinned'] === 0
@@ -3734,21 +4017,70 @@ if (!function_exists('apiDomainAutomationArchiveCloudResource')) {
                     return false;
                 }
             } else {
-                // 尚未绑定池节点时没有 pool 行，resource 作为第一把锁。
-                $resourceLock = $pdo->prepare('SELECT id FROM cainiao_api_domain_cloud_resource
-                    WHERE id=:id FOR UPDATE');
+                // 尚未绑定池节点时没有 pool 行，resource 作为第一把锁；只有
+                // 明确的管理员删除标记才允许把未找到的云资源归档。
+                $resourceLock = $pdo->prepare('SELECT id,delete_requested_at,workflow_state
+                    FROM cainiao_api_domain_cloud_resource WHERE id=:id FOR UPDATE');
                 $resourceLock->execute([':id' => (int)$job['resource_id']]);
-                if (!$resourceLock->fetchColumn()) {
+                $resourceRow = $resourceLock->fetch(PDO::FETCH_ASSOC);
+                if (!$resourceRow) {
                     $pdo->rollBack();
+                    return false;
+                }
+                if ((string)($resourceRow['workflow_state'] ?? '') === 'archived') {
+                    $jobLock = $pdo->prepare("SELECT id FROM cainiao_api_domain_cloud_job
+                        WHERE id=:id AND status='running' AND lock_token=:lock_token FOR UPDATE");
+                    $jobLock->execute([':id' => (int)$job['id'], ':lock_token' => (string)$job['lock_token']]);
+                    if (!$jobLock->fetchColumn()
+                        || !apiDomainAutomationCancelArchivedCloudJob($pdo, $job, $requestId)) {
+                        $pdo->rollBack();
+                        return false;
+                    }
+                    $pdo->commit();
+                    return false;
+                }
+                if (empty($resourceRow['delete_requested_at'])) {
+                    $jobLock = $pdo->prepare("SELECT id FROM cainiao_api_domain_cloud_job
+                        WHERE id=:id AND status='running' AND lock_token=:lock_token FOR UPDATE");
+                    $jobLock->execute([':id' => (int)$job['id'], ':lock_token' => (string)$job['lock_token']]);
+                    if (!$jobLock->fetchColumn()) {
+                        $pdo->rollBack();
+                        return false;
+                    }
+                    $pdo->prepare("UPDATE cainiao_api_domain_cloud_job SET
+                            status='failed',lock_token='',locked_at=NULL,last_error_code='cleanup_marker_missing',
+                            last_aws_request_id=:request_id,finished_at=:finished_at WHERE id=:id")->execute([
+                        ':request_id' => apiDomainAutomationLimitText($requestId, 128),
+                        ':finished_at' => $nowText, ':id' => (int)$job['id'],
+                    ]);
+                    $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
+                            workflow_state='cleanup_failed',next_action_at=NULL,
+                            last_error_code='cleanup_marker_missing',retry_count=retry_count+1 WHERE id=:id")->execute([
+                        ':id' => (int)$job['resource_id'],
+                    ]);
+                    $pdo->commit();
                     return false;
                 }
             }
             if ($poolId > 0) {
-                $resourceLock = $pdo->prepare('SELECT id FROM cainiao_api_domain_cloud_resource
+                $resourceLock = $pdo->prepare('SELECT id,workflow_state FROM cainiao_api_domain_cloud_resource
                     WHERE id=:id FOR UPDATE');
                 $resourceLock->execute([':id' => (int)$job['resource_id']]);
-                if (!$resourceLock->fetchColumn()) {
+                $resourceFinal = $resourceLock->fetch(PDO::FETCH_ASSOC);
+                if (!$resourceFinal) {
                     $pdo->rollBack();
+                    return false;
+                }
+                if ((string)($resourceFinal['workflow_state'] ?? '') === 'archived') {
+                    $jobLock = $pdo->prepare("SELECT id FROM cainiao_api_domain_cloud_job
+                        WHERE id=:id AND status='running' AND lock_token=:lock_token FOR UPDATE");
+                    $jobLock->execute([':id' => (int)$job['id'], ':lock_token' => (string)$job['lock_token']]);
+                    if (!$jobLock->fetchColumn()
+                        || !apiDomainAutomationCancelArchivedCloudJob($pdo, $job, $requestId)) {
+                        $pdo->rollBack();
+                        return false;
+                    }
+                    $pdo->commit();
                     return false;
                 }
             }
@@ -3759,6 +4091,8 @@ if (!function_exists('apiDomainAutomationArchiveCloudResource')) {
                 $pdo->rollBack();
                 return false;
             }
+            // 归档前清掉同一资源的其它排队作业，保留当前租约用于完成账本收口。
+            apiDomainAutomationCancelResourceJobs($pdo, (int)$job['resource_id'], (int)$job['id']);
             $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
                     workflow_state='archived',provider_status='Deleted',provider_enabled=0,
                     distribution_etag='',next_action_at=NULL,last_error_code='',
@@ -3792,6 +4126,155 @@ if (!function_exists('apiDomainAutomationArchiveCloudResource')) {
     }
 }
 
+if (!function_exists('apiDomainAutomationHandleDeletionMarker')) {
+    /**
+     * worker 领取普通作业后发现管理员已请求删除时的收口逻辑。
+     * 不再执行创建、探针或正常回写，而是取消当前租约并把已有分配转入
+     * 禁用／轮询／删除链；没有分配的 slot 直接归档。
+     */
+    function apiDomainAutomationHandleDeletionMarker(
+        PDO $pdo,
+        array $job,
+        array $context
+    ): array {
+        $pdo->beginTransaction();
+        try {
+            $ledger = apiDomainAutomationLockCloudLedger($pdo, $context, $job);
+            if (!$ledger) {
+                $pdo->rollBack();
+                return ['status' => 'lease_lost'];
+            }
+            if (!empty($ledger['resource_archived'])) {
+                // 迟到的删除标记作业不能再次排清理或改写已归档资源。
+                if (!apiDomainAutomationCancelArchivedCloudJob($pdo, $job)) {
+                    $pdo->rollBack();
+                    return ['status' => 'lease_lost'];
+                }
+                $pdo->commit();
+                return ['status' => 'cancelled', 'resource_archived' => 1];
+            }
+            $resource = is_array($ledger['resource'] ?? null) ? $ledger['resource'] : [];
+            $pool = is_array($ledger['pool'] ?? null) ? $ledger['pool'] : null;
+            $resourceId = (int)$job['resource_id'];
+            // 取消同资源其它未开始作业；其它 running 租约只打标，避免中断外部请求。
+            apiDomainAutomationCancelResourceJobs($pdo, $resourceId, (int)$job['id']);
+            $pdo->prepare("UPDATE cainiao_api_domain_cloud_job SET
+                    status='cancelled',cancel_requested=1,lock_token='',locked_at=NULL,
+                    finished_at=:finished_at,last_error_code='manual_delete_requested'
+                WHERE id=:id AND status='running' AND lock_token=:lock_token")->execute([
+                ':finished_at' => apiDomainAutomationDateText(apiDomainAutomationNow()),
+                ':id' => (int)$job['id'], ':lock_token' => (string)$job['lock_token'],
+            ]);
+
+            $distributionId = trim((string)($resource['distribution_id'] ?? ''));
+            if ($distributionId === '') {
+                $running = $pdo->prepare("SELECT COUNT(*) FROM cainiao_api_domain_cloud_job
+                    WHERE resource_id=:resource_id AND status='running'");
+                $running->execute([':resource_id' => $resourceId]);
+                if ((int)$running->fetchColumn() === 0) {
+                    apiDomainAutomationArchiveRequestedResource(
+                        $pdo,
+                        $resource,
+                        $pool,
+                        apiDomainAutomationDateText(apiDomainAutomationNow())
+                    );
+                    $pdo->commit();
+                    if (function_exists('configDeliveryInvalidateAndSync')) {
+                        configDeliveryInvalidateAndSync($pdo);
+                    }
+                    return [
+                        'status' => 'succeeded',
+                        'archived' => 1,
+                        'cancelled' => 1,
+                    ];
+                }
+                $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
+                        workflow_state='pending_create',next_action_at=NULL
+                    WHERE id=:id")->execute([':id' => $resourceId]);
+                $pdo->commit();
+                return ['status' => 'cancelled', 'cleanup_pending' => 1];
+            }
+
+            $running = $pdo->prepare("SELECT COUNT(*) FROM cainiao_api_domain_cloud_job
+                WHERE resource_id=:resource_id AND status='running'");
+            $running->execute([':resource_id' => $resourceId]);
+            if ((int)$running->fetchColumn() > 0) {
+                $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
+                        workflow_state=CASE
+                            WHEN LOWER(provider_status)='deployed' AND provider_enabled=1 THEN 'disable_pending'
+                            WHEN LOWER(provider_status)='deployed' THEN 'delete_pending'
+                            ELSE 'deploying' END,
+                        next_action_at=NULL
+                    WHERE id=:id")->execute([':id' => $resourceId]);
+                $pdo->commit();
+                return ['status' => 'cancelled', 'cleanup_pending' => 1];
+            }
+
+            $providerEnabled = (int)($resource['provider_enabled'] ?? 0) === 1;
+            $providerStatus = strtolower(trim((string)($resource['provider_status'] ?? '')));
+            // CloudFront 仍在 InProgress 时先轮询，只有明确 Deployed 才能停用或删除。
+            if ($providerStatus === 'deployed' && $providerEnabled) {
+                $jobType = 'disable';
+                $nextState = 'disable_pending';
+            } elseif ($providerStatus === 'deployed') {
+                $jobType = 'delete';
+                $nextState = 'delete_pending';
+            } else {
+                $jobType = 'poll_deploy';
+                $nextState = 'deploying';
+            }
+            $now = apiDomainAutomationNow();
+            $queueAt = $jobType === 'delete' ? $now->modify('+24 hours') : $now;
+            $newJobId = apiDomainAutomationQueueCloudJob(
+                $pdo,
+                $resourceId,
+                (int)$resource['group_id'],
+                (int)$resource['cloud_account_id'],
+                $jobType,
+                $queueAt
+            );
+            $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
+                    workflow_state=:workflow_state,next_action_at=:next_action_at,
+                    delete_not_before=IF(:is_delete=1,:delete_not_before_at,delete_not_before)
+                WHERE id=:id")->execute([
+                ':workflow_state' => $nextState,
+                ':next_action_at' => apiDomainAutomationDateText($queueAt),
+                ':delete_not_before_at' => apiDomainAutomationDateText($queueAt),
+                ':is_delete' => $jobType === 'delete' ? 1 : 0,
+                ':id' => $resourceId,
+            ]);
+            if ($pool && (int)($pool['id'] ?? 0) > 0) {
+                $poolState = $jobType === 'disable' ? 'queued'
+                    : ($jobType === 'delete' ? 'delete_pending' : 'queued');
+                $pdo->prepare("UPDATE cainiao_api_domain_pool SET cloud_cleanup_state=:state
+                    WHERE id=:id AND lifecycle_status='cleanup_pending'")
+                    ->execute([':state' => $poolState, ':id' => (int)$pool['id']]);
+            }
+            $pdo->commit();
+            return [
+                'status' => 'cancelled',
+                'cleanup_pending' => 1,
+                'job_id' => $newJobId,
+                'workflow_state' => $nextState,
+            ];
+        } catch (Throwable $failure) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $failure;
+        }
+    }
+}
+
+if (!function_exists('apiDomainAutomationIsDeletionRequested')) {
+    /** 在外部请求返回后重新读取人工删除标记，处理与后台操作并发的竞态。 */
+    function apiDomainAutomationIsDeletionRequested(PDO $pdo, int $resourceId): bool
+    {
+        $stmt = $pdo->prepare('SELECT delete_requested_at
+            FROM cainiao_api_domain_cloud_resource WHERE id=:id LIMIT 1');
+        $stmt->execute([':id' => $resourceId]);
+        return trim((string)$stmt->fetchColumn()) !== '';
+    }
+}
+
 if (!function_exists('apiDomainAutomationExecuteCloudJob')) {
     /** 执行一个已领取作业；每个分支最多发起固定数量的 AWS/Probe 请求。 */
     function apiDomainAutomationExecuteCloudJob(
@@ -3801,7 +4284,30 @@ if (!function_exists('apiDomainAutomationExecuteCloudJob')) {
         ?callable $probeTransport = null
     ): array {
         $context = apiDomainAutomationLoadCloudExecutionContext($pdo, (int)$job['resource_id']);
+        if ((string)($context['workflow_state'] ?? '') === 'archived') {
+            // worker 领取后资源可能已被归档；先收口当前租约，禁止任何外部请求。
+            $ownTransaction = !$pdo->inTransaction();
+            if ($ownTransaction) $pdo->beginTransaction();
+            try {
+                if (!apiDomainAutomationCancelArchivedCloudJob($pdo, $job)) {
+                    if ($ownTransaction) $pdo->rollBack();
+                    return ['status' => 'lease_lost'];
+                }
+                if ($ownTransaction) $pdo->commit();
+                return ['status' => 'cancelled', 'resource_archived' => 1];
+            } catch (Throwable $failure) {
+                if ($ownTransaction && $pdo->inTransaction()) $pdo->rollBack();
+                throw $failure;
+            }
+        }
         $cleanupJob = in_array((string)$job['job_type'], ['disable', 'poll_disable', 'delete'], true);
+        // create／poll_deploy／probe 仍需把已经发出的外部请求安全落账，
+        // 各分支在持有账本锁后再读取 marker 并转入清理；未知普通作业可直接收口。
+        if (!$cleanupJob
+            && !in_array((string)$job['job_type'], ['create', 'poll_deploy', 'probe'], true)
+            && !empty($context['delete_requested_at'])) {
+            return apiDomainAutomationHandleDeletionMarker($pdo, $job, $context);
+        }
         if (!$cleanupJob && !empty($context['group_deleted_at'])) {
             throw new ApiDomainAutomationException('group_archived');
         }
@@ -3874,12 +4380,23 @@ if (!function_exists('apiDomainAutomationExecuteCloudJob')) {
             apiDomainAutomationAssertOwnedDistributionResult($context, $result);
             $pdo->beginTransaction();
             try {
-                if (!apiDomainAutomationLockCloudLedger($pdo, $context, $job)) {
+                $ledger = apiDomainAutomationLockCloudLedger($pdo, $context, $job);
+                if (!$ledger) {
                     $pdo->rollBack();
                     return ['status' => 'lease_lost'];
                 }
+                if (!empty($ledger['resource_archived'])) {
+                    // CloudFront 回执晚于归档时只关闭当前 create 租约，不落账也不排 poll。
+                    if (!apiDomainAutomationCancelArchivedCloudJob($pdo, $job, (string)($result['request_id'] ?? ''))) {
+                        $pdo->rollBack();
+                        return ['status' => 'lease_lost'];
+                    }
+                    $pdo->commit();
+                    return ['status' => 'cancelled', 'resource_archived' => 1];
+                }
                 $stored = apiDomainAutomationStoreDistributionResult($pdo, (int)$job['resource_id'], $result);
-                $next = apiDomainAutomationNow()->modify('+60 seconds');
+                $deletionRequested = !empty($ledger['resource']['delete_requested_at']);
+                $next = $deletionRequested ? apiDomainAutomationNow() : apiDomainAutomationNow()->modify('+60 seconds');
                 $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
                         workflow_state='deploying',next_action_at=:next_action_at
                     WHERE id=:id")->execute([
@@ -3898,7 +4415,12 @@ if (!function_exists('apiDomainAutomationExecuteCloudJob')) {
                     $next
                 );
                 $pdo->commit();
-                return ['status' => 'succeeded', 'created' => 1, 'request_id' => $stored['request_id']];
+                return [
+                    'status' => 'succeeded',
+                    'created' => 1,
+                    'request_id' => $stored['request_id'],
+                    'deletion_pending' => $deletionRequested ? 1 : 0,
+                ];
             } catch (Throwable $failure) {
                 if ($pdo->inTransaction()) $pdo->rollBack();
                 throw $failure;
@@ -3909,13 +4431,60 @@ if (!function_exists('apiDomainAutomationExecuteCloudJob')) {
             $result = $adapter->getDistribution((string)$context['distribution_id']);
             $pdo->beginTransaction();
             try {
-                if (!apiDomainAutomationLockCloudLedger($pdo, $context, $job)) {
+                $ledger = apiDomainAutomationLockCloudLedger($pdo, $context, $job);
+                if (!$ledger) {
                     $pdo->rollBack();
                     return ['status' => 'lease_lost'];
                 }
+                if (!empty($ledger['resource_archived'])) {
+                    // 部署轮询晚于归档时只关闭当前租约，禁止写回分发状态或重新排队。
+                    if (!apiDomainAutomationCancelArchivedCloudJob($pdo, $job, (string)($result['request_id'] ?? ''))) {
+                        $pdo->rollBack();
+                        return ['status' => 'lease_lost'];
+                    }
+                    $pdo->commit();
+                    return ['status' => 'cancelled', 'resource_archived' => 1];
+                }
                 $stored = apiDomainAutomationStoreDistributionResult($pdo, (int)$job['resource_id'], $result);
+                $deletionRequested = !empty($ledger['resource']['delete_requested_at']);
                 $deployed = strcasecmp((string)$stored['provider_status'], 'Deployed') === 0
                     && (int)$stored['provider_enabled'] === 1;
+                // 删除标记下先等 CloudFront 到达 Deployed；不要再排 probe，
+                // 否则探针回执会把资源重新写入 API 池。
+                if ($deletionRequested
+                    && strcasecmp((string)$stored['provider_status'], 'Deployed') === 0) {
+                    $deleteNow = apiDomainAutomationNow();
+                    $cleanupJobType = (int)$stored['provider_enabled'] === 1 ? 'disable' : 'delete';
+                    $cleanupState = $cleanupJobType === 'disable' ? 'disable_pending' : 'delete_pending';
+                    $cleanupQueueAt = $cleanupJobType === 'delete'
+                        ? $deleteNow->modify('+24 hours')
+                        : $deleteNow;
+                    if (!apiDomainAutomationFinishCloudJob($pdo, $job)) {
+                        $pdo->rollBack();
+                        return ['status' => 'lease_lost'];
+                    }
+                    apiDomainAutomationQueueCloudJob(
+                        $pdo,
+                        (int)$job['resource_id'],
+                        (int)$context['group_id'],
+                        (int)$context['cloud_account_id'],
+                        $cleanupJobType,
+                        $cleanupQueueAt
+                    );
+                    $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
+                            workflow_state=:workflow_state,
+                            delete_not_before=IF(:is_delete=1,:delete_not_before_at,delete_not_before),
+                            next_action_at=:next_action_at
+                        WHERE id=:id")->execute([
+                        ':workflow_state' => $cleanupState,
+                        ':is_delete' => $cleanupJobType === 'delete' ? 1 : 0,
+                    ':next_action_at' => apiDomainAutomationDateText($cleanupQueueAt),
+                    ':delete_not_before_at' => apiDomainAutomationDateText($cleanupQueueAt),
+                        ':id' => (int)$job['resource_id'],
+                    ]);
+                    $pdo->commit();
+                    return ['status' => 'succeeded', 'deployed' => 1, 'deletion_pending' => 1];
+                }
                 if (!$deployed) {
                     $rescheduled = apiDomainAutomationRescheduleCloudJob(
                         $pdo,
@@ -3994,10 +4563,20 @@ if (!function_exists('apiDomainAutomationExecuteCloudJob')) {
                     $pdo->rollBack();
                     return ['status' => 'lease_lost'];
                 }
+                if (!empty($ledger['resource_archived'])) {
+                    // 禁用回执晚于归档时只关闭当前租约，不再回写资源或池状态。
+                    if (!apiDomainAutomationCancelArchivedCloudJob($pdo, $job, (string)($result['request_id'] ?? ''))) {
+                        $pdo->rollBack();
+                        return ['status' => 'lease_lost'];
+                    }
+                    $pdo->commit();
+                    return ['status' => 'cancelled', 'resource_archived' => 1];
+                }
                 if (!apiDomainAutomationLockedCleanupAllowed(
                     $pdo,
                     (int)$ledger['pool_id'],
-                    is_array($ledger['pool'] ?? null) ? $ledger['pool'] : []
+                    is_array($ledger['pool'] ?? null) ? $ledger['pool'] : [],
+                    (int)$job['resource_id']
                 )) {
                     $pdo->rollBack();
                     $cancelled = apiDomainAutomationCancelCleanupJob($pdo, $job, $context, false);
@@ -4059,10 +4638,20 @@ if (!function_exists('apiDomainAutomationExecuteCloudJob')) {
                         $pdo->rollBack();
                         return ['status' => 'lease_lost'];
                     }
+                    if (!empty($ledger['resource_archived'])) {
+                        // 停用轮询晚于归档时只关闭当前租约，不保存迟到回执或重试。
+                        if (!apiDomainAutomationCancelArchivedCloudJob($pdo, $job, (string)($result['request_id'] ?? ''))) {
+                            $pdo->rollBack();
+                            return ['status' => 'lease_lost'];
+                        }
+                        $pdo->commit();
+                        return ['status' => 'cancelled', 'resource_archived' => 1];
+                    }
                     if (!apiDomainAutomationLockedCleanupAllowed(
                         $pdo,
                         (int)$ledger['pool_id'],
-                        is_array($ledger['pool'] ?? null) ? $ledger['pool'] : []
+                        is_array($ledger['pool'] ?? null) ? $ledger['pool'] : [],
+                        (int)$job['resource_id']
                     )) {
                         $pdo->rollBack();
                         $cancelled = apiDomainAutomationCancelCleanupJob(
@@ -4099,10 +4688,20 @@ if (!function_exists('apiDomainAutomationExecuteCloudJob')) {
                     $pdo->rollBack();
                     return ['status' => 'lease_lost'];
                 }
+                if (!empty($ledger['resource_archived'])) {
+                    // 停用完成回执晚于归档时只关闭当前租约，不再改写删除时间或批次。
+                    if (!apiDomainAutomationCancelArchivedCloudJob($pdo, $job, (string)($result['request_id'] ?? ''))) {
+                        $pdo->rollBack();
+                        return ['status' => 'lease_lost'];
+                    }
+                    $pdo->commit();
+                    return ['status' => 'cancelled', 'resource_archived' => 1];
+                }
                 if (!apiDomainAutomationLockedCleanupAllowed(
                     $pdo,
                     (int)$ledger['pool_id'],
-                    is_array($ledger['pool'] ?? null) ? $ledger['pool'] : []
+                    is_array($ledger['pool'] ?? null) ? $ledger['pool'] : [],
+                    (int)$job['resource_id']
                 )) {
                     $pdo->rollBack();
                     $cancelled = apiDomainAutomationCancelCleanupJob($pdo, $job, $context, false);
@@ -4174,6 +4773,15 @@ if (!function_exists('apiDomainAutomationExecuteCloudJob')) {
                     $pdo->rollBack();
                     return ['status' => 'lease_lost'];
                 }
+                if (!empty($ledger['resource_archived'])) {
+                    // 恢复回执晚于归档时只关闭当前租约，不重新启用资源或池节点。
+                    if (!apiDomainAutomationCancelArchivedCloudJob($pdo, $job, (string)($result['request_id'] ?? ''))) {
+                        $pdo->rollBack();
+                        return ['status' => 'lease_lost'];
+                    }
+                    $pdo->commit();
+                    return ['status' => 'cancelled', 'resource_archived' => 1];
+                }
                 $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
                         workflow_state='restoring',provider_status=:provider_status,
                         provider_enabled=1,distribution_etag=:etag,delete_not_before=NULL,
@@ -4223,6 +4831,15 @@ if (!function_exists('apiDomainAutomationExecuteCloudJob')) {
                         $pdo->rollBack();
                         return ['status' => 'lease_lost'];
                     }
+                    if (!empty($ledger['resource_archived'])) {
+                        // 恢复轮询晚于归档时只关闭当前租约，不保存回执或重新排队。
+                        if (!apiDomainAutomationCancelArchivedCloudJob($pdo, $job, (string)($result['request_id'] ?? ''))) {
+                            $pdo->rollBack();
+                            return ['status' => 'lease_lost'];
+                        }
+                        $pdo->commit();
+                        return ['status' => 'cancelled', 'resource_archived' => 1];
+                    }
                     apiDomainAutomationStoreDistributionResult($pdo, (int)$job['resource_id'], $result);
                     $rescheduled = apiDomainAutomationRescheduleCloudJob(
                         $pdo,
@@ -4246,6 +4863,15 @@ if (!function_exists('apiDomainAutomationExecuteCloudJob')) {
                 if (!$ledger) {
                     $pdo->rollBack();
                     return ['status' => 'lease_lost'];
+                }
+                if (!empty($ledger['resource_archived'])) {
+                    // 恢复完成回执晚于归档时只关闭当前租约，不回写 ready 或启用池节点。
+                    if (!apiDomainAutomationCancelArchivedCloudJob($pdo, $job, (string)($result['request_id'] ?? ''))) {
+                        $pdo->rollBack();
+                        return ['status' => 'lease_lost'];
+                    }
+                    $pdo->commit();
+                    return ['status' => 'cancelled', 'resource_archived' => 1];
                 }
                 apiDomainAutomationStoreDistributionResult($pdo, (int)$job['resource_id'], $result);
                 $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
@@ -4314,9 +4940,23 @@ if (!function_exists('apiDomainAutomationExecuteCloudJob')) {
                     $pdo->rollBack();
                     return ['status' => 'lease_lost'];
                 }
+                if (!empty($ledger['resource_archived'])) {
+                    // 删除作业迟到时资源已归档，只关闭当前租约并跳过重复 AWS 删除。
+                    if (!apiDomainAutomationCancelArchivedCloudJob($pdo, $job)) {
+                        $pdo->rollBack();
+                        return ['status' => 'lease_lost'];
+                    }
+                    $pdo->commit();
+                    return ['status' => 'cancelled', 'resource_archived' => 1];
+                }
                 $poolId = (int)$ledger['pool_id'];
                 $pool = is_array($ledger['pool'] ?? null) ? $ledger['pool'] : [];
-                if (!apiDomainAutomationLockedCleanupAllowed($pdo, $poolId, $pool)) {
+                if (!apiDomainAutomationLockedCleanupAllowed(
+                    $pdo,
+                    $poolId,
+                    $pool,
+                    (int)$job['resource_id']
+                )) {
                     $pdo->rollBack();
                     $cancelled = apiDomainAutomationCancelCleanupJob($pdo, $job, $context, false);
                     return ['status' => $cancelled ? 'cancelled_for_access' : 'lease_lost'];
@@ -4619,6 +5259,474 @@ if (!function_exists('apiDomainAutomationRetryCloudResource')) {
     }
 }
 
+if (!function_exists('apiDomainAutomationArchiveRequestedResource')) {
+    /**
+     * 归档尚未创建 CloudFront 的资源。
+     *
+     * 资源账本和批次记录保留为历史事实，只取消未开始作业，不删除数据库行。
+     * 调用方必须已经在同一事务中锁定 resource、pool（如有）和相关批次。
+     */
+    function apiDomainAutomationArchiveRequestedResource(
+        PDO $pdo,
+        array $resource,
+        ?array $pool,
+        string $nowText
+    ): void {
+        $providerStatus = trim((string)($resource['distribution_id'] ?? '')) === ''
+            ? 'Cancelled'
+            : 'Deleted';
+        $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
+                workflow_state='archived',provider_status=:provider_status,provider_enabled=0,
+                distribution_etag='',next_action_at=NULL,delete_not_before=NULL,
+                last_error_code='manual_delete_archived',archived_at=:archived_at
+            WHERE id=:id")->execute([
+            ':provider_status' => $providerStatus,
+            ':archived_at' => $nowText,
+                ':id' => (int)$resource['id'],
+            ]);
+        if ($pool && (int)($pool['id'] ?? 0) > 0) {
+            $pdo->prepare("UPDATE cainiao_api_domain_pool SET enabled=0,
+                    lifecycle_status='archived',cloud_cleanup_state='deleted',
+                    lifecycle_updated_at=:updated_at,archived_at=:archived_at,
+                    cleanup_reason='manual_resource_delete'
+                WHERE id=:id AND origin='aws_auto'")->execute([
+                    ':updated_at' => $nowText,
+                    ':archived_at' => $nowText,
+                    ':id' => (int)$pool['id'],
+                ]);
+        }
+        $pdo->prepare('UPDATE cainiao_api_domain_automation_batch
+                SET archived_count=archived_count+1 WHERE id=:id')
+            ->execute([':id' => (int)$resource['batch_id']]);
+    }
+}
+
+if (!function_exists('apiDomainAutomationCancelResourceJobs')) {
+    /**
+     * 取消资源尚未开始的作业，并给正在执行的租约设置取消标记。
+     * 运行中的 AWS 请求由当前 worker 自然收尾，回写前会再次读取删除标记。
+     */
+    function apiDomainAutomationCancelResourceJobs(PDO $pdo, int $resourceId, ?int $keepJobId = null): array
+    {
+        $nowText = apiDomainAutomationDateText(apiDomainAutomationNow());
+        $params = [':resource_id' => $resourceId, ':finished_at' => $nowText];
+        $keepClause = '';
+        if ($keepJobId !== null && $keepJobId > 0) {
+            $keepClause = ' AND id<>:keep_job_id';
+            $params[':keep_job_id'] = $keepJobId;
+        }
+        $cancelPending = $pdo->prepare("UPDATE cainiao_api_domain_cloud_job SET
+                status='cancelled',cancel_requested=1,lock_token='',locked_at=NULL,
+                finished_at=:finished_at,last_error_code='manual_delete_requested'
+            WHERE resource_id=:resource_id {$keepClause}
+              AND status IN ('pending','retry_wait')");
+        $cancelPending->execute($params);
+
+        $runningParams = [':resource_id' => $resourceId];
+        $runningKeepClause = '';
+        if ($keepJobId !== null && $keepJobId > 0) {
+            $runningKeepClause = ' AND id<>:keep_job_id';
+            $runningParams[':keep_job_id'] = $keepJobId;
+        }
+        $cancelRunning = $pdo->prepare("UPDATE cainiao_api_domain_cloud_job SET
+                cancel_requested=1,last_error_code='manual_delete_requested'
+            WHERE resource_id=:resource_id {$runningKeepClause} AND status='running'");
+        $cancelRunning->execute($runningParams);
+
+        $running = $pdo->prepare("SELECT COUNT(*) FROM cainiao_api_domain_cloud_job
+            WHERE resource_id=:resource_id AND status='running'");
+        $running->execute([':resource_id' => $resourceId]);
+        return [
+            'cancelled_pending' => (int)$cancelPending->rowCount(),
+            'cancel_requested_running' => (int)$cancelRunning->rowCount(),
+            'running_count' => (int)$running->fetchColumn(),
+        ];
+    }
+}
+
+if (!function_exists('apiDomainAutomationRequestCloudResourceDeletion')) {
+    /**
+     * 将一个 CloudFront 资源提交到人工删除状态机。
+     *
+     * pending_create 且没有运行作业的资源直接本地归档；已有分配的资源统一
+     * 进入 disable -> poll_disable -> delete 队列。所有云端操作仍由 worker 执行，
+     * 所有权由 CallerReference、resource token 和适配器二次核对。
+     *
+     * 调用方需在事务中持有资源对应的 pool（如有）和 resource 行锁。
+     */
+    function apiDomainAutomationRequestCloudResourceDeletion(
+        PDO $pdo,
+        array $resource,
+        ?array $pool,
+        array $group,
+        string $triggerType = 'manual'
+    ): array {
+        if (!in_array($triggerType, ['manual', 'scheduled', 'retry'], true)) {
+            throw new InvalidArgumentException('资源删除触发类型错误');
+        }
+        $resourceId = (int)($resource['id'] ?? 0);
+        if ($resourceId <= 0) throw new RuntimeException('CloudFront 资源账本不存在');
+        $state = (string)($resource['workflow_state'] ?? 'pending_create');
+        $wasDeletionRequested = !empty($resource['delete_requested_at']);
+        if ($state === 'archived' || !empty($resource['archived_at'])) {
+            return [
+                'resource_id' => $resourceId,
+                'status' => 'already_archived',
+                'workflow_state' => 'archived',
+                'domain_pool_id' => (int)($resource['domain_pool_id'] ?? 0),
+                'message' => '资源已经归档',
+            ];
+        }
+
+        $poolId = (int)($resource['domain_pool_id'] ?? 0);
+        if ($poolId > 0 && (!$pool || (int)($pool['id'] ?? 0) !== $poolId)) {
+            throw new RuntimeException('资源关联的 API 节点不存在');
+        }
+        if ($poolId > 0 && (string)($pool['origin'] ?? '') !== 'aws_auto') {
+            throw new RuntimeException('仅允许删除 AWS 自动生成的 CloudFront 节点');
+        }
+
+        // 访问、固定、预留和最低健康集合都是删除门禁；显式删除也不能越过。
+        if ($pool) {
+            $protected = (int)($pool['cleanup_protected'] ?? 1) === 1
+                || (int)($pool['pinned'] ?? 0) === 1
+                || (int)($pool['reserved'] ?? 0) === 1;
+            $accessStmt = $pdo->prepare('SELECT COALESCE(SUM(ok_count),0)
+                FROM cainiao_api_domain_stats WHERE domain_pool_id=:id');
+            $accessStmt->execute([':id' => $poolId]);
+            $lifetimeAccess = max(
+                (int)($pool['access_count'] ?? 0),
+                (int)$accessStmt->fetchColumn()
+            );
+            if ($protected || $lifetimeAccess > 0) {
+                return [
+                    'resource_id' => $resourceId,
+                    'status' => $protected ? 'protected' : 'skipped',
+                    'workflow_state' => $state,
+                    'domain_pool_id' => $poolId,
+                    'message' => $protected ? '节点属于保护或预留集合' : '节点已有真实成功访问，保留节点',
+                ];
+            }
+
+            $minimum = max(1, (int)($group['minimum_healthy_count'] ?? 1));
+            $healthyCount = apiDomainAutomationHealthyEffectiveCount($pdo, (int)$resource['group_id']);
+            if ($healthyCount < $minimum) {
+                return [
+                    'resource_id' => $resourceId,
+                    'status' => 'protected',
+                    'workflow_state' => $state,
+                    'domain_pool_id' => $poolId,
+                    'message' => '删除后会低于池组最低健康数',
+                ];
+            }
+            $gate = apiDomainAutomationEffectiveIsolationGate(
+                $pdo,
+                $poolId,
+                (string)($group['usage_scope'] ?? 'config'),
+                $minimum
+            );
+            if (empty($gate['allowed'])) {
+                return [
+                    'resource_id' => $resourceId,
+                    'status' => 'protected',
+                    'workflow_state' => $state,
+                    'domain_pool_id' => $poolId,
+                    'message' => '删除后会低于当前用途保底数',
+                ];
+            }
+        }
+
+        $now = apiDomainAutomationNow();
+        $nowText = apiDomainAutomationDateText($now);
+        $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
+                delete_requested_at=COALESCE(delete_requested_at,:requested_at),
+                last_error_code='manual_delete_requested',next_action_at=:next_action_at
+            WHERE id=:id")->execute([
+                ':requested_at' => $nowText,
+                ':next_action_at' => $nowText,
+                ':id' => $resourceId,
+            ]);
+
+        if ($pool) {
+            $pdo->prepare("UPDATE cainiao_api_domain_pool SET enabled=0,
+                    lifecycle_status='cleanup_pending',cleanup_requested_at=:requested_at,
+                    lifecycle_updated_at=:updated_at,cleanup_reason='manual_resource_delete',
+                    cloud_cleanup_state='queued'
+                WHERE id=:id AND origin='aws_auto'")->execute([
+                    ':requested_at' => $nowText,
+                    ':updated_at' => $nowText,
+                    ':id' => $poolId,
+                ]);
+        }
+
+        $jobSummary = apiDomainAutomationCancelResourceJobs($pdo, $resourceId);
+        $distributionId = trim((string)($resource['distribution_id'] ?? ''));
+        if ($distributionId === '') {
+            // 运行中的 create 可能已经向 AWS 发出请求；保留 marker，让其回执
+            // 进入下方清理队列。没有运行作业时可立即归档本地 slot。
+            if ((int)$jobSummary['running_count'] === 0) {
+                apiDomainAutomationArchiveRequestedResource($pdo, $resource, $pool, $nowText);
+                return [
+                    'resource_id' => $resourceId,
+                    'status' => 'archived',
+                    'workflow_state' => 'archived',
+                    'domain_pool_id' => $poolId,
+                    'message' => '尚未创建 CloudFront，已取消作业并归档',
+                ];
+            }
+            return [
+                'resource_id' => $resourceId,
+                'status' => 'queued',
+                'workflow_state' => 'pending_create',
+                'domain_pool_id' => $poolId,
+                'message' => '创建作业正在收尾，已标记删除并等待回执',
+            ];
+        }
+
+        $activeStmt = $pdo->prepare("SELECT job_type,status FROM cainiao_api_domain_cloud_job
+            WHERE resource_id=:resource_id AND status IN ('pending','running','retry_wait')
+            ORDER BY id ASC");
+        $activeStmt->execute([':resource_id' => $resourceId]);
+        $activeJobs = $activeStmt->fetchAll(PDO::FETCH_ASSOC);
+        if ($activeJobs) {
+            // 当前 running 作业收到 cancel_requested 后由 worker 回写；不要重复入队。
+            $currentState = in_array($state, ['disable_pending', 'disabling', 'delete_pending'], true)
+                ? $state
+                : 'disable_pending';
+            $pdo->prepare('UPDATE cainiao_api_domain_cloud_resource SET workflow_state=:state
+                WHERE id=:id')->execute([':state' => $currentState, ':id' => $resourceId]);
+            return [
+                'resource_id' => $resourceId,
+                'status' => $wasDeletionRequested ? 'already_requested' : 'queued',
+                'workflow_state' => $currentState,
+                'domain_pool_id' => $poolId,
+                'message' => '删除已标记，当前作业收尾后继续处理',
+            ];
+        }
+
+        $providerEnabled = (int)($resource['provider_enabled'] ?? 0) === 1;
+        $providerStatus = strtolower(trim((string)($resource['provider_status'] ?? '')));
+        if ($providerStatus === 'deployed' && $providerEnabled) {
+            $jobType = 'disable';
+            $nextState = 'disable_pending';
+        } elseif ($providerStatus === 'deployed') {
+            $jobType = 'delete';
+            $nextState = 'delete_pending';
+        } else {
+            // InProgress 等状态先轮询到 Deployed，随后 marker-aware poll 分支
+            // 会转入 disable/delete，避免对尚未完成部署的分配直接发 DELETE。
+            $jobType = 'poll_deploy';
+            $nextState = 'deploying';
+        }
+        $queueAt = $jobType === 'delete' ? $now->modify('+24 hours') : $now;
+        $jobId = apiDomainAutomationQueueCloudJob(
+            $pdo,
+            $resourceId,
+            (int)$resource['group_id'],
+            (int)$resource['cloud_account_id'],
+            $jobType,
+            $queueAt
+        );
+        $pdo->prepare("UPDATE cainiao_api_domain_cloud_resource SET
+                workflow_state=:workflow_state,next_action_at=:next_action_at,
+                delete_not_before=IF(:job_type='delete',:delete_not_before_at,delete_not_before)
+            WHERE id=:id")->execute([
+                ':workflow_state' => $nextState,
+                ':next_action_at' => apiDomainAutomationDateText($queueAt),
+                ':delete_not_before_at' => apiDomainAutomationDateText($queueAt),
+                ':job_type' => $jobType,
+                ':id' => $resourceId,
+            ]);
+        if ($pool) {
+            $poolState = $jobType === 'disable' ? 'queued'
+                : ($jobType === 'delete' ? 'delete_pending' : 'queued');
+            $pdo->prepare('UPDATE cainiao_api_domain_pool SET cloud_cleanup_state=:state
+                WHERE id=:id AND lifecycle_status=\'cleanup_pending\'')
+                ->execute([':state' => $poolState, ':id' => $poolId]);
+        }
+        return [
+            'resource_id' => $resourceId,
+            'status' => $wasDeletionRequested ? 'already_requested' : 'queued',
+            'workflow_state' => $nextState,
+            'domain_pool_id' => $poolId,
+            'job_id' => $jobId,
+            'message' => '已进入 CloudFront 禁用／删除队列',
+        ];
+    }
+}
+
+if (!function_exists('apiDomainAutomationRequestCloudResourceDeletions')) {
+    /**
+     * 批量提交 CloudFront 资源删除；单个资源也通过 resource_ids=[id] 调用。
+     * 每项独立事务，某个节点被保护不会影响同批其它节点入队。
+     */
+    function apiDomainAutomationRequestCloudResourceDeletions(
+        PDO $pdo,
+        array $resourceIds,
+        string $triggerType = 'manual'
+    ): array {
+        ensureApiDomainAutomationSchema($pdo);
+        if (!in_array($triggerType, ['manual', 'scheduled', 'retry'], true)) {
+            throw new InvalidArgumentException('资源删除触发类型错误');
+        }
+        $normalized = [];
+        foreach ($resourceIds as $value) {
+            $id = apiDomainAutomationPositiveInt(
+                $value,
+                'CloudFront 资源 ID',
+                1,
+                PHP_INT_MAX
+            );
+            $normalized[$id] = $id;
+        }
+        $normalized = array_values($normalized);
+        if (!$normalized) throw new InvalidArgumentException('至少选择一个 CloudFront 资源');
+        if (count($normalized) > 100) throw new InvalidArgumentException('单次最多处理 100 个 CloudFront 资源');
+        sort($normalized, SORT_NUMERIC);
+
+        $lifecycleLock = 'yunzhuru_api_domain_lifecycle';
+        if (!apiDomainAutomationLock($pdo, $lifecycleLock)) {
+            return [
+                'status' => 'skipped', 'queued' => 0, 'archived' => 0,
+                'skipped' => count($normalized), 'protected' => 0,
+                'results' => [], 'message' => '全局生命周期计划正在执行，请稍后重试',
+            ];
+        }
+        $groupLocks = [];
+        $blockedGroupIds = [];
+        $results = [];
+        $distributionChanged = false;
+        try {
+            // 先读取所属组并按升序加 advisory lock，批量删除不会形成交叉锁。
+            $groupIds = [];
+            $lookup = $pdo->prepare('SELECT group_id FROM cainiao_api_domain_cloud_resource
+                WHERE id=:id AND archived_at IS NULL LIMIT 1');
+            foreach ($normalized as $resourceId) {
+                $lookup->execute([':id' => $resourceId]);
+                $groupId = (int)$lookup->fetchColumn();
+                if ($groupId > 0) $groupIds[$groupId] = $groupId;
+            }
+            ksort($groupIds, SORT_NUMERIC);
+            foreach ($groupIds as $groupId) {
+                $lockName = 'yunzhuru_api_auto_group_' . $groupId;
+                if (!apiDomainAutomationLock($pdo, $lockName)) {
+                    $blockedGroupIds[$groupId] = true;
+                    continue;
+                }
+                $groupLocks[$groupId] = $lockName;
+            }
+
+            foreach ($normalized as $resourceId) {
+                $pdo->beginTransaction();
+                try {
+                    // 读取提示后按 group -> pool -> resource 顺序正式加行锁。
+                    $hint = $pdo->prepare('SELECT group_id,domain_pool_id
+                        FROM cainiao_api_domain_cloud_resource WHERE id=:id LIMIT 1');
+                    $hint->execute([':id' => $resourceId]);
+                    $hintRow = $hint->fetch(PDO::FETCH_ASSOC);
+                    if (!$hintRow) {
+                        $pdo->rollBack();
+                        $results[] = [
+                            'resource_id' => $resourceId, 'status' => 'skipped',
+                            'workflow_state' => '', 'domain_pool_id' => 0,
+                            'message' => 'CloudFront 资源账本不存在',
+                        ];
+                        continue;
+                    }
+                    $groupId = (int)$hintRow['group_id'];
+                    if (isset($blockedGroupIds[$groupId])) {
+                        $pdo->rollBack();
+                        $results[] = [
+                            'resource_id' => $resourceId, 'status' => 'skipped',
+                            'workflow_state' => '',
+                            'domain_pool_id' => (int)($hintRow['domain_pool_id'] ?? 0),
+                            'message' => '池组当前有调度执行，请稍后重试',
+                        ];
+                        continue;
+                    }
+                    $groupStmt = $pdo->prepare('SELECT * FROM cainiao_api_domain_automation_group
+                        WHERE id=:id AND deleted_at IS NULL LIMIT 1 FOR UPDATE');
+                    $groupStmt->execute([':id' => $groupId]);
+                    $group = $groupStmt->fetch(PDO::FETCH_ASSOC);
+                    if (!$group) throw new RuntimeException('自动化池组不存在');
+                    $pool = null;
+                    $poolId = (int)($hintRow['domain_pool_id'] ?? 0);
+                    if ($poolId > 0) {
+                        $poolStmt = $pdo->prepare("SELECT * FROM cainiao_api_domain_pool
+                            WHERE id=:id AND origin='aws_auto' LIMIT 1 FOR UPDATE");
+                        $poolStmt->execute([':id' => $poolId]);
+                        $pool = $poolStmt->fetch(PDO::FETCH_ASSOC);
+                        if (!$pool) throw new RuntimeException('关联 API 节点不存在');
+                    }
+                    $resourceStmt = $pdo->prepare('SELECT *
+                        FROM cainiao_api_domain_cloud_resource WHERE id=:id LIMIT 1 FOR UPDATE');
+                    $resourceStmt->execute([':id' => $resourceId]);
+                    $resource = $resourceStmt->fetch(PDO::FETCH_ASSOC);
+                    if (!$resource) throw new RuntimeException('CloudFront 资源账本不存在');
+                    if ((int)($resource['group_id'] ?? 0) !== $groupId
+                        || (int)($resource['domain_pool_id'] ?? 0) !== $poolId) {
+                        throw new RuntimeException('资源关联状态已变化，请刷新后重试');
+                    }
+                    $result = apiDomainAutomationRequestCloudResourceDeletion(
+                        $pdo,
+                        $resource,
+                        $pool,
+                        $group,
+                        $triggerType
+                    );
+                    $pdo->commit();
+                    $results[] = $result;
+                    if (in_array((string)($result['status'] ?? ''), ['queued', 'archived'], true)
+                        && $poolId > 0) {
+                        $distributionChanged = true;
+                    }
+                } catch (Throwable $failure) {
+                    if ($pdo->inTransaction()) $pdo->rollBack();
+                    $failureMessage = $failure instanceof ApiDomainAutomationException
+                        ? '资源删除状态暂不可处理（' . $failure->getReasonCode() . '）'
+                        : '资源删除状态暂不可处理，请刷新后重试';
+                    $results[] = [
+                        'resource_id' => $resourceId, 'status' => 'skipped',
+                        'workflow_state' => '', 'domain_pool_id' => 0,
+                        'message' => $failureMessage,
+                    ];
+                }
+            }
+        } finally {
+            foreach (array_reverse($groupLocks, true) as $lockName) {
+                apiDomainAutomationUnlock($pdo, $lockName);
+            }
+            apiDomainAutomationUnlock($pdo, $lifecycleLock);
+        }
+        if ($distributionChanged && function_exists('configDeliveryInvalidateAndSync')) {
+            configDeliveryInvalidateAndSync($pdo);
+        }
+        $queued = 0;
+        $archived = 0;
+        $skipped = 0;
+        $protected = 0;
+        foreach ($results as $item) {
+            if (($item['status'] ?? '') === 'queued' || ($item['status'] ?? '') === 'already_requested') $queued++;
+            elseif (($item['status'] ?? '') === 'archived') $archived++;
+            else $skipped++;
+            if (($item['status'] ?? '') === 'protected') $protected++;
+        }
+        $status = ($queued > 0 && ($archived > 0 || $skipped > 0))
+            || ($queued === 0 && $archived > 0 && $skipped > 0)
+            ? 'partial'
+            : ($queued > 0 ? 'queued' : ($archived > 0 ? 'archived' : 'skipped'));
+        return [
+            'status' => $status,
+            'queued' => $queued,
+            'archived' => $archived,
+            'skipped' => $skipped,
+            'protected' => $protected,
+            'results' => $results,
+            'message' => "删除请求已处理：{$queued} 个进入队列，{$archived} 个已归档，{$skipped} 个跳过",
+        ];
+    }
+}
+
 if (!function_exists('apiDomainAutomationEstimatedRunsPerYear')) {
     /** 返回预计年检查次数，用于提示“调度次数”不等于“新增数量”。 */
     function apiDomainAutomationEstimatedRunsPerYear(int $intervalValue, string $intervalUnit): float
@@ -4687,7 +5795,8 @@ if (!function_exists('apiDomainAutomationOverview')) {
                 r.workflow_state,r.provider_enabled AS enabled,
                 IF(r.distribution_etag='',0,1) AS etag_present,
                 r.probe_state,r.probe_http_code,r.last_error_code,r.retry_count,
-                r.next_action_at,r.delete_not_before,r.created_at,r.updated_at,
+                r.next_action_at,r.delete_not_before,r.delete_requested_at,
+                r.created_at,r.updated_at,
                 g.name AS group_name,b.batch_code
             FROM cainiao_api_domain_cloud_resource r
             LEFT JOIN cainiao_api_domain_automation_group g ON g.id=r.group_id

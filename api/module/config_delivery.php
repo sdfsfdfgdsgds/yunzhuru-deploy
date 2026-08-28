@@ -277,6 +277,53 @@ function retryApiDomainCloudResource(PDO $pdo, array $input)
     return apiDomainAutomationRetryCloudResource($pdo, $resourceId);
 }
 
+/**
+ * 单个或批量提交 CloudFront 资源删除。
+ *
+ * 单个按钮可传 resource_id；批量按钮传 resource_ids 数组。后端会先取消
+ * 尚未开始的作业，已创建分配统一交给 Worker 执行禁用、轮询、删除和归档。
+ */
+function deleteApiDomainCloudResources(PDO $pdo, array $input)
+{
+    configDeliveryRequireAdmin($pdo);
+    $allowedKeys = ['resource_id', 'resource_ids'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('CloudFront 资源删除请求参数不合法');
+    }
+    $resourceIds = [];
+    if (array_key_exists('resource_ids', $input)) {
+        if (!is_array($input['resource_ids'])) {
+            throw new InvalidArgumentException('resource_ids 必须是数组');
+        }
+        $resourceIds = $input['resource_ids'];
+    }
+    if (array_key_exists('resource_id', $input)) {
+        $resourceIds[] = $input['resource_id'];
+    }
+    if (!$resourceIds) {
+        throw new InvalidArgumentException('至少选择一个 CloudFront 资源');
+    }
+    return apiDomainAutomationRequestCloudResourceDeletions($pdo, $resourceIds, 'manual');
+}
+
+/** 单个资源删除别名，便于经典页或外部脚本保持简单参数合同。 */
+function deleteApiDomainCloudResource(PDO $pdo, array $input)
+{
+    configDeliveryRequireAdmin($pdo);
+    $allowedKeys = ['resource_id'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('CloudFront 资源删除请求参数不合法');
+    }
+    if (!array_key_exists('resource_id', $input)) {
+        throw new InvalidArgumentException('CloudFront 资源删除请求参数不完整');
+    }
+    return apiDomainAutomationRequestCloudResourceDeletions(
+        $pdo,
+        [$input['resource_id']],
+        'manual'
+    );
+}
+
 /** 归档自动化池组，保留历史批次与节点证据。 */
 function deleteApiDomainAutomationGroup(PDO $pdo, array $input)
 {
@@ -693,11 +740,24 @@ function configDeliveryInsertPathReceipt(
                     $cloudRestore = $restorable
                         ? apiDomainAutomationHandleSuccessfulReceipt($pdo, (int)$row[':domain_pool_id'])
                         : ['provider_ready' => 1, 'restore_queued' => 0];
+                    $deletionRequested = !empty($cloudRestore['deletion_requested']);
                     $providerReady = !empty($cloudRestore['provider_ready']);
                     $targetEnabled = $providerReady ? 1 : 0;
-                    $distributionChanged = $restorable
+                    $distributionChanged = $restorable && !$deletionRequested
                         && (int)($poolRow['enabled'] ?? 0) !== $targetEnabled;
-                    if ($restorable) {
+                    if ($deletionRequested) {
+                        // 显式删除优先级高于后续访问：只记录访问事实，保持节点隔离，
+                        // 不清除 cleanup_requested_at，也不把 CloudFront 重新启用。
+                        $protect = $pdo->prepare("UPDATE cainiao_api_domain_pool SET
+                            access_count=access_count+1,last_access_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),
+                            verified_at=COALESCE(verified_at,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)),
+                            lifecycle_status='cleanup_pending',enabled=0,
+                            lifecycle_updated_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),
+                            cleanup_requested_at=COALESCE(cleanup_requested_at,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)),
+                            cleanup_reason='manual_resource_delete',cloud_cleanup_state='queued'
+                            WHERE id=:id AND origin='aws_auto'");
+                        $protectParams = [':id' => (int)$row[':domain_pool_id']];
+                    } elseif ($restorable) {
                         $protect = $pdo->prepare("UPDATE cainiao_api_domain_pool SET
                             access_count=access_count+1,last_access_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),
                             verified_at=COALESCE(verified_at,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)),
@@ -706,17 +766,18 @@ function configDeliveryInsertPathReceipt(
                             enabled=:provider_ready,cleanup_reason='',
                             cloud_cleanup_state=IF(:restore_queued=1,'restore_pending','not_required')
                             WHERE id=:id AND origin='aws_auto'");
+                        $protectParams = [
+                            ':id' => (int)$row[':domain_pool_id'],
+                            ':provider_ready' => $targetEnabled,
+                            ':restore_queued' => !empty($cloudRestore['restore_queued']) ? 1 : 0,
+                        ];
                     } else {
                         $protect = $pdo->prepare("UPDATE cainiao_api_domain_pool SET
                             access_count=access_count+1,last_access_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),
                             verified_at=COALESCE(verified_at,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)),
                             lifecycle_updated_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)
                             WHERE id=:id AND origin='aws_auto'");
-                    }
-                    $protectParams = [':id' => (int)$row[':domain_pool_id']];
-                    if ($restorable) {
-                        $protectParams[':provider_ready'] = $targetEnabled;
-                        $protectParams[':restore_queued'] = !empty($cloudRestore['restore_queued']) ? 1 : 0;
+                        $protectParams = [':id' => (int)$row[':domain_pool_id']];
                     }
                     $protect->execute($protectParams);
                 }

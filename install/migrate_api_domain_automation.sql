@@ -152,6 +152,7 @@ CREATE TABLE IF NOT EXISTS cainiao_api_domain_cloud_resource (
   `verified_at` datetime DEFAULT NULL,
   `disabled_at` datetime DEFAULT NULL,
   `delete_not_before` datetime DEFAULT NULL,
+  `delete_requested_at` datetime DEFAULT NULL,
   `archived_at` datetime DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -487,6 +488,7 @@ SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_clou
 SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_resource` ADD COLUMN `price_class` varchar(32) NOT NULL DEFAULT ''PriceClass_All'' AFTER `usage_scope`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_resource' AND COLUMN_NAME='price_class'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
 SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_resource` ADD COLUMN `ipv6_enabled` tinyint(1) NOT NULL DEFAULT 1 AFTER `price_class`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_resource' AND COLUMN_NAME='ipv6_enabled'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
 SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_resource` ADD COLUMN `delete_not_before` datetime DEFAULT NULL AFTER `disabled_at`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_resource' AND COLUMN_NAME='delete_not_before'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_resource` ADD COLUMN `delete_requested_at` datetime DEFAULT NULL AFTER `delete_not_before`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_resource' AND COLUMN_NAME='delete_requested_at'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
 SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_job` ADD COLUMN `cancel_requested` tinyint(1) NOT NULL DEFAULT 0 AFTER `max_attempts`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_job' AND COLUMN_NAME='cancel_requested'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
 -- 存量节点不属于自动生成，永久保护；旧 no_access 状态只做语义升级。
 UPDATE `cainiao_api_domain_pool`
