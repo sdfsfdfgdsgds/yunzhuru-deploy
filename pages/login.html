@@ -265,7 +265,8 @@
                 const token = json.data.admin_token;
                 localStorage.setItem(config.tokenKey, token);
                 localStorage.setItem('adminInfo', JSON.stringify(json.data));
-                window.location.href = "/console" + config.pageSuffix;
+                // 登录后优先进入视觉统一的 V2 外壳；经典 console.html 仍保留为回退入口。
+                window.location.href = "/console-v2.html";
               } else {
                 ElementPlus.ElMessage.error(json.message || '登录失败');
                 refreshCaptcha();
