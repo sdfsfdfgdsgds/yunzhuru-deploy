@@ -3249,7 +3249,8 @@ if (!function_exists('apiDomainAutomationClaimCloudJob')) {
      *
      * 创建作业会为同一批次预先写入多个 pending 行，而 CloudFront 创建完成
      * 后的 poll_deploy / probe 才能把首个节点推进到可用状态。因此在“已到期”
-     * 的候选中优先领取推进作业，再领取 create 或清理作业。每次仍只领取一行，
+     * 的候选中优先领取已部署节点的 probe，再领取等待部署完成的 poll_deploy，
+     * 最后才领取 create 或清理作业。每次仍只领取一行，
      * 由上层 limit=1 保证单轮最多一个云操作；这里仅调整队列顺序，不改变租约、
      * 幂等更新和清理状态机合同。
      */
@@ -3269,8 +3270,8 @@ if (!function_exists('apiDomainAutomationClaimCloudJob')) {
                 WHERE j.status IN ('pending','retry_wait')
                   AND j.next_attempt_at<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)
                 ORDER BY CASE j.job_type
-                    WHEN 'poll_deploy' THEN 0
-                    WHEN 'probe' THEN 1
+                    WHEN 'probe' THEN 0
+                    WHEN 'poll_deploy' THEN 1
                     ELSE 2
                 END ASC,
                 j.next_attempt_at ASC,j.id ASC
