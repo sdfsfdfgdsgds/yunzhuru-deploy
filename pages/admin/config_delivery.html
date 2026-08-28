@@ -33,8 +33,32 @@
     .preview-toolbar { display: flex; justify-content: space-between; gap: 10px; margin: 8px 0 12px; }
     .preview { min-height: 420px; max-height: 720px; margin: 0; padding: 16px; overflow: auto; border-radius: 8px; background: #111827; color: #e5e7eb; font-size: 12px; line-height: 1.65; white-space: pre-wrap; word-break: break-all; }
     .form-help { margin-top: 5px; color: #6b7280; font-size: 12px; }
-    @media (max-width: 1100px) { .header { align-items: flex-start; flex-direction: column; } .stats-grid { grid-template-columns: repeat(3, 1fr); } }
-    @media (max-width: 720px) { .page { padding: 10px; } .header-actions, .date-actions { align-items: stretch; flex-direction: column; width: 100%; } .app-input { width: 100%; } .stats-grid { grid-template-columns: repeat(2, 1fr); } .bucket-frame { height: 1250px; } }
+    .automation-card { margin: 6px 0 16px; border-color: var(--admin-border, #e5e7eb); background: var(--admin-surface, #fff); }
+    .automation-header, .automation-section-header, .automation-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .automation-title { color: var(--admin-text-primary, #1f2937); font-size: 16px; font-weight: 700; }
+    .automation-summary { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 10px; margin: 14px 0; }
+    .automation-summary-card { min-width: 0; padding: 12px 14px; border: 1px solid var(--admin-border, #e5e7eb); border-radius: var(--admin-radius, 8px); background: var(--admin-surface-soft, #fafafa); }
+    .automation-summary-value { margin-top: 5px; overflow: hidden; color: var(--admin-text-primary, #1f2937); font-size: 18px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+    .automation-rules { margin: 12px 0 16px; }
+    .automation-section { margin-top: 18px; }
+    .automation-section-title { margin: 0; color: var(--admin-text-primary, #1f2937); font-size: 14px; font-weight: 700; }
+    .automation-table { margin-top: 10px; }
+    .automation-meta { margin-top: 4px; color: var(--admin-text-secondary, #6b7280); font-size: 12px; line-height: 1.55; }
+    .automation-account-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+    .automation-view-nav { margin: 4px 0 16px; overflow-x: auto; padding-bottom: 2px; }
+    .automation-view-nav .el-radio-group { flex-wrap: nowrap; white-space: nowrap; }
+    .automation-view-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .automation-protection { display: grid; gap: 5px; min-width: 112px; }
+    .automation-protection-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--admin-text-secondary, #6b7280); font-size: 12px; }
+    .automation-policy-preview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; width: 100%; padding: 12px; border: 1px solid var(--admin-border, #e5e7eb); border-radius: var(--admin-radius, 8px); background: var(--admin-surface-soft, #f8fafc); }
+    .automation-policy-preview strong { display: block; margin-top: 4px; color: var(--admin-text-primary, #1f2937); font-size: 15px; }
+    .compound-control { display: grid; grid-template-columns: minmax(120px, 1fr) 100px; gap: 8px; width: 100%; }
+    .form-number { width: 100%; }
+    .automation-dialog { max-width: calc(100vw - 24px); }
+    .dialog-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; }
+    .dialog-grid .wide { grid-column: 1 / -1; }
+    @media (max-width: 1100px) { .header { align-items: flex-start; flex-direction: column; } .stats-grid { grid-template-columns: repeat(3, 1fr); } .automation-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 720px) { .page { padding: 10px; } .header-actions, .date-actions { align-items: stretch; flex-direction: column; width: 100%; } .app-input { width: 100%; } .stats-grid, .automation-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bucket-frame { height: 1250px; } .dialog-grid { grid-template-columns: 1fr; } .dialog-grid .wide { grid-column: auto; } .automation-actions { align-items: stretch; flex-direction: column; } .automation-actions .el-button { width: 100%; margin-left: 0; } .automation-policy-preview { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   </style>
 </head>
 <body>
@@ -64,16 +88,185 @@
       </el-tab-pane>
 
       <el-tab-pane label="API 域名池" name="domain">
+        <!-- 自动化策略与手工域名池共享同一页签，但保持独立保存合同和运行状态。 -->
+        <el-card class="automation-card" shadow="never">
+          <template #header>
+            <div class="automation-header">
+              <div>
+                <div class="automation-title">自动生成与清理</div>
+                <div class="automation-meta">AWS 账号元数据、池组容量策略与最近批次在此统一管理。</div>
+              </div>
+              <div class="header-actions">
+                <el-tag :type="adapterStateTag(automation.adapter_state)">{{ adapterStateLabel(automation.adapter_state) }}</el-tag>
+                <el-button :loading="loading" @click="loadData(false)">刷新状态</el-button>
+              </div>
+            </div>
+          </template>
+
+          <el-alert
+            class="automation-rules"
+            type="warning"
+            :closable="false"
+            show-icon
+            title="生成规则：每个调度周期最多补 N 个，达到目标容量后暂停；有历史成功访问、pinned、reserved 或保底保护的节点始终保留；无访问节点先从 unused_marked 转入 cleanup_pending 并停止本地下发。AWS 适配器接入前保持 waiting_adapter，不归档节点，也不删除云资源。">
+          </el-alert>
+
+          <div class="automation-summary">
+            <div class="automation-summary-card">
+              <div class="muted">运行状态</div>
+              <div class="automation-summary-value"><el-tag :type="automationStateTag(summaryField('state', 'waiting_adapter'))">{{ automationStateLabel(summaryField('state', 'waiting_adapter')) }}</el-tag></div>
+            </div>
+            <div class="automation-summary-card">
+              <div class="muted">池组 / AWS 账号</div>
+              <div class="automation-summary-value">{{ number(summaryField('group_count', automation.groups.length)) }} / {{ number(summaryField('account_count', automation.accounts.length)) }}</div>
+            </div>
+            <div class="automation-summary-card">
+              <div class="muted">已管理容量</div>
+              <div class="automation-summary-value">{{ number(summaryField('active_count', 0)) }} / {{ number(summaryField('target_active_count', 0)) }}</div>
+            </div>
+            <div class="automation-summary-card">
+              <div class="muted">下次执行</div>
+              <div class="automation-summary-value" style="font-size:13px">{{ timeText(summaryField('next_run_at', '')) }}</div>
+            </div>
+          </div>
+
+          <!-- 内部七视图只切换自动化数据，顶层仍保持原有六个配置页签。 -->
+          <div class="automation-view-nav" role="tablist" aria-label="API 域名自动化视图">
+            <el-radio-group v-model="automationView" size="small">
+              <el-radio-button v-for="view in automationViews" :key="view.value" :label="view.value">{{ view.label }}</el-radio-button>
+            </el-radio-group>
+          </div>
+
+          <div v-show="automationView === 'groups'">
+            <section class="automation-section">
+              <div class="automation-section-header">
+                <div><h3 class="automation-section-title">AWS 账号元数据</h3><div class="automation-meta">只保存账号引用、名称、Account ID、Region 和启用状态；凭据由 AWS 适配器独立接管。</div></div>
+                <el-button type="primary" @click="openCloudAccountEditor()">新增 AWS 账号</el-button>
+              </div>
+              <el-table class="automation-table" :data="automation.accounts" border size="small" empty-text="暂无 AWS 账号元数据">
+                <el-table-column prop="name" label="名称" min-width="170"></el-table-column>
+                <el-table-column label="Account ID" min-width="170"><template #default="scope"><span class="mono">{{ scope.row.account_id || '-' }}</span></template></el-table-column>
+                <el-table-column prop="region" label="Region" min-width="135"><template #default="scope"><span class="mono">{{ scope.row.region || '-' }}</span></template></el-table-column>
+                <el-table-column label="状态" width="90"><template #default="scope"><el-tag size="small" :type="enabledValue(scope.row.enabled) ? 'success' : 'info'">{{ enabledValue(scope.row.enabled) ? '启用' : '停用' }}</el-tag></template></el-table-column>
+                <el-table-column label="操作" width="140" fixed="right"><template #default="scope"><el-button link type="primary" @click="openCloudAccountEditor(scope.row)">编辑</el-button><el-button link type="danger" :loading="rowBusy('delete-cloud-account', scope.row.id)" @click="deleteCloudAccount(scope.row)">删除</el-button></template></el-table-column>
+              </el-table>
+            </section>
+
+            <section class="automation-section">
+              <div class="automation-section-header">
+                <div><h3 class="automation-section-title">稳定池组</h3><div class="automation-meta">池组是长期 owner，绑定用途、环境、AWS 账号引用、Region、域名/证书提供方和容量策略。</div></div>
+                <el-button type="primary" :disabled="automation.accounts.length === 0" @click="openAutomationGroupEditor()">新增池组</el-button>
+              </div>
+              <el-table class="automation-table" :data="automation.groups" border size="small" empty-text="暂无自动化池组">
+                <el-table-column label="池组" min-width="210" fixed="left"><template #default="scope"><div>{{ scope.row.name || `池组 #${scope.row.id}` }}</div><div class="automation-meta">{{ environmentLabel(scope.row.environment) }} · {{ scopeLabel(scope.row.usage_scope) }} · {{ scope.row.region || '-' }}</div><div class="automation-meta">{{ cloudAccountLabel(scope.row.cloud_account_id) }}</div></template></el-table-column>
+                <el-table-column label="提供方" width="155"><template #default="scope"><div>{{ providerLabel(scope.row.domain_provider, 'domain') }}</div><div class="automation-meta">证书 {{ providerLabel(scope.row.certificate_provider, 'certificate') }}</div></template></el-table-column>
+                <el-table-column label="容量" width="170"><template #default="scope"><div>可用 {{ number(groupEligibleCount(scope.row)) }} / {{ number(scope.row.target_active_count) }}</div><div class="automation-meta">已验健康 {{ number(groupActiveCount(scope.row)) }} · 保底 {{ number(scope.row.minimum_healthy_count) }}</div><div class="automation-meta">预计补 {{ number(groupExpectedReplenish(scope.row)) }}</div></template></el-table-column>
+                <el-table-column label="生成周期" width="165"><template #default="scope"><div>每 {{ number(scope.row.interval_value) }} {{ intervalUnitLabel(scope.row.interval_unit) }}</div><div class="automation-meta">每次最多 {{ number(scope.row.generate_count) }} 个 · 约 {{ number(estimatedAnnualRuns(scope.row)) }} 次/年</div></template></el-table-column>
+                <el-table-column label="观察 / 清理" width="160"><template #default="scope"><div>观察 {{ number(scope.row.observation_days) }} 天 · 标记 {{ number(scope.row.idle_mark_days) }} 天</div><div class="automation-meta">{{ enabledValue(scope.row.cleanup_enabled) ? `${number(scope.row.cleanup_no_access_days)} 天进队` : '定时清理关闭' }}</div></template></el-table-column>
+                <el-table-column label="下次执行" width="170"><template #default="scope">{{ timeText(scope.row.next_run_at) }}</template></el-table-column>
+                <el-table-column label="状态" width="125"><template #default="scope"><el-tag size="small" :type="automationStateTag(groupState(scope.row))">{{ automationStateLabel(groupState(scope.row)) }}</el-tag><div class="automation-meta">生成 {{ enabledValue(scope.row.generation_enabled) ? '开' : '关' }} · 清理 {{ enabledValue(scope.row.cleanup_enabled) ? '开' : '关' }}</div></template></el-table-column>
+                <el-table-column label="操作" width="365" fixed="right"><template #default="scope"><el-button link type="primary" @click="openAutomationGroupEditor(scope.row)">编辑</el-button><el-button link type="warning" :disabled="!enabledValue(scope.row.enabled)" :loading="rowBusy('run-automation-group', scope.row.id)" @click="runAutomationGroup(scope.row)">立即运行</el-button><el-button link type="info" :loading="rowBusy('dry-run-automation-group', scope.row.id)" @click="dryRunAutomationGroup(scope.row)">dry-run</el-button><el-button link :type="enabledValue(scope.row.enabled) ? 'warning' : 'success'" :loading="rowBusy('toggle-automation-group', scope.row.id)" @click="toggleAutomationGroupPause(scope.row)">{{ enabledValue(scope.row.enabled) ? '暂停' : '恢复' }}</el-button><el-button link type="danger" :loading="rowBusy('delete-automation-group', scope.row.id)" @click="deleteAutomationGroup(scope.row)">删除</el-button></template></el-table-column>
+              </el-table>
+            </section>
+          </div>
+
+          <section v-show="automationView === 'batches'" class="automation-section">
+            <div class="automation-view-toolbar">
+              <div><h3 class="automation-section-title">生成批次</h3><div class="automation-meta">每次调度生成不可变批次；批次号按 YYYY-MM-序号展示，月/年只用于归档筛选与统计。</div></div>
+              <div class="automation-actions">
+                <el-select v-model="batchMonthFilter" clearable placeholder="全部月份" aria-label="按批次月份筛选" style="width:150px">
+                  <el-option v-for="month in batchMonthOptions" :key="month" :label="month" :value="month"></el-option>
+                </el-select>
+                <span class="automation-meta">显示 {{ number(filteredAutomationBatches.length) }} / {{ number(automation.recent_batches.length) }} 个</span>
+              </div>
+            </div>
+            <el-table class="automation-table" :data="filteredAutomationBatches" border size="small" empty-text="暂无生成批次">
+              <el-table-column label="月份" width="110"><template #default="scope">{{ scope.row.month || scope.row.batch_month || scope.row.period_key || '-' }}</template></el-table-column>
+              <el-table-column label="批次号" min-width="170"><template #default="scope"><span class="mono">{{ scope.row.batch_no || scope.row.batch_number || scope.row.batch_code || scope.row.id || '-' }}</span></template></el-table-column>
+              <el-table-column label="池组" min-width="160"><template #default="scope">{{ scope.row.group_name || automationGroupLabel(scope.row.group_id) }}</template></el-table-column>
+              <el-table-column label="触发" width="100"><template #default="scope">{{ triggerLabel(scope.row.trigger_type) }}</template></el-table-column>
+              <el-table-column label="计划" width="90" align="right"><template #default="scope">{{ number(scope.row.planned_count) }}</template></el-table-column>
+              <el-table-column label="创建" width="90" align="right"><template #default="scope">{{ number(scope.row.created_count) }}</template></el-table-column>
+              <el-table-column label="状态" width="140"><template #default="scope"><el-tag size="small" :type="automationStateTag(scope.row.status)">{{ automationStateLabel(scope.row.status) }}</el-tag></template></el-table-column>
+              <el-table-column label="执行时间" width="170"><template #default="scope">{{ timeText(scope.row.started_at || scope.row.created_at) }}</template></el-table-column>
+              <el-table-column label="结果" min-width="210"><template #default="scope">{{ scope.row.message || scope.row.result_message || '-' }}</template></el-table-column>
+            </el-table>
+          </section>
+
+          <section v-show="automationView === 'nodes'" class="automation-section">
+            <div class="automation-view-toolbar"><div><h3 class="automation-section-title">自动化节点</h3><div class="automation-meta">节点按完整生命周期管理；有近期真实访问、固定、预留或属于最小健康保底集合的节点始终受保护。</div></div></div>
+            <el-table class="automation-table" :data="automation.nodes" border size="small" empty-text="暂无 AWS 自动节点">
+              <el-table-column label="节点" min-width="260" fixed="left"><template #default="scope"><div>{{ nodeName(scope.row) }}</div><div class="automation-meta mono">{{ nodeUrl(scope.row) }}</div></template></el-table-column>
+              <el-table-column label="池组 / 环境" min-width="160"><template #default="scope"><div>{{ scope.row.group_name || automationGroupLabel(scope.row.group_id || scope.row.automation_group_id) }}</div><div class="automation-meta">{{ environmentLabel(nodeEnvironment(scope.row)) }}</div></template></el-table-column>
+              <el-table-column label="生命周期" width="160"><template #default="scope"><el-tag size="small" :type="lifecycleTag(nodeLifecycle(scope.row))">{{ lifecycleLabel(nodeLifecycle(scope.row)) }}</el-tag><div class="automation-meta">{{ timeText(scope.row.lifecycle_updated_at || scope.row.updated_at) }}</div></template></el-table-column>
+              <el-table-column label="访问" width="155"><template #default="scope"><div>累计 {{ number(nodeAccessCount(scope.row)) }}</div><div class="automation-meta">{{ timeText(nodeLastAccess(scope.row)) }}</div></template></el-table-column>
+              <el-table-column label="保护" width="145"><template #default="scope"><div class="automation-protection"><label class="automation-protection-row"><span>pinned</span><el-switch v-model="scope.row.pinned" :active-value="1" :inactive-value="0" :disabled="nodeProtectionDisabled(scope.row)" :loading="rowBusy('protect-node', scope.row.id)" @change="value => setNodeProtection(scope.row, 'pinned', value)"></el-switch></label><label class="automation-protection-row"><span>reserved</span><el-switch v-model="scope.row.reserved" :active-value="1" :inactive-value="0" :disabled="nodeProtectionDisabled(scope.row)" :loading="rowBusy('protect-node', scope.row.id)" @change="value => setNodeProtection(scope.row, 'reserved', value)"></el-switch></label></div></template></el-table-column>
+              <el-table-column label="观察期至" width="170"><template #default="scope">{{ timeText(scope.row.observation_until) }}</template></el-table-column>
+              <el-table-column label="平台操作" width="175" fixed="right"><template #default="scope"><el-button v-if="nodeCleanupEligible(scope.row)" link type="warning" :loading="rowBusy('request-node-cleanup', scope.row.id)" @click="requestNodeCleanup(scope.row)">转入待清理</el-button><span v-else class="muted">{{ nodeActionHint(scope.row) }}</span></template></el-table-column>
+            </el-table>
+          </section>
+
+          <section v-show="automationView === 'access'" class="automation-section">
+            <div class="automation-view-toolbar"><div><h3 class="automation-section-title">访问统计</h3><div class="automation-meta">lastAccessAt 和累计访问数是标记与清理判定的核心依据。</div></div></div>
+            <el-table class="automation-table" :data="automation.access_stats" border size="small" empty-text="暂无节点访问统计">
+              <el-table-column label="池组" min-width="220"><template #default="scope">{{ scope.row.group_name || automationGroupLabel(scope.row.group_id) }}</template></el-table-column>
+              <el-table-column label="有访问节点 / 总节点" width="175" align="right"><template #default="scope">{{ number(scope.row.accessed_node_count) }} / {{ number(scope.row.node_count) }}</template></el-table-column>
+              <el-table-column label="累计真实访问" width="150" align="right"><template #default="scope">{{ number(scope.row.access_count || scope.row.total_count) }}</template></el-table-column>
+              <el-table-column label="最近访问" min-width="190"><template #default="scope">{{ timeText(nodeLastAccess(scope.row)) }}</template></el-table-column>
+            </el-table>
+          </section>
+
+          <section v-show="automationView === 'marks'" class="automation-section">
+            <div class="automation-view-toolbar"><div><h3 class="automation-section-title">标记队列</h3><div class="automation-meta">达到 markAfterDays 且结束观察期的零访问节点先进入 unused_marked。</div></div></div>
+            <el-table class="automation-table" :data="automation.mark_queue" border size="small" empty-text="暂无标记候选">
+              <el-table-column label="节点" min-width="250"><template #default="scope"><div>{{ nodeName(scope.row) }}</div><div class="automation-meta">{{ scope.row.group_name || automationGroupLabel(scope.row.group_id || scope.row.automation_group_id) }}</div></template></el-table-column>
+              <el-table-column label="状态" width="155"><template #default="scope"><el-tag size="small" :type="lifecycleTag(nodeLifecycle(scope.row))">{{ lifecycleLabel(nodeLifecycle(scope.row)) }}</el-tag></template></el-table-column>
+              <el-table-column label="无访问天数" width="120" align="right"><template #default="scope">{{ number(scope.row.no_access_days || scope.row.idle_days) }}</template></el-table-column>
+              <el-table-column label="标记时间" width="180"><template #default="scope">{{ timeText(scope.row.idle_marked_at || scope.row.marked_at) }}</template></el-table-column>
+              <el-table-column label="原因" min-width="190"><template #default="scope">{{ scope.row.reason || scope.row.cleanup_reason || '-' }}</template></el-table-column>
+              <el-table-column label="操作" width="150" fixed="right"><template #default="scope"><el-button v-if="nodeCleanupEligible(scope.row)" link type="warning" :loading="rowBusy('request-node-cleanup', scope.row.id)" @click="requestNodeCleanup(scope.row)">转入待清理</el-button><span v-else class="muted">{{ nodeActionHint(scope.row) }}</span></template></el-table-column>
+            </el-table>
+          </section>
+
+          <section v-show="automationView === 'cleanup'" class="automation-section">
+            <div class="automation-view-toolbar"><div><h3 class="automation-section-title">清理队列</h3><div class="automation-meta">unused_marked 通过安全门禁后转为 cleanup_pending 并停止本地下发。AWS 适配器接入前停在 cleanup_pending / waiting_adapter，数据库保留完整记录，节点不归档，云资源不删除。</div></div></div>
+            <el-table class="automation-table" :data="automation.cleanup_queue" border size="small" empty-text="暂无清理候选">
+              <el-table-column label="节点" min-width="250"><template #default="scope"><div>{{ nodeName(scope.row) }}</div><div class="automation-meta">{{ scope.row.group_name || automationGroupLabel(scope.row.group_id || scope.row.automation_group_id) }}</div></template></el-table-column>
+              <el-table-column label="状态" width="160"><template #default="scope"><el-tag size="small" :type="lifecycleTag(nodeLifecycle(scope.row))">{{ lifecycleLabel(nodeLifecycle(scope.row)) }}</el-tag></template></el-table-column>
+              <el-table-column label="请求时间" width="180"><template #default="scope">{{ timeText(scope.row.cleanup_requested_at || scope.row.queued_at) }}</template></el-table-column>
+              <el-table-column label="云资源状态" min-width="170"><template #default="scope">{{ scope.row.cloud_cleanup_state || 'waiting_adapter' }}</template></el-table-column>
+              <el-table-column label="操作" width="105"><template #default="scope"><el-button link type="info" :loading="rowBusy('dry-run-automation-group', scope.row.group_id || scope.row.automation_group_id)" @click="dryRunAutomationGroup({ id: scope.row.group_id || scope.row.automation_group_id, name: scope.row.group_name })">dry-run</el-button></template></el-table-column>
+            </el-table>
+          </section>
+
+          <section v-show="automationView === 'runs'" class="automation-section">
+            <div class="automation-view-toolbar"><div><h3 class="automation-section-title">运行记录</h3><div class="automation-meta">手动、定时、dry-run 和重试记录在此集中展示，历史运行保持不变。</div></div></div>
+            <el-table class="automation-table" :data="automation.recent_runs" border size="small" empty-text="暂无运行记录">
+              <el-table-column label="ID" width="90"><template #default="scope">#{{ scope.row.id }}</template></el-table-column>
+              <el-table-column label="池组" min-width="165"><template #default="scope">{{ scope.row.group_name || automationGroupLabel(scope.row.group_id) }}</template></el-table-column>
+              <el-table-column label="触发" width="105"><template #default="scope">{{ triggerLabel(scope.row.trigger_type) }}</template></el-table-column>
+              <el-table-column label="计划 / 创建" width="125" align="right"><template #default="scope">{{ number(scope.row.planned_count) }} / {{ number(scope.row.created_count) }}</template></el-table-column>
+              <el-table-column label="标记 / 待清理" width="135" align="right"><template #default="scope">{{ number(scope.row.marked_count) }} / {{ number(scope.row.cleanup_pending_count) }}</template></el-table-column>
+              <el-table-column label="状态" width="140"><template #default="scope"><el-tag size="small" :type="automationStateTag(scope.row.status)">{{ automationStateLabel(scope.row.status) }}</el-tag></template></el-table-column>
+              <el-table-column label="时间" width="180"><template #default="scope">{{ timeText(scope.row.started_at || scope.row.created_at) }}</template></el-table-column>
+              <el-table-column label="结果" min-width="210"><template #default="scope">{{ scope.row.message || scope.row.result_message || '-' }}</template></el-table-column>
+              <el-table-column label="操作" width="100" fixed="right"><template #default="scope"><el-button link type="warning" :disabled="!runRetryable(scope.row)" :loading="rowBusy('retry-automation-run', scope.row.id)" @click="retryAutomationRun(scope.row)">重试</el-button></template></el-table-column>
+            </el-table>
+          </section>
+        </el-card>
+
         <div class="tab-actions"><el-button type="primary" @click="openEditor('domain')">新增 API 域名</el-button></div>
         <el-table :data="domains" border size="small" empty-text="暂无 API 域名">
           <el-table-column prop="name" label="名称" width="170"></el-table-column>
           <el-table-column label="用途" width="95"><template #default="scope"><el-tag size="small">{{ scopeLabel(scope.row.usage_scope) }}</el-tag></template></el-table-column>
           <el-table-column prop="base_url" label="Base URL" min-width="310" show-overflow-tooltip></el-table-column>
+          <el-table-column label="来源 / 池组" width="155"><template #default="scope"><el-tag size="small" :type="domainOriginTag(scope.row)">{{ domainOriginLabel(scope.row) }}</el-tag><div v-if="String(scope.row.origin || '') === 'aws_auto'" class="muted">{{ automationGroupLabel(scope.row.automation_group_id) }}</div></template></el-table-column>
+          <el-table-column label="生命周期" width="145"><template #default="scope"><el-tag size="small" :type="domainLifecycleTag(scope.row)">{{ domainLifecycleLabel(scope.row) }}</el-tag><div v-if="scope.row.idle_marked_at" class="muted">{{ timeText(scope.row.idle_marked_at) }}</div></template></el-table-column>
           <el-table-column prop="priority" label="优先级" width="90" align="right"></el-table-column>
           <el-table-column label="请求统计" width="230"><template #default="scope"><div>今日 {{ number(scope.row.today_count) }} / 累计 {{ number(scope.row.total_count) }}</div><div class="muted">成功 {{ number(scope.row.ok_count) }} · 失败 {{ number(scope.row.fail_count) }}</div></template></el-table-column>
           <el-table-column label="最近命中" width="170"><template #default="scope">{{ timeText(scope.row.last_seen_at) }}</template></el-table-column>
-          <el-table-column label="状态" width="90"><template #default="scope"><el-switch v-model="scope.row.enabled" :active-value="1" :inactive-value="0" :loading="rowBusy('domain', scope.row.id)" @change="value => toggleEnabled('domain', scope.row, value)"></el-switch></template></el-table-column>
-          <el-table-column label="操作" width="140" fixed="right"><template #default="scope"><el-button link type="primary" @click="openEditor('domain', scope.row)">编辑</el-button><el-button link type="danger" :loading="rowBusy('delete-domain', scope.row.id)" @click="deleteRow('domain', scope.row)">删除</el-button></template></el-table-column>
+          <el-table-column label="状态" width="105"><template #default="scope"><el-switch v-if="!isAutomationDomain(scope.row)" v-model="scope.row.enabled" :active-value="1" :inactive-value="0" :loading="rowBusy('domain', scope.row.id)" @change="value => toggleEnabled('domain', scope.row, value)"></el-switch><el-tag v-else size="small" type="info">自动管理</el-tag></template></el-table-column>
+          <el-table-column label="操作" width="165" fixed="right"><template #default="scope"><template v-if="!isAutomationDomain(scope.row)"><el-button link type="primary" @click="openEditor('domain', scope.row)">编辑</el-button><el-button link type="danger" :loading="rowBusy('delete-domain', scope.row.id)" @click="deleteRow('domain', scope.row)">删除</el-button></template><el-button v-else link type="primary" @click="automationView='nodes'">去节点视图</el-button></template></el-table-column>
         </el-table>
       </el-tab-pane>
 
@@ -146,6 +339,60 @@
     </el-tabs>
   </section>
 
+  <!-- AWS 账号只维护可公开的调度元数据，不在页面收集任何凭据。 -->
+  <el-dialog v-model="cloudAccountEditorVisible" class="automation-dialog" :title="cloudAccountEditor.id ? '编辑 AWS 账号' : '新增 AWS 账号'" width="560px" destroy-on-close :close-on-click-modal="false">
+    <el-form label-position="top">
+      <div class="dialog-grid">
+        <el-form-item class="wide" label="名称" required><el-input v-model="cloudAccountEditor.name" maxlength="100" show-word-limit placeholder="例如：生产 AWS 账号"></el-input></el-form-item>
+        <el-form-item label="AWS Account ID（选填）"><el-input v-model="cloudAccountEditor.account_id" class="mono" maxlength="64" autocomplete="off" placeholder="123456789012"></el-input></el-form-item>
+        <el-form-item label="Region" required><el-input v-model="cloudAccountEditor.region" class="mono" maxlength="64" placeholder="us-east-1"></el-input></el-form-item>
+        <el-form-item class="wide" label="状态"><el-switch v-model="cloudAccountEditor.enabled" :active-value="1" :inactive-value="0" active-text="启用" inactive-text="停用"></el-switch></el-form-item>
+      </div>
+    </el-form>
+    <template #footer><el-button @click="cloudAccountEditorVisible=false">取消</el-button><el-button type="primary" :loading="cloudAccountSaving" @click="saveCloudAccount">保存 AWS 账号</el-button></template>
+  </el-dialog>
+
+  <!-- 池组对象只定义调度与生命周期策略，AWS 实际操作由后续适配器执行。 -->
+  <el-dialog v-model="automationGroupEditorVisible" class="automation-dialog" :title="automationGroupEditor.id ? '编辑自动化池组' : '新增自动化池组'" width="780px" destroy-on-close :close-on-click-modal="false">
+    <el-alert title="策略可先保存并展示；AWS 实际创建、删除和凭据验证待适配器接入。" type="warning" :closable="false" show-icon style="margin-bottom:16px"></el-alert>
+    <el-form label-position="top">
+      <div class="dialog-grid">
+        <el-form-item label="池组名称" required><el-input v-model="automationGroupEditor.name" maxlength="100" show-word-limit placeholder="例如：生产配置域名池"></el-input></el-form-item>
+        <el-form-item label="AWS 账号" required>
+          <el-select v-model="automationGroupEditor.cloud_account_id" filterable placeholder="选择 AWS 账号" style="width:100%">
+            <el-option v-for="account in automation.accounts" :key="account.id" :label="account.name" :value="Number(account.id)" :disabled="!enabledValue(account.enabled)">
+              <div class="automation-account-option"><span>{{ account.name }}</span><span class="muted">{{ account.account_id || '未填 Account ID' }} · {{ account.region || '-' }}</span></div>
+            </el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="用途" required><el-select v-model="automationGroupEditor.usage_scope" style="width:100%"><el-option label="全部" value="all"></el-option><el-option label="配置" value="config"></el-option><el-option label="上报" value="report"></el-option><el-option label="点击" value="click"></el-option></el-select></el-form-item>
+        <el-form-item label="环境" required><el-select v-model="automationGroupEditor.environment" style="width:100%"><el-option label="生产 production" value="production"></el-option><el-option label="预发 staging" value="staging"></el-option><el-option label="测试 test" value="test"></el-option><el-option label="开发 development" value="development"></el-option></el-select></el-form-item>
+        <el-form-item label="Region" required><el-input v-model="automationGroupEditor.region" class="mono" maxlength="64" placeholder="us-east-1"></el-input></el-form-item>
+        <el-form-item label="域名提供方" required><el-select v-model="automationGroupEditor.domain_provider" style="width:100%"><el-option label="AWS Route 53" value="route53"></el-option><el-option label="Cloudflare" value="cloudflare"></el-option><el-option label="自定义适配器" value="custom"></el-option></el-select></el-form-item>
+        <el-form-item label="证书提供方" required><el-select v-model="automationGroupEditor.certificate_provider" style="width:100%"><el-option label="AWS Certificate Manager" value="acm"></el-option><el-option label="Cloudflare" value="cloudflare"></el-option><el-option label="自定义适配器" value="custom"></el-option></el-select></el-form-item>
+        <el-form-item label="池组调度"><el-switch v-model="automationGroupEditor.enabled" :active-value="1" :inactive-value="0" active-text="启用" inactive-text="暂停"></el-switch></el-form-item>
+        <el-form-item label="定时生成"><el-switch v-model="automationGroupEditor.generation_enabled" :active-value="1" :inactive-value="0" active-text="开启" inactive-text="关闭"></el-switch><div class="form-help">关闭后仍保留池组、批次和节点历史。</div></el-form-item>
+        <el-form-item label="目标活跃数" required><el-input-number v-model="automationGroupEditor.target_active_count" class="form-number" controls-position="right" :min="1" :max="24"></el-input-number><div class="form-help">活跃节点达到目标后暂停生成，默认 20；当前 APK 配置最多下发 24 个 API 入口。</div></el-form-item>
+        <el-form-item label="最低健康数" required><el-input-number v-model="automationGroupEditor.minimum_healthy_count" class="form-number" controls-position="right" :min="1" :max="24"></el-input-number><div class="form-help">始终保留的健康节点下限，默认 4。</div></el-form-item>
+        <el-form-item label="生成周期" required>
+          <div class="compound-control"><el-input-number v-model="automationGroupEditor.interval_value" class="form-number" controls-position="right" :min="1" :max="10000"></el-input-number><el-select v-model="automationGroupEditor.interval_unit"><el-option label="分" value="minute"></el-option><el-option label="时" value="hour"></el-option><el-option label="天" value="day"></el-option><el-option label="月" value="month"></el-option></el-select></div>
+        </el-form-item>
+        <el-form-item label="每次生成上限" required><el-input-number v-model="automationGroupEditor.generate_count" class="form-number" controls-position="right" :min="1" :max="24"></el-input-number><div class="form-help">实际生成 min（每次上限，目标容量－当前可用数），默认 1。</div></el-form-item>
+        <el-form-item label="新节点观察期（天）" required><el-input-number v-model="automationGroupEditor.observation_days" class="form-number" controls-position="right" :min="0" :max="3650"></el-input-number><div class="form-help">默认 1 天；观察期内保持 pending_verification，不进入无访问标记。</div></el-form-item>
+        <el-form-item label="无访问标记阈值（天）" required><el-input-number v-model="automationGroupEditor.idle_mark_days" class="form-number" controls-position="right" :min="1" :max="3650"></el-input-number><div class="form-help">连续无访问达到阈值后标记，默认 3 天。</div></el-form-item>
+        <el-form-item label="定时清理"><el-switch v-model="automationGroupEditor.cleanup_enabled" :active-value="1" :inactive-value="0" active-text="开启" inactive-text="关闭"></el-switch><div class="form-help">只将本池组创建、从未成功访问且通过保底门禁的 AWS 自动节点转入 cleanup_pending；适配器接入前只停止本地下发。</div></el-form-item>
+        <el-form-item label="无访问清理天数" required><el-input-number v-model="automationGroupEditor.cleanup_no_access_days" class="form-number" controls-position="right" :min="1" :max="3650" :disabled="!enabledValue(automationGroupEditor.cleanup_enabled)"></el-input-number><div class="form-help">默认 7 天，最小 1 天，且不得小于无访问标记阈值。</div></el-form-item>
+        <div class="wide automation-policy-preview">
+          <div><span class="muted">预计一年运行</span><strong>{{ number(estimatedAnnualRuns(automationGroupEditor)) }} 次</strong></div>
+          <div><span class="muted">实际活跃上限</span><strong>{{ number(automationGroupEditor.target_active_count) }} 个</strong></div>
+          <div><span class="muted">当前预计补充</span><strong>{{ number(groupExpectedReplenish(automationGroupEditor)) }} 个</strong></div>
+          <div><span class="muted">下次运行</span><strong style="font-size:12px">{{ timeText(automationGroupEditor.next_run_at) }}</strong></div>
+        </div>
+      </div>
+    </el-form>
+    <template #footer><el-button @click="automationGroupEditorVisible=false">取消</el-button><el-button type="primary" :loading="automationGroupSaving" @click="saveAutomationGroup">保存池组策略</el-button></template>
+  </el-dialog>
+
   <!-- API 域名、DoH 和 DNS 共用编辑对话框，字段由类型决定。 -->
   <el-dialog v-model="editorVisible" :title="editorTitle" width="620px" destroy-on-close :close-on-click-modal="false">
     <el-form label-width="110px">
@@ -192,6 +439,52 @@ createApp({
     const editorType = ref('domain');
     const editor = reactive({ id: 0, name: '', base_url: '', usage_scope: 'config', url: '', ip: '', priority: 0, enabled: 1 });
 
+    // 自动化返回数据始终保持稳定容器，兼容首次迁移时后端返回空对象。
+    const automation = reactive({
+      accounts: [], groups: [], recent_batches: [], nodes: [], access_stats: [],
+      mark_queue: [], cleanup_queue: [], recent_runs: [], lifecycle_options: [],
+      summary: {}, adapter_state: 'waiting_adapter'
+    });
+    const automationView = ref('groups');
+    const batchMonthFilter = ref('');
+    const automationViews = [
+      { value: 'groups', label: '池组与账号' },
+      { value: 'batches', label: '批次' },
+      { value: 'nodes', label: '节点' },
+      { value: 'access', label: '访问统计' },
+      { value: 'marks', label: '标记队列' },
+      { value: 'cleanup', label: '清理队列' },
+      { value: 'runs', label: '运行记录' },
+    ];
+    const emptyCloudAccount = () => ({ id: 0, name: '', account_id: '', region: 'us-east-1', enabled: 1 });
+    const emptyAutomationGroup = () => ({
+      id: 0,
+      name: '',
+      cloud_account_id: null,
+      usage_scope: 'config',
+      environment: 'production',
+      region: 'us-east-1',
+      domain_provider: 'route53',
+      certificate_provider: 'acm',
+      enabled: 1,
+      generation_enabled: 1,
+      target_active_count: 20,
+      minimum_healthy_count: 4,
+      interval_value: 1,
+      interval_unit: 'day',
+      generate_count: 1,
+      observation_days: 1,
+      idle_mark_days: 3,
+      cleanup_enabled: 0,
+      cleanup_no_access_days: 7,
+    });
+    const cloudAccountEditorVisible = ref(false);
+    const cloudAccountSaving = ref(false);
+    const cloudAccountEditor = reactive(emptyCloudAccount());
+    const automationGroupEditorVisible = ref(false);
+    const automationGroupSaving = ref(false);
+    const automationGroupEditor = reactive(emptyAutomationGroup());
+
     /** 生成东八区日期，确保统计筛选与服务端北京时间口径一致。 */
     function beijingDate(offsetDays) {
       return new Date(Date.now() + 8 * 3600000 + offsetDays * 86400000).toISOString().slice(0, 10);
@@ -216,7 +509,61 @@ createApp({
     /** 将数据库 tinyint 或布尔值规范成 Element Plus 使用的 0/1。 */
     function enabledValue(value) { return value === true || Number(value) === 1 ? 1 : 0; }
     function rowsWithEnabled(rows) { return Array.isArray(rows) ? rows.map(row => ({ ...row, enabled: enabledValue(row.enabled) })) : []; }
+    function rowsWithProtection(rows) {
+      return Array.isArray(rows) ? rows.map(row => ({
+        ...row,
+        pinned: enabledValue(row.pinned),
+        reserved: enabledValue(row.reserved),
+      })) : [];
+    }
     function normalizedAppId() { const value = String(appId.value || '').trim(); return /^\d+$/.test(value) && Number(value) > 0 ? Number(value) : 0; }
+
+    /** 将后端池组数值规范为页面表单可直接使用的整数。 */
+    function integerValue(value, fallback) {
+      const parsed = Number(value);
+      return Number.isInteger(parsed) ? parsed : fallback;
+    }
+
+    /** 应用 getConfigDelivery 返回的自动化快照，缺失字段回落到安全默认值。 */
+    function applyAutomationSnapshot(payload) {
+      const source = payload && typeof payload === 'object' ? payload : {};
+      automation.accounts = rowsWithEnabled(source.accounts).map(row => ({
+        ...row,
+        id: integerValue(row.id, 0),
+        account_id: String(row.account_id || row.aws_account_id || ''),
+        region: String(row.region || ''),
+      }));
+      automation.groups = rowsWithEnabled(source.groups).map(row => ({
+        ...emptyAutomationGroup(),
+        ...row,
+        id: integerValue(row.id, 0),
+        cloud_account_id: integerValue(row.cloud_account_id ?? row.aws_account_id, 0) || null,
+        enabled: enabledValue(row.enabled),
+        generation_enabled: row.generation_enabled === undefined ? enabledValue(row.enabled) : enabledValue(row.generation_enabled),
+        cleanup_enabled: enabledValue(row.cleanup_enabled),
+        target_active_count: integerValue(row.target_active_count, 20),
+        minimum_healthy_count: integerValue(row.minimum_healthy_count, 4),
+        interval_value: integerValue(row.interval_value ?? row.schedule_every, 1),
+        interval_unit: String(row.interval_unit || row.schedule_unit || 'day'),
+        generate_count: integerValue(row.generate_count ?? row.daily_generation_limit, 1),
+        observation_days: integerValue(row.observation_days, 1),
+        idle_mark_days: integerValue(row.idle_mark_days ?? row.mark_no_access_after_days, 3),
+        cleanup_no_access_days: integerValue(row.cleanup_no_access_days ?? row.archive_no_access_after_days, 7),
+      }));
+      automation.recent_batches = Array.isArray(source.recent_batches) ? source.recent_batches.map(row => ({ ...row })) : [];
+      automation.nodes = rowsWithProtection(source.nodes);
+      automation.access_stats = Array.isArray(source.access_stats) ? source.access_stats.map(row => ({ ...row })) : [];
+      automation.mark_queue = rowsWithProtection(source.mark_queue);
+      automation.cleanup_queue = rowsWithProtection(source.cleanup_queue);
+      automation.recent_runs = Array.isArray(source.recent_runs) ? source.recent_runs.map(row => ({ ...row })) : [];
+      automation.lifecycle_options = Array.isArray(source.lifecycle_options)
+        ? source.lifecycle_options.map(row => row && typeof row === 'object' ? { ...row } : row)
+        : [];
+      automation.summary = source.summary && typeof source.summary === 'object' ? { ...source.summary } : {};
+      automation.adapter_state = source.adapter_state && typeof source.adapter_state === 'object'
+        ? { ...source.adapter_state }
+        : String(source.adapter_state || 'waiting_adapter');
+    }
 
     /** 加载页面全部池配置与按 APPID、日期过滤的路径统计。 */
     async function loadData(silent) {
@@ -231,6 +578,7 @@ createApp({
         pathStats.value = data.dns_path_stats && typeof data.dns_path_stats === 'object' ? data.dns_path_stats : { summary: [], rows: [], totals: {} };
         presets.doh = Array.isArray(data.presets && data.presets.doh) ? data.presets.doh : [];
         presets.dns = Array.isArray(data.presets && data.presets.dns) ? data.presets.dns : [];
+        applyAutomationSnapshot(data.automation);
       } catch (error) {
         ElMessage.error(error.message || '配置分发加载失败');
       } finally {
@@ -335,6 +683,392 @@ createApp({
       finally { setRowBusy(busyType, row.id, false); }
     }
 
+    /** 打开 AWS 账号元数据编辑器，对话框内永远只处理非敏感字段。 */
+    function openCloudAccountEditor(row) {
+      const source = row || emptyCloudAccount();
+      Object.assign(cloudAccountEditor, emptyCloudAccount(), {
+        id: integerValue(source.id, 0),
+        name: String(source.name || ''),
+        account_id: String(source.account_id || source.aws_account_id || ''),
+        region: String(source.region || 'us-east-1'),
+        enabled: row ? enabledValue(source.enabled) : 1,
+      });
+      cloudAccountEditorVisible.value = true;
+    }
+
+    /** 保存 AWS 账号的名称、Account ID、Region 和状态。 */
+    async function saveCloudAccount() {
+      if (!String(cloudAccountEditor.name || '').trim()) return ElMessage.warning('请填写 AWS 账号名称');
+      const accountId = String(cloudAccountEditor.account_id || '').trim();
+      if (accountId && !/^\d{12}$/.test(accountId)) return ElMessage.warning('AWS Account ID 应为 12 位数字');
+      if (!String(cloudAccountEditor.region || '').trim()) return ElMessage.warning('请填写 AWS Region');
+      cloudAccountSaving.value = true;
+      try {
+        const data = await api('saveApiDomainCloudAccount', {
+          id: integerValue(cloudAccountEditor.id, 0),
+          name: String(cloudAccountEditor.name || '').trim(),
+          account_id: accountId,
+          region: String(cloudAccountEditor.region || '').trim(),
+          enabled: enabledValue(cloudAccountEditor.enabled),
+        });
+        ElMessage.success(data.message || 'AWS 账号元数据已保存');
+        cloudAccountEditorVisible.value = false;
+        await loadData(true);
+      } catch (error) { ElMessage.error(error.message || 'AWS 账号保存失败'); }
+      finally { cloudAccountSaving.value = false; }
+    }
+
+    /** 删除 AWS 账号元数据，已关联池组时由服务端统一拦截并说明。 */
+    async function deleteCloudAccount(row) {
+      const confirmed = await ElMessageBox.confirm(`确定删除 AWS 账号“${row.name || row.id}”的元数据吗？`, '删除 AWS 账号', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }).then(() => true).catch(() => false);
+      if (!confirmed) return;
+      setRowBusy('delete-cloud-account', row.id, true);
+      try {
+        const data = await api('deleteApiDomainCloudAccount', { id: row.id });
+        ElMessage.success(data.message || 'AWS 账号元数据已删除');
+        await loadData(true);
+      } catch (error) { ElMessage.error(error.message || 'AWS 账号删除失败'); }
+      finally { setRowBusy('delete-cloud-account', row.id, false); }
+    }
+
+    /** 打开池组编辑器，新建时选中第一个已启用 AWS 账号。 */
+    function openAutomationGroupEditor(row) {
+      const firstEnabledAccount = automation.accounts.find(account => enabledValue(account.enabled));
+      const source = row || { ...emptyAutomationGroup(), cloud_account_id: firstEnabledAccount ? Number(firstEnabledAccount.id) : null };
+      Object.assign(automationGroupEditor, emptyAutomationGroup(), source, {
+        id: integerValue(source.id, 0),
+        cloud_account_id: integerValue(source.cloud_account_id, 0) || null,
+        enabled: row ? enabledValue(source.enabled) : 1,
+        generation_enabled: row ? enabledValue(source.generation_enabled) : 1,
+        cleanup_enabled: row ? enabledValue(source.cleanup_enabled) : 0,
+        target_active_count: integerValue(source.target_active_count, 20),
+        minimum_healthy_count: integerValue(source.minimum_healthy_count, 4),
+        interval_value: integerValue(source.interval_value, 1),
+        generate_count: integerValue(source.generate_count, 1),
+        observation_days: integerValue(source.observation_days, 1),
+        idle_mark_days: integerValue(source.idle_mark_days, 3),
+        cleanup_no_access_days: integerValue(source.cleanup_no_access_days, 7),
+      });
+      automationGroupEditorVisible.value = true;
+    }
+
+    /** 页面先验证字段间关系，边界、权限和并发规则继续以服务端为准。 */
+    function automationGroupError() {
+      const group = automationGroupEditor;
+      if (!String(group.name || '').trim()) return '请填写池组名称';
+      const accountId = integerValue(group.cloud_account_id, 0);
+      const account = automation.accounts.find(item => Number(item.id) === accountId);
+      if (!accountId || !account) return '请选择 AWS 账号';
+      if (!enabledValue(account.enabled)) return '所选 AWS 账号已停用';
+      if (!['all', 'config', 'report', 'click'].includes(String(group.usage_scope || ''))) return '请选择有效用途';
+      if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(String(group.environment || ''))) return '请选择有效环境';
+      if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(String(group.region || ''))) return '请填写有效 Region';
+      if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(String(group.domain_provider || ''))) return '请选择有效域名提供方';
+      if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(String(group.certificate_provider || ''))) return '请选择有效证书提供方';
+      if (!['minute', 'hour', 'day', 'month'].includes(String(group.interval_unit || ''))) return '请选择有效生成周期单位';
+      if (integerValue(group.interval_value, 0) < 1) return '生成周期数值至少为 1';
+      if (integerValue(group.interval_value, 0) > 10000) return '生成周期数值最多为 10000';
+      if (integerValue(group.target_active_count, 0) < 1) return '目标活跃数至少为 1';
+      if (integerValue(group.target_active_count, 0) > 24) return '目标活跃数最多为 24';
+      if (integerValue(group.minimum_healthy_count, 0) < 1) return '最低健康数至少为 1';
+      if (integerValue(group.minimum_healthy_count, 0) > 24) return '最低健康数最多为 24';
+      if (integerValue(group.minimum_healthy_count, 0) > integerValue(group.target_active_count, 0)) return '最低健康数不得大于目标活跃数';
+      if (integerValue(group.generate_count, 0) < 1) return '每次数量至少为 1';
+      if (integerValue(group.generate_count, 0) > 24) return '每次数量最多为 24';
+      if (integerValue(group.observation_days, -1) < 0) return '新节点观察天数不小于 0';
+      if (integerValue(group.observation_days, 0) > 3650) return '新节点观察天数最多为 3650';
+      if (integerValue(group.idle_mark_days, 0) < 1) return '无访问标记阈值至少为 1 天';
+      if (integerValue(group.idle_mark_days, 0) > 3650) return '无访问标记阈值最多为 3650 天';
+      if (integerValue(group.cleanup_no_access_days, 0) < 1) return '无访问清理天数至少为 1 天';
+      if (integerValue(group.cleanup_no_access_days, 0) > 3650) return '无访问清理天数最多为 3650 天';
+      if (integerValue(group.cleanup_no_access_days, 0) < integerValue(group.idle_mark_days, 0)) return '无访问清理天数不得小于标记阈值';
+      return '';
+    }
+
+    /** 保存完整池组策略，无访问清理开关关闭时仍保留已填天数。 */
+    async function saveAutomationGroup() {
+      const validation = automationGroupError();
+      if (validation) return ElMessage.warning(validation);
+      const group = automationGroupEditor;
+      automationGroupSaving.value = true;
+      try {
+        const data = await api('saveApiDomainAutomationGroup', {
+          id: integerValue(group.id, 0),
+          name: String(group.name || '').trim(),
+          cloud_account_id: integerValue(group.cloud_account_id, 0),
+          usage_scope: String(group.usage_scope || 'config'),
+          environment: String(group.environment || 'production'),
+          region: String(group.region || 'us-east-1'),
+          domain_provider: String(group.domain_provider || 'route53'),
+          certificate_provider: String(group.certificate_provider || 'acm'),
+          enabled: enabledValue(group.enabled),
+          generation_enabled: enabledValue(group.generation_enabled),
+          target_active_count: integerValue(group.target_active_count, 20),
+          minimum_healthy_count: integerValue(group.minimum_healthy_count, 4),
+          interval_value: integerValue(group.interval_value, 1),
+          interval_unit: String(group.interval_unit || 'day'),
+          generate_count: integerValue(group.generate_count, 1),
+          observation_days: integerValue(group.observation_days, 1),
+          idle_mark_days: integerValue(group.idle_mark_days, 3),
+          cleanup_enabled: enabledValue(group.cleanup_enabled),
+          cleanup_no_access_days: integerValue(group.cleanup_no_access_days, 7),
+        });
+        ElMessage.success(data.message || '自动化池组策略已保存');
+        automationGroupEditorVisible.value = false;
+        await loadData(true);
+      } catch (error) { ElMessage.error(error.message || '池组策略保存失败'); }
+      finally { automationGroupSaving.value = false; }
+    }
+
+    /** 删除池组策略，历史批次和节点的保护由服务端按生命周期处理。 */
+    async function deleteAutomationGroup(row) {
+      const confirmed = await ElMessageBox.confirm(`确定删除自动化池组“${row.name || row.id}”吗？`, '删除池组', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }).then(() => true).catch(() => false);
+      if (!confirmed) return;
+      setRowBusy('delete-automation-group', row.id, true);
+      try {
+        const data = await api('deleteApiDomainAutomationGroup', { id: row.id });
+        ElMessage.success(data.message || '自动化池组已删除');
+        await loadData(true);
+      } catch (error) { ElMessage.error(error.message || '池组删除失败'); }
+      finally { setRowBusy('delete-automation-group', row.id, false); }
+    }
+
+    /** 按当前策略创建一个运行批次；适配器待接入时批次保持 waiting_adapter。 */
+    async function runAutomationGroup(row) {
+      const confirmed = await ElMessageBox.confirm(`立即执行池组“${row.name || row.id}”一轮？服务端会按当前适配器状态记录批次。`, '执行自动化池组', { type: 'info', confirmButtonText: '确认执行', cancelButtonText: '取消' }).then(() => true).catch(() => false);
+      if (!confirmed) return;
+      setRowBusy('run-automation-group', row.id, true);
+      try {
+        const data = await api('runApiDomainAutomationGroup', { id: row.id });
+        ElMessage.success(data.message || '运行批次已记录');
+        await loadData(true);
+      } catch (error) { ElMessage.error(error.message || '自动化池组执行失败'); }
+      finally { setRowBusy('run-automation-group', row.id, false); }
+    }
+
+    /** dry-run 只计算容量、标记和清理计划；服务端可保留标记为 dry-run 的审计运行/批次。 */
+    async function dryRunAutomationGroup(row) {
+      const id = integerValue(row && row.id, 0);
+      if (!id) return ElMessage.warning('请先选择有效池组');
+      setRowBusy('dry-run-automation-group', id, true);
+      try {
+        const data = await api('dryRunApiDomainAutomationGroup', { id });
+        const planned = integerValue(data.planned_count ?? data.expected_replenish_count, 0);
+        const marked = integerValue(data.marked_count ?? data.mark_candidate_count, 0);
+        const cleanup = integerValue(data.cleanup_pending_count ?? data.cleanup_candidate_count, 0);
+        await ElMessageBox.alert(`预计补充 ${planned} 个，标记候选 ${marked} 个，清理候选 ${cleanup} 个。`, `dry-run · ${row.name || `池组 #${id}`}`, { type: 'info', confirmButtonText: '知道了' }).catch(() => {});
+      } catch (error) { ElMessage.error(error.message || 'dry-run 执行失败'); }
+      finally { setRowBusy('dry-run-automation-group', id, false); }
+    }
+
+    /** enabled 控制整组调度。暂停时仍可保留 dry-run 以便校验计划。 */
+    async function toggleAutomationGroupPause(row) {
+      const enabled = enabledValue(row.enabled);
+      const method = enabled ? 'pauseApiDomainAutomationGroup' : 'resumeApiDomainAutomationGroup';
+      const verb = enabled ? '暂停' : '恢复';
+      const confirmed = await ElMessageBox.confirm(`${verb}池组“${row.name || row.id}”的定时调度？`, `${verb}池组`, { type: enabled ? 'warning' : 'info', confirmButtonText: `确认${verb}`, cancelButtonText: '取消' }).then(() => true).catch(() => false);
+      if (!confirmed) return;
+      setRowBusy('toggle-automation-group', row.id, true);
+      try {
+        const data = await api(method, { id: row.id });
+        ElMessage.success(data.message || `池组已${verb}`);
+        await loadData(true);
+      } catch (error) { ElMessage.error(error.message || `池组${verb}失败`); }
+      finally { setRowBusy('toggle-automation-group', row.id, false); }
+    }
+
+    /** 重试以新运行记录承接历史失败项，不覆盖旧运行与旧批次。 */
+    async function retryAutomationRun(row) {
+      if (!runRetryable(row)) return;
+      setRowBusy('retry-automation-run', row.id, true);
+      try {
+        const data = await api('retryApiDomainAutomationRun', { run_id: row.id });
+        ElMessage.success(data.message || '重试运行已创建');
+        await loadData(true);
+      } catch (error) { ElMessage.error(error.message || '重试运行失败'); }
+      finally { setRowBusy('retry-automation-run', row.id, false); }
+    }
+
+    /** 固定与预留保护必须作为一个完整快照提交，请求失败时回滚当次开关。 */
+    async function setNodeProtection(row, field, value) {
+      if (nodeProtectionDisabled(row)) return;
+      if (rowBusy('protect-node', row.id)) return;
+      const previous = enabledValue(value) ? 0 : 1;
+      row[field] = enabledValue(value);
+      setRowBusy('protect-node', row.id, true);
+      try {
+        const data = await api('setApiDomainAutomationNodeProtection', {
+          id: row.id,
+          pinned: enabledValue(row.pinned),
+          reserved: enabledValue(row.reserved),
+        });
+        ElMessage.success(data.message || '节点保护状态已保存');
+        await loadData(true);
+      } catch (error) {
+        row[field] = previous;
+        ElMessage.error(error.message || '节点保护状态保存失败');
+      } finally { setRowBusy('protect-node', row.id, false); }
+    }
+
+    /**
+     * 手工请求只把已标记、零成功访问且未受保护的节点转入待清理。
+     * 服务端会再校验最小健康数和当前实际下发集合，并将云操作保持在 waiting_adapter。
+     */
+    async function requestNodeCleanup(row) {
+      if (!nodeCleanupEligible(row)) return ElMessage.warning('节点当前不符合待清理门禁');
+      const confirmed = await ElMessageBox.confirm(
+        `将节点“${nodeName(row)}”转入 cleanup_pending 并停止本地下发？AWS 适配器接入前云资源保持原状。`,
+        '转入待清理',
+        { type: 'warning', confirmButtonText: '确认转入', cancelButtonText: '取消' }
+      ).then(() => true).catch(() => false);
+      if (!confirmed) return;
+      setRowBusy('request-node-cleanup', row.id, true);
+      try {
+        const data = await api('requestApiDomainAutomationNodeCleanup', { id: row.id });
+        if (stateCode(data.status, '') === 'skipped') ElMessage.warning(data.message || '清理计划正在执行，请刷新后重试');
+        else ElMessage.success(data.message || '节点已转入待清理');
+        await loadData(true);
+      } catch (error) { ElMessage.error(error.message || '节点转入待清理失败'); }
+      finally { setRowBusy('request-node-cleanup', row.id, false); }
+    }
+
+    /** 统一读取自动化汇总字段，保留 0、false 等有效值。 */
+    function summaryField(name, fallback) {
+      return Object.prototype.hasOwnProperty.call(automation.summary || {}, name) ? automation.summary[name] : fallback;
+    }
+
+    function stateCode(value, fallback) {
+      if (value && typeof value === 'object') return String(value.state || value.status || value.code || fallback || '').toLowerCase();
+      return String(value || fallback || '').toLowerCase();
+    }
+    function adapterStateLabel(value) {
+      const code = stateCode(value, 'waiting_adapter');
+      return ({ ready: 'AWS 适配器已就绪', waiting_adapter: 'waiting_adapter · 待 AWS 对接', pending: 'waiting_adapter · 待 AWS 对接', degraded: 'AWS 适配器异常', error: 'AWS 适配器异常' })[code] || code || '-';
+    }
+    function adapterStateTag(value) {
+      const code = stateCode(value, 'waiting_adapter');
+      return code === 'ready' ? 'success' : ['degraded', 'error', 'failed'].includes(code) ? 'danger' : 'warning';
+    }
+    function automationStateLabel(value) {
+      const code = stateCode(value, 'waiting_adapter');
+      return ({ disabled: '已暂停', paused: '已暂停', waiting_account: '等待 AWS 账号', waiting_adapter: 'waiting_adapter', pending: '待执行', scheduled: '已排程', due: '待执行', queued: '已入队', running: '执行中', dry_run: 'dry-run', succeeded: '成功', success: '成功', partial: '部分完成', degraded: '部分异常', failed: '失败', cleanup_failed: '清理失败', error: '失败', skipped: '已跳过' })[code] || code || '-';
+    }
+    function automationStateTag(value) {
+      const code = stateCode(value, 'waiting_adapter');
+      if (['succeeded', 'success'].includes(code)) return 'success';
+      if (['failed', 'cleanup_failed', 'error', 'degraded'].includes(code)) return 'danger';
+      if (['waiting_adapter', 'waiting_account', 'due', 'partial', 'skipped'].includes(code)) return 'warning';
+      if (['running', 'scheduled', 'queued'].includes(code)) return 'primary';
+      return 'info';
+    }
+    function cloudAccountLabel(id) {
+      const row = automation.accounts.find(account => Number(account.id) === Number(id));
+      return row ? row.name : (id ? `AWS 账号 #${id}` : '未选 AWS 账号');
+    }
+    function automationGroupLabel(id) {
+      const row = automation.groups.find(group => Number(group.id) === Number(id));
+      return row ? row.name : (id ? `池组 #${id}` : '-');
+    }
+    /** 批次按服务端的 YYYY-MM 归档字段在浏览器本地筛选，不产生额外 API 请求。 */
+    function batchMonthValue(row) {
+      const source = String(row && (row.month || row.batch_month || row.period_key || row.batch_code || row.batch_no) || '');
+      const matched = source.match(/^(\d{4}-\d{2})/);
+      return matched ? matched[1] : '';
+    }
+    const batchMonthOptions = computed(() => [...new Set(automation.recent_batches.map(batchMonthValue).filter(Boolean))].sort().reverse());
+    const filteredAutomationBatches = computed(() => {
+      const selected = String(batchMonthFilter.value || '');
+      return selected ? automation.recent_batches.filter(row => batchMonthValue(row) === selected) : automation.recent_batches;
+    });
+    function intervalUnitLabel(value) { return ({ minute: '分', hour: '时', day: '天', month: '月' })[String(value || '').toLowerCase()] || value || '-'; }
+    function groupActiveCount(row) { return row.effective_healthy_count ?? row.healthy_count ?? row.active_verified_count ?? row.active_count ?? 0; }
+    function groupEligibleCount(row) { return row.current_eligible_count ?? row.eligible_count ?? row.capacity_count ?? row.active_count ?? row.managed_active_count ?? 0; }
+    function groupExpectedReplenish(row) {
+      if (row.generation_enabled !== undefined && !enabledValue(row.generation_enabled)) return 0;
+      if (row.estimated_next_fill !== undefined && row.estimated_next_fill !== null) return integerValue(row.estimated_next_fill, 0);
+      const gap = Math.max(0, integerValue(row.target_active_count, 0) - integerValue(groupEligibleCount(row), 0));
+      return Math.min(integerValue(row.generate_count, 1), gap);
+    }
+    function estimatedAnnualRuns(row) {
+      const unitBase = { minute: 525600, hour: 8760, day: 365, month: 12 };
+      const base = unitBase[String(row.interval_unit || 'day')] || 365;
+      return Math.floor(base / Math.max(1, integerValue(row.interval_value, 1)));
+    }
+    function groupState(row) {
+      if (!enabledValue(row.enabled)) return 'disabled';
+      return row.state || row.status || row.latest_status || row.last_run_status || (row.last_result && typeof row.last_result === 'object' ? row.last_result.status : '') || summaryField('state', 'waiting_adapter');
+    }
+    function groupResultText(row) {
+      const result = row.last_result;
+      if (result && typeof result === 'object') return String(result.message || result.result_message || '');
+      if (typeof result === 'string' && result !== stateCode(groupState(row), '')) return result;
+      return String(row.last_result_message || row.last_run_message || row.message || '');
+    }
+
+    function environmentLabel(value) { return ({ production: '生产', staging: '预发', test: '测试', development: '开发' })[String(value || '').toLowerCase()] || value || '-'; }
+    function providerLabel(value, type) {
+      const code = String(value || '').toLowerCase();
+      const labels = type === 'certificate' ? { acm: 'ACM', cloudflare: 'Cloudflare', custom: '自定义' } : { route53: 'Route 53', cloudflare: 'Cloudflare', custom: '自定义' };
+      return labels[code] || value || '-';
+    }
+    function triggerLabel(value) { return ({ schedule: '定时', scheduled: '定时', manual: '手动', dry_run: 'dry-run', retry: '重试' })[String(value || '').toLowerCase()] || value || '-'; }
+    function runRetryable(row) { return ['failed', 'cleanup_failed', 'error', 'partial'].includes(stateCode(row && row.status, '')); }
+
+    /** 兼容服务端库字段与公开语义别名，避免 AWS 适配器接入时再复制页面逻辑。 */
+    function nodeName(row) { return row.name || row.domain_name || row.base_url || row.url || `节点 #${row.id || '-'}`; }
+    function nodeUrl(row) { return row.base_url || row.url || row.domain || '-'; }
+    function nodeEnvironment(row) {
+      if (row.environment) return row.environment;
+      const group = automation.groups.find(item => Number(item.id) === Number(row.group_id || row.automation_group_id));
+      return group ? group.environment : '';
+    }
+    function nodeLifecycle(row) { return String(row.lifecycle_status || row.lifecycle || row.state || 'pending_verification').toLowerCase(); }
+    function nodeAccessCount(row) { return row.access_count ?? row.total_count ?? row.total_requests ?? 0; }
+    function nodeLastAccess(row) { return row.last_access_at || row.lastAccessAt || row.last_seen_at || ''; }
+    function nodeProtectionDisabled(row) { return ['archived', 'cleanup_failed'].includes(nodeLifecycle(row)); }
+    function nodeCleanupEligible(row) {
+      return nodeLifecycle(row) === 'unused_marked'
+        && enabledValue(row.enabled) === 1
+        && !nodeProtected(row)
+        && Number(nodeAccessCount(row) || 0) === 0;
+    }
+    function nodeActionHint(row) {
+      const lifecycle = nodeLifecycle(row);
+      if (['archived', 'cleanup_failed'].includes(lifecycle)) return '终态只读';
+      if (lifecycle === 'cleanup_pending') return '已进待清理';
+      if (nodeProtected(row)) return protectionReason(row);
+      if (Number(nodeAccessCount(row) || 0) > 0) return '已有成功访问';
+      return lifecycle === 'unused_marked' ? '等待服务端门禁' : '由生命周期管理';
+    }
+    function lifecycleLabel(value) {
+      const option = automation.lifecycle_options.find(item => String((item && typeof item === 'object' ? item.value || item.code : item) || '') === String(value || ''));
+      if (option && typeof option === 'object' && option.label) return option.label;
+      return ({ pending_verification: '待验证', active: '活跃', unused_marked: '无访问已标记', cleanup_pending: '待清理', archived: '已归档', cleanup_failed: '清理失败', no_access: '无访问已标记', pending: '待验证' })[String(value || '')] || value || '-';
+    }
+    function lifecycleTag(value) { return ({ pending_verification: 'primary', pending: 'primary', active: 'success', unused_marked: 'warning', no_access: 'warning', cleanup_pending: 'warning', archived: 'info', cleanup_failed: 'danger' })[String(value || '')] || 'info'; }
+    function nodeProtected(row) { return enabledValue(row.pinned) || enabledValue(row.reserved) || enabledValue(row.recent_access_protected) || enabledValue(row.minimum_healthy_protected) || enabledValue(row.cleanup_protected); }
+    function protectionReason(row) {
+      if (enabledValue(row.pinned)) return 'pinned 固定保护';
+      if (enabledValue(row.reserved)) return 'reserved 预留保护';
+      if (enabledValue(row.recent_access_protected)) return '近期有真实访问';
+      if (enabledValue(row.minimum_healthy_protected)) return '最小健康保底集合';
+      if (enabledValue(row.cleanup_protected)) return '服务端保护';
+      return '未触发保护规则';
+    }
+
+    /** 手工入口与 AWS 自动节点分开展示，避免将旧节点误归入自动清理。 */
+    function isAutomationDomain(row) { return String(row && row.origin || 'manual') === 'aws_auto'; }
+    function domainOriginLabel(row) { return String(row.origin || 'manual') === 'aws_auto' ? 'AWS 自动' : '手工保护'; }
+    function domainOriginTag(row) { return String(row.origin || 'manual') === 'aws_auto' ? 'primary' : 'success'; }
+    function domainLifecycleLabel(row) {
+      if (String(row.origin || 'manual') !== 'aws_auto') return '永久保护';
+      return lifecycleLabel(String(row.lifecycle_status || 'active'));
+    }
+    function domainLifecycleTag(row) {
+      if (String(row.origin || 'manual') !== 'aws_auto') return 'success';
+      return lifecycleTag(String(row.lifecycle_status || 'active'));
+    }
+
     /** 将服务端预设填入编辑框，管理员确认后再落库。 */
     function applyPreset(type) {
       const selected = type === 'doh' ? dohPreset.value : dnsPreset.value;
@@ -398,7 +1132,29 @@ createApp({
     function modeTag(value) { return ({ doh: 'success', udp: 'warning', cache: 'primary', system: 'info', unknown: 'info' })[String(value || '').toLowerCase()] || 'info'; }
 
     onMounted(() => loadData(false));
-    return { activeTab, loading, appId, bucketFrameKey, dnsPoolEnabled, dnsPoolSaving, domains, dohRows, dnsRows, pathSummary, pathRows, pathTotals, pathNotice, presets, previewText, previewLoading, dohPreset, dnsPreset, importing, editorVisible, editorSaving, editorType, editor, editorTitle, dateRange, loadData, refreshAll, updateDnsPool, openEditor, saveEditor, toggleEnabled, deleteRow, rowBusy, applyPreset, importCommon, previewConfig, copyPreview, metric, number, timeText, scopeLabel, modeLabel, modeTag };
+    return {
+      activeTab, loading, appId, bucketFrameKey, dnsPoolEnabled, dnsPoolSaving,
+      domains, dohRows, dnsRows, pathSummary, pathRows, pathTotals, pathNotice,
+      presets, previewText, previewLoading, dohPreset, dnsPreset, importing,
+      editorVisible, editorSaving, editorType, editor, editorTitle, dateRange,
+      automation, automationView, automationViews, batchMonthFilter, batchMonthOptions, filteredAutomationBatches,
+      cloudAccountEditorVisible, cloudAccountSaving, cloudAccountEditor,
+      automationGroupEditorVisible, automationGroupSaving, automationGroupEditor,
+      loadData, refreshAll, updateDnsPool, openEditor, saveEditor, toggleEnabled,
+      deleteRow, rowBusy, applyPreset, importCommon, previewConfig, copyPreview,
+      openCloudAccountEditor, saveCloudAccount, deleteCloudAccount,
+      openAutomationGroupEditor, saveAutomationGroup, deleteAutomationGroup, runAutomationGroup,
+      dryRunAutomationGroup, toggleAutomationGroupPause, retryAutomationRun, setNodeProtection, requestNodeCleanup,
+      summaryField, adapterStateLabel, adapterStateTag, automationStateLabel, automationStateTag,
+      cloudAccountLabel, automationGroupLabel, intervalUnitLabel, groupActiveCount, groupEligibleCount,
+      groupExpectedReplenish, estimatedAnnualRuns, environmentLabel, providerLabel, triggerLabel, runRetryable,
+      groupState, groupResultText, enabledValue, metric, number, timeText,
+      nodeName, nodeUrl, nodeEnvironment, nodeLifecycle, nodeAccessCount, nodeLastAccess, lifecycleLabel, lifecycleTag,
+      nodeProtectionDisabled, nodeCleanupEligible, nodeActionHint,
+      nodeProtected, protectionReason, isAutomationDomain,
+      domainOriginLabel, domainOriginTag, domainLifecycleLabel, domainLifecycleTag,
+      scopeLabel, modeLabel, modeTag,
+    };
   }
 }).use(ElementPlus).mount('#app');
 </script>

@@ -7,6 +7,9 @@
  * 通过 APPID、归属用户、包名和注入密钥联合校验，不依赖后台登录态。
  */
 
+require_once __DIR__ . '/../utils/ConfigDelivery.php';
+require_once __DIR__ . '/../utils/ApiDomainAutomation.php';
+
 /** 统一校验管理员身份。 */
 function configDeliveryRequireAdmin(PDO $pdo): array
 {
@@ -15,6 +18,12 @@ function configDeliveryRequireAdmin(PDO $pdo): array
         throw new RuntimeException('无权限');
     }
     return $user;
+}
+
+/** 严格解析数据库无符号整数 ID，不接受小数、科学计数和容器类型。 */
+function configDeliveryAutomationParseId($value, string $label, bool $allowZero = false): int
+{
+    return apiDomainAutomationPositiveInt($value, $label, $allowZero ? 0 : 1, 4294967295);
 }
 
 /** 校验可选的统计日期，默认最近 7 天，最长 366 天。 */
@@ -153,6 +162,7 @@ function getConfigDelivery(PDO $pdo, array $input)
         'doh' => $doh,
         'dns' => $dns,
         'dns_path_stats' => configDeliveryPathStats($pdo, $input, true),
+        'automation' => apiDomainAutomationOverview($pdo),
         'presets' => [
             'doh' => configDeliveryDohPresets(),
             'dns' => configDeliveryDnsPresets(),
@@ -160,12 +170,185 @@ function getConfigDelivery(PDO $pdo, array $input)
     ];
 }
 
-/** 新增或更新 API 域名池行。 */
+/** 新增或更新 AWS 账号非敏感元数据。 */
+function saveApiDomainCloudAccount(PDO $pdo, array $input)
+{
+    configDeliveryRequireAdmin($pdo);
+    $allowedKeys = ['id', 'name', 'account_id', 'region', 'enabled'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('AWS 账号请求参数不合法');
+    }
+    if (array_key_exists('id', $input)) {
+        $input['id'] = configDeliveryAutomationParseId($input['id'], 'AWS 账号 ID', true);
+    }
+    return apiDomainAutomationSaveCloudAccount($pdo, $input);
+}
+
+/** 归档 AWS 账号非敏感元数据。 */
+function deleteApiDomainCloudAccount(PDO $pdo, array $input)
+{
+    configDeliveryRequireAdmin($pdo);
+    $allowedKeys = ['id'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('AWS 账号删除请求参数不合法');
+    }
+    $id = configDeliveryAutomationParseId($input['id'] ?? null, 'AWS 账号 ID');
+    return apiDomainAutomationDeleteCloudAccount($pdo, $id);
+}
+
+/** 新增或更新稳定 API 域名自动化池组。 */
+function saveApiDomainAutomationGroup(PDO $pdo, array $input)
+{
+    configDeliveryRequireAdmin($pdo);
+    $allowedKeys = [
+        'id',
+        'name',
+        'cloud_account_id',
+        'usage_scope',
+        'environment',
+        'region',
+        'domain_provider',
+        'certificate_provider',
+        'enabled',
+        'generation_enabled',
+        'target_active_count',
+        'minimum_healthy_count',
+        'interval_value',
+        'interval_unit',
+        'generate_count',
+        'observation_days',
+        'idle_mark_days',
+        'cleanup_enabled',
+        'cleanup_no_access_days',
+    ];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('自动化池组请求参数不合法');
+    }
+    if (array_key_exists('id', $input)) {
+        $input['id'] = configDeliveryAutomationParseId($input['id'], '池组 ID', true);
+    }
+    if (array_key_exists('cloud_account_id', $input)) {
+        $input['cloud_account_id'] = configDeliveryAutomationParseId($input['cloud_account_id'], 'AWS 账号 ID');
+    }
+    return apiDomainAutomationSaveGroup($pdo, $input);
+}
+
+/** 归档自动化池组，保留历史批次与节点证据。 */
+function deleteApiDomainAutomationGroup(PDO $pdo, array $input)
+{
+    configDeliveryRequireAdmin($pdo);
+    $allowedKeys = ['id'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('自动化池组删除请求参数不合法');
+    }
+    $id = configDeliveryAutomationParseId($input['id'] ?? null, '池组 ID');
+    return apiDomainAutomationDeleteGroup($pdo, $id);
+}
+
+/** 手动执行一轮容量检查、生命周期刷新与批次记录。 */
+function runApiDomainAutomationGroup(PDO $pdo, array $input)
+{
+    configDeliveryRequireAdmin($pdo);
+    $allowedKeys = ['id'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('自动化池组执行请求参数不合法');
+    }
+    $id = configDeliveryAutomationParseId($input['id'] ?? null, '池组 ID');
+    return apiDomainAutomationRunGroup($pdo, $id, 'manual');
+}
+
+/** 试运行只返回容量、生成与清理计划，不变更节点或分发状态。 */
+function dryRunApiDomainAutomationGroup(PDO $pdo, array $input)
+{
+    configDeliveryRequireAdmin($pdo);
+    $allowedKeys = ['id'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('自动化池组试运行请求参数不合法');
+    }
+    $id = configDeliveryAutomationParseId($input['id'] ?? null, '池组 ID');
+    return apiDomainAutomationDryRunGroup($pdo, $id);
+}
+
+/** 暂停池组的定时生成与生命周期执行。 */
+function pauseApiDomainAutomationGroup(PDO $pdo, array $input)
+{
+    configDeliveryRequireAdmin($pdo);
+    $allowedKeys = ['id'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('暂停池组请求参数不合法');
+    }
+    $id = configDeliveryAutomationParseId($input['id'] ?? null, '池组 ID');
+    return apiDomainAutomationSetGroupEnabled($pdo, $id, false);
+}
+
+/** 恢复池组并以当前时间重新计算下次执行。 */
+function resumeApiDomainAutomationGroup(PDO $pdo, array $input)
+{
+    configDeliveryRequireAdmin($pdo);
+    $allowedKeys = ['id'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('恢复池组请求参数不合法');
+    }
+    $id = configDeliveryAutomationParseId($input['id'] ?? null, '池组 ID');
+    return apiDomainAutomationSetGroupEnabled($pdo, $id, true);
+}
+
+/** 按历史运行记录重试，旧运行和旧批次始终保持不变。 */
+function retryApiDomainAutomationRun(PDO $pdo, array $input)
+{
+    configDeliveryRequireAdmin($pdo);
+    $allowedKeys = ['run_id'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('重试运行请求参数不合法');
+    }
+    $runId = apiDomainAutomationPositiveInt($input['run_id'] ?? null, '运行记录 ID', 1, PHP_INT_MAX);
+    return apiDomainAutomationRetryRun($pdo, $runId);
+}
+
+/** 维护 AWS 自动节点的固定／预留保护标记。 */
+function setApiDomainAutomationNodeProtection(PDO $pdo, array $input)
+{
+    configDeliveryRequireAdmin($pdo);
+    $allowedKeys = ['id', 'pinned', 'reserved'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('节点保护请求参数不合法');
+    }
+    foreach ($allowedKeys as $requiredKey) {
+        if (!array_key_exists($requiredKey, $input)) {
+            throw new InvalidArgumentException('节点保护请求参数不完整');
+        }
+    }
+    $id = configDeliveryAutomationParseId($input['id'] ?? null, '节点 ID');
+    $pinned = apiDomainAutomationNormalizeFlag($input['pinned'] ?? null, '固定保护标记') === 1;
+    $reserved = apiDomainAutomationNormalizeFlag($input['reserved'] ?? null, '预留保护标记') === 1;
+    return apiDomainAutomationSetNodeProtection($pdo, $id, $pinned, $reserved);
+}
+
+/** 将已标记的 AWS 自动节点提交到本地待清理队列。 */
+function requestApiDomainAutomationNodeCleanup(PDO $pdo, array $input)
+{
+    configDeliveryRequireAdmin($pdo);
+    $allowedKeys = ['id'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('节点清理请求参数不合法');
+    }
+    if (!array_key_exists('id', $input)) {
+        throw new InvalidArgumentException('节点清理请求参数不完整');
+    }
+    $id = configDeliveryAutomationParseId($input['id'], '节点 ID');
+    return apiDomainAutomationRequestNodeCleanup($pdo, $id, 'manual');
+}
+
+/** 新增或更新手工 API 域名池行；AWS 自动节点只由生命周期合同管理。 */
 function saveApiDomain(PDO $pdo, array $input)
 {
     configDeliveryRequireAdmin($pdo);
-    ensureConfigDeliverySchema($pdo);
-    $id = max(0, (int)($input['id'] ?? 0));
+    $allowedKeys = ['id', 'name', 'base_url', 'usage_scope', 'enabled', 'priority'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('API 域名请求参数不合法');
+    }
+    ensureApiDomainAutomationSchema($pdo);
+    $id = configDeliveryAutomationParseId($input['id'] ?? 0, 'API 域名 ID', true);
     $row = [
         ':name' => configDeliveryNormalizeName($input['name'] ?? ''),
         ':base_url' => configDeliveryNormalizeApiUrl($input['base_url'] ?? ''),
@@ -173,38 +356,70 @@ function saveApiDomain(PDO $pdo, array $input)
         ':enabled' => configDeliveryNormalizeEnabled($input['enabled'] ?? 1),
         ':priority' => configDeliveryNormalizePriority($input['priority'] ?? 0),
     ];
+    $pdo->beginTransaction();
     try {
         if ($id > 0) {
+            $current = $pdo->prepare('SELECT id,origin FROM cainiao_api_domain_pool
+                WHERE id=:id FOR UPDATE');
+            $current->execute([':id' => $id]);
+            $currentRow = $current->fetch(PDO::FETCH_ASSOC);
+            if (!$currentRow) throw new RuntimeException('API 域名记录不存在');
+            if ((string)($currentRow['origin'] ?? 'manual') === 'aws_auto') {
+                throw new RuntimeException('AWS 自动节点由生命周期队列管理，请到节点视图操作');
+            }
             $stmt = $pdo->prepare('UPDATE cainiao_api_domain_pool SET name=:name,base_url=:base_url,
-                usage_scope=:scope,enabled=:enabled,priority=:priority WHERE id=:id');
+                usage_scope=:scope,enabled=:enabled,priority=:priority
+                WHERE id=:id AND COALESCE(origin,\'manual\')<>\'aws_auto\'');
             $stmt->execute($row + [':id' => $id]);
-            $check = $pdo->prepare('SELECT id FROM cainiao_api_domain_pool WHERE id=:id');
-            $check->execute([':id' => $id]);
-            if (!$check->fetchColumn()) throw new RuntimeException('API 域名记录不存在');
         } else {
             $stmt = $pdo->prepare('INSERT INTO cainiao_api_domain_pool
-                (name,base_url,usage_scope,enabled,priority) VALUES (:name,:base_url,:scope,:enabled,:priority)');
+                (name,base_url,usage_scope,enabled,priority,origin,cleanup_protected,lifecycle_status)
+                VALUES (:name,:base_url,:scope,:enabled,:priority,\'manual\',1,\'active\')');
             $stmt->execute($row);
             $id = (int)$pdo->lastInsertId();
         }
     } catch (PDOException $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
         if ((string)$e->getCode() === '23000') throw new RuntimeException('该 API 地址和用途已存在');
         throw $e;
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
     }
+    $pdo->commit();
     $invalidate = configDeliveryInvalidateAndSync($pdo);
     return ['message' => '保存成功', 'id' => $id, 'invalidate' => $invalidate];
 }
 
-/** 删除 API 域名池行；既有日统计保留用于历史对账。 */
+/** 删除手工 API 域名池行；AWS 自动节点须走标记与待清理队列。 */
 function deleteApiDomain(PDO $pdo, array $input)
 {
     configDeliveryRequireAdmin($pdo);
-    ensureConfigDeliverySchema($pdo);
-    $id = max(0, (int)($input['id'] ?? 0));
-    if ($id <= 0) throw new InvalidArgumentException('缺少 API 域名 ID');
-    $stmt = $pdo->prepare('DELETE FROM cainiao_api_domain_pool WHERE id=:id');
-    $stmt->execute([':id' => $id]);
-    if ($stmt->rowCount() <= 0) throw new RuntimeException('API 域名记录不存在');
+    $allowedKeys = ['id'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('API 域名删除请求参数不合法');
+    }
+    $id = configDeliveryAutomationParseId($input['id'] ?? null, 'API 域名 ID');
+    ensureApiDomainAutomationSchema($pdo);
+    $pdo->beginTransaction();
+    try {
+        $current = $pdo->prepare('SELECT id,origin FROM cainiao_api_domain_pool
+            WHERE id=:id FOR UPDATE');
+        $current->execute([':id' => $id]);
+        $currentRow = $current->fetch(PDO::FETCH_ASSOC);
+        if (!$currentRow) throw new RuntimeException('API 域名记录不存在');
+        if ((string)($currentRow['origin'] ?? 'manual') === 'aws_auto') {
+            throw new RuntimeException('AWS 自动节点由生命周期队列管理，请到节点视图提交清理');
+        }
+        $stmt = $pdo->prepare("DELETE FROM cainiao_api_domain_pool
+            WHERE id=:id AND COALESCE(origin,'manual')<>'aws_auto'");
+        $stmt->execute([':id' => $id]);
+        if ($stmt->rowCount() !== 1) throw new RuntimeException('API 域名记录状态已变化');
+        $pdo->commit();
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
     return ['message' => '删除成功', 'invalidate' => configDeliveryInvalidateAndSync($pdo)];
 }
 
@@ -401,8 +616,14 @@ function previewConfig(PDO $pdo, array $input)
  *
  * @return bool true 表示首次计入，false 表示同一 receipt_id 的重试已忽略。
  */
-function configDeliveryInsertPathReceipt(PDO $pdo, array $row, string $receiptHash): bool
+function configDeliveryInsertPathReceipt(
+    PDO $pdo,
+    array $row,
+    string $receiptHash,
+    ?bool &$distributionChanged = null
+): bool
 {
+    $distributionChanged = false;
     $pdo->beginTransaction();
     try {
         $receipt = $pdo->prepare("INSERT IGNORE INTO cainiao_network_path_receipt
@@ -411,6 +632,45 @@ function configDeliveryInsertPathReceipt(PDO $pdo, array $row, string $receiptHa
         if ($receipt->rowCount() === 0) {
             $pdo->commit();
             return false;
+        }
+
+        if ((int)$row[':domain_pool_id'] > 0 && (int)($row[':ok_count'] ?? 0) === 1) {
+            try {
+                // 与自动清理对同一节点加行锁。新的成功回执会刷新访问事实；
+                // unused_marked / cleanup_pending 可恢复分发，pending_verification
+                // 只标记已验证并继续观察，终态归档事实交给未来 AWS 适配器处理。
+                $pool = $pdo->prepare('SELECT origin,lifecycle_status,enabled
+                    FROM cainiao_api_domain_pool WHERE id=:id LIMIT 1 FOR UPDATE');
+                $pool->execute([':id' => (int)$row[':domain_pool_id']]);
+                $poolRow = $pool->fetch(PDO::FETCH_ASSOC);
+                if ($poolRow && (string)($poolRow['origin'] ?? '') === 'aws_auto') {
+                    $lifecycleStatus = (string)($poolRow['lifecycle_status'] ?? 'active');
+                    $restorable = in_array($lifecycleStatus, ['unused_marked', 'cleanup_pending'], true);
+                    $distributionChanged = $restorable && (int)($poolRow['enabled'] ?? 0) !== 1;
+                    if ($restorable) {
+                        $protect = $pdo->prepare("UPDATE cainiao_api_domain_pool SET
+                            access_count=access_count+1,last_access_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),
+                            verified_at=COALESCE(verified_at,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)),
+                            lifecycle_status='active',lifecycle_updated_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),
+                            idle_marked_at=NULL,cleanup_requested_at=NULL,
+                            enabled=1,cleanup_reason='',cloud_cleanup_state='not_required'
+                            WHERE id=:id AND origin='aws_auto'");
+                    } else {
+                        $protect = $pdo->prepare("UPDATE cainiao_api_domain_pool SET
+                            access_count=access_count+1,last_access_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),
+                            verified_at=COALESCE(verified_at,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)),
+                            lifecycle_updated_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)
+                            WHERE id=:id AND origin='aws_auto'");
+                    }
+                    $protect->execute([':id' => (int)$row[':domain_pool_id']]);
+                }
+            } catch (PDOException $schemaError) {
+                // 滚动升级初始数秒内旧表尚无生命周期字段时，真实统计仍照常入库。
+                if (stripos($schemaError->getMessage(), 'unknown column') === false) {
+                    throw $schemaError;
+                }
+                $distributionChanged = false;
+            }
         }
 
         $stmt = $pdo->prepare("INSERT INTO cainiao_dns_path_stats
@@ -539,14 +799,19 @@ function recordNetworkPath(PDO $pdo, array $input)
         ':rescued_count' => $rescued,
     ];
     try {
-        $inserted = configDeliveryInsertPathReceipt($pdo, $row, $receiptHash);
+        $distributionChanged = false;
+        $inserted = configDeliveryInsertPathReceipt($pdo, $row, $receiptHash, $distributionChanged);
     } catch (PDOException $e) {
         if (strpos(strtolower($e->getMessage()), 'doesn\'t exist') === false
             && strpos(strtolower($e->getMessage()), 'does not exist') === false) {
             throw $e;
         }
         ensureConfigDeliverySchema($pdo);
-        $inserted = configDeliveryInsertPathReceipt($pdo, $row, $receiptHash);
+        $distributionChanged = false;
+        $inserted = configDeliveryInsertPathReceipt($pdo, $row, $receiptHash, $distributionChanged);
+    }
+    if (!empty($distributionChanged)) {
+        configDeliveryInvalidateAndSync($pdo);
     }
     configDeliveryCleanupOldReceipts($pdo, $receiptHash);
     return [
