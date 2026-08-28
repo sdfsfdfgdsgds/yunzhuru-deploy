@@ -55,6 +55,10 @@
     .automation-view-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
     .automation-protection { display: grid; gap: 5px; min-width: 112px; }
     .automation-protection-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--admin-text-secondary, #6b7280); font-size: 12px; }
+    .cloud-resource-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 10px; flex-wrap: wrap; }
+    .cloud-resource-toolbar-note { color: var(--admin-text-secondary, #6b7280); font-size: 12px; line-height: 1.55; }
+    .cloud-resource-toolbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .cloud-resource-delete-mark { color: var(--el-color-warning, #e6a23c); font-size: 12px; }
     .automation-policy-preview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; width: 100%; padding: 12px; border: 1px solid var(--admin-border, #e5e7eb); border-radius: var(--admin-radius, 8px); background: var(--admin-surface-soft, #f8fafc); }
     .automation-policy-preview strong { display: block; margin-top: 4px; color: var(--admin-text-primary, #1f2937); font-size: 15px; }
     .compound-control { display: grid; grid-template-columns: minmax(120px, 1fr) 100px; gap: 8px; width: 100%; }
@@ -206,14 +210,22 @@
           <section v-show="automationView === 'nodes'" class="automation-section">
             <div class="automation-view-toolbar"><div><h3 class="automation-section-title">自动化节点 / CloudFront 资源</h3><div class="automation-meta">资源从创建、部署、探针、入池到停用与删除全程可查；有近期真实访问、固定、预留或属于最小健康保底集合的节点始终受保护。</div></div></div>
             <h4 class="section-title">CloudFront 资源台账</h4>
-            <el-table class="automation-table" :data="automation.cloud_resources" border size="small" empty-text="暂无 CloudFront 资源">
+            <div class="cloud-resource-toolbar">
+              <div class="cloud-resource-toolbar-note">可删除阶段：待创建、创建中、部署中、探针中、已入池。已创建资源会先进入停用、轮询和删除队列；待创建资源会取消作业并保留归档记录。<el-tag v-if="cloudResourceSelection.length" size="small" type="warning" style="margin-left:8px">已选 {{ cloudResourceSelection.length }} 个</el-tag></div>
+              <div class="cloud-resource-toolbar-actions">
+                <el-button v-if="cloudResourceSelection.length" type="danger" :loading="cloudResourceDeleting" @click="deleteCloudResources(cloudResourceSelection)">批量删除（{{ cloudResourceSelection.length }}）</el-button>
+                <el-button v-if="cloudResourceSelection.length" :disabled="cloudResourceDeleting" @click="clearCloudResourceSelection">清除选择</el-button>
+              </div>
+            </div>
+            <el-table ref="cloudResourceTable" class="automation-table" :data="automation.cloud_resources" border size="small" empty-text="暂无 CloudFront 资源" row-key="resource_id" @selection-change="handleCloudResourceSelection">
+              <el-table-column type="selection" width="48" :selectable="isCloudResourceSelectable"></el-table-column>
               <el-table-column label="资源 ID" width="110"><template #default="scope"><span class="mono">{{ cloudResourceId(scope.row) ? `#${cloudResourceId(scope.row)}` : '-' }}</span></template></el-table-column>
               <el-table-column label="Distribution" min-width="290"><template #default="scope"><div class="cloud-resource"><span class="mono">{{ cloudDistributionId(scope.row) || '-' }}</span><span class="automation-meta mono">{{ cloudDistributionDomain(scope.row) || '-' }}</span><span class="automation-meta mono">{{ scope.row.public_api_url || '-' }}</span></div></template></el-table-column>
               <el-table-column label="池组 / 批次" min-width="180"><template #default="scope"><div>{{ scope.row.group_name || automationGroupLabel(scope.row.group_id) }}</div><div class="automation-meta mono">{{ scope.row.batch_code || scope.row.batch_no || scope.row.batch_id || '-' }}</div></template></el-table-column>
-              <el-table-column label="云端工作流" min-width="205"><template #default="scope"><el-tag size="small" :type="cloudResourceStateTag(cloudResourceState(scope.row))">{{ cloudResourceStateLabel(cloudResourceState(scope.row)) }}</el-tag><div class="automation-meta">AWS {{ scope.row.provider_status || scope.row.cloudfront_status || scope.row.aws_status || '-' }} · 已重试 {{ number(cloudResourceRetryCount(scope.row)) }} 次</div><div class="automation-meta">探针 {{ scope.row.probe_state || '-' }}<span v-if="scope.row.probe_http_code"> · HTTP {{ scope.row.probe_http_code }}</span></div><div class="automation-meta">下次 {{ timeText(scope.row.next_action_at || scope.row.next_retry_at) }}</div><div v-if="scope.row.delete_not_before" class="automation-meta">最早删除 {{ timeText(scope.row.delete_not_before) }}</div></template></el-table-column>
+              <el-table-column label="云端工作流" min-width="220"><template #default="scope"><el-tag size="small" :type="cloudResourceStateTag(cloudResourceState(scope.row))">{{ cloudResourceStateLabel(cloudResourceState(scope.row)) }}</el-tag><div class="automation-meta">AWS {{ scope.row.provider_status || scope.row.cloudfront_status || scope.row.aws_status || '-' }} · 已重试 {{ number(cloudResourceRetryCount(scope.row)) }} 次</div><div class="automation-meta">探针 {{ scope.row.probe_state || '-' }}<span v-if="scope.row.probe_http_code"> · HTTP {{ scope.row.probe_http_code }}</span></div><div class="automation-meta">下次 {{ timeText(scope.row.next_action_at || scope.row.next_retry_at) }}</div><div v-if="scope.row.delete_not_before" class="automation-meta">最早删除 {{ timeText(scope.row.delete_not_before) }}</div><div v-if="scope.row.delete_requested_at" class="cloud-resource-delete-mark">删除已提交 · {{ timeText(scope.row.delete_requested_at) }}</div></template></el-table-column>
               <el-table-column label="关联节点" width="130"><template #default="scope"><span class="mono">{{ scope.row.domain_pool_id ? `#${scope.row.domain_pool_id}` : '-' }}</span></template></el-table-column>
               <el-table-column label="错误摘要" min-width="220"><template #default="scope"><el-tooltip v-if="maskedConnectionError(scope.row)" :content="maskedConnectionError(scope.row)" placement="top"><div class="automation-account-error">{{ maskedConnectionError(scope.row) }}</div></el-tooltip><span v-else class="muted">-</span></template></el-table-column>
-              <el-table-column label="操作" width="135" fixed="right"><template #default="scope"><el-button link type="danger" :disabled="!cloudResourceRetryable(scope.row)" :loading="rowBusy('retry-cloud-resource', cloudResourceId(scope.row))" @click="retryCloudResource(scope.row)">重试云资源</el-button></template></el-table-column>
+              <el-table-column label="操作" width="190" fixed="right"><template #default="scope"><el-button v-if="cloudResourceRetryable(scope.row)" link type="warning" :loading="rowBusy('retry-cloud-resource', cloudResourceId(scope.row))" @click="retryCloudResource(scope.row)">重试云资源</el-button><el-button v-if="canDeleteCloudResource(scope.row)" link type="danger" :loading="cloudResourceDeleting" @click="deleteSingleCloudResource(scope.row)">删除</el-button><span v-if="!canDeleteCloudResource(scope.row) && !cloudResourceRetryable(scope.row)" class="muted">自动处理</span></template></el-table-column>
             </el-table>
             <h4 class="section-title">已入池节点</h4>
             <el-table class="automation-table" :data="automation.nodes" border size="small" empty-text="暂无 AWS 自动节点">
@@ -224,7 +236,7 @@
               <el-table-column label="访问" width="155"><template #default="scope"><div>累计 {{ number(nodeAccessCount(scope.row)) }}</div><div class="automation-meta">{{ timeText(nodeLastAccess(scope.row)) }}</div></template></el-table-column>
               <el-table-column label="保护" width="145"><template #default="scope"><div class="automation-protection"><label class="automation-protection-row"><span>pinned</span><el-switch v-model="scope.row.pinned" :active-value="1" :inactive-value="0" :disabled="nodeProtectionDisabled(scope.row)" :loading="rowBusy('protect-node', scope.row.id)" @change="value => setNodeProtection(scope.row, 'pinned', value)"></el-switch></label><label class="automation-protection-row"><span>reserved</span><el-switch v-model="scope.row.reserved" :active-value="1" :inactive-value="0" :disabled="nodeProtectionDisabled(scope.row)" :loading="rowBusy('protect-node', scope.row.id)" @change="value => setNodeProtection(scope.row, 'reserved', value)"></el-switch></label></div></template></el-table-column>
               <el-table-column label="观察期至" width="170"><template #default="scope">{{ timeText(scope.row.observation_until) }}</template></el-table-column>
-              <el-table-column label="平台操作" width="175" fixed="right"><template #default="scope"><el-button v-if="nodeCleanupEligible(scope.row)" link type="warning" :loading="rowBusy('request-node-cleanup', scope.row.id)" @click="requestNodeCleanup(scope.row)">转入待清理</el-button><span v-else class="muted">{{ nodeActionHint(scope.row) }}</span></template></el-table-column>
+              <el-table-column label="平台操作" width="235" fixed="right"><template #default="scope"><el-button v-if="canDeleteNodeCloudResource(scope.row)" link type="danger" :loading="cloudResourceDeleting" @click="deleteSingleCloudResource(scope.row)">删除</el-button><el-button v-if="nodeCleanupEligible(scope.row)" link type="warning" :loading="rowBusy('request-node-cleanup', scope.row.id)" @click="requestNodeCleanup(scope.row)">转入待清理</el-button><span v-if="!canDeleteNodeCloudResource(scope.row) && !nodeCleanupEligible(scope.row)" class="muted">{{ nodeActionHint(scope.row) }}</span></template></el-table-column>
             </el-table>
           </section>
 
@@ -459,7 +471,7 @@
 </div>
 
 <script>
-const { createApp, ref, reactive, computed, onMounted } = Vue;
+const { createApp, ref, reactive, computed, onMounted, onBeforeUnmount } = Vue;
 const { ElMessage, ElMessageBox } = ElementPlus;
 
 createApp({
@@ -495,6 +507,18 @@ createApp({
     });
     const automationView = ref('groups');
     const batchMonthFilter = ref('');
+    const CLOUD_RESOURCE_POLL_INTERVAL_MS = 4000;
+    const CLOUD_RESOURCE_ACTION_POLL_MS = 120000;
+    const CLOUD_RESOURCE_DELETE_MAX = 100;
+    /** 经典后台允许管理员直接提交删除的 CloudFront 工作流阶段；清理中的资源继续由 Worker 接管。 */
+    const cloudResourceDeletableStates = new Set(['pending_create', 'creating', 'deploying', 'verifying', 'ready']);
+    const cloudResourceTransientStates = new Set(['pending_create', 'creating', 'deploying', 'verifying', 'disable_pending', 'disabling', 'delete_pending', 'deleting', 'restore_pending', 'restoring']);
+    const cloudResourceSelection = ref([]);
+    const cloudResourceDeleting = ref(false);
+    const cloudResourceTable = ref(null);
+    const cloudResourcePolling = ref(false);
+    let cloudResourcePollTimer = null;
+    let cloudResourcePollUntil = 0;
     const automationViews = [
       { value: 'groups', label: '池组与账号' },
       { value: 'batches', label: '批次' },
@@ -682,6 +706,7 @@ createApp({
         presets.doh = Array.isArray(data.presets && data.presets.doh) ? data.presets.doh : [];
         presets.dns = Array.isArray(data.presets && data.presets.dns) ? data.presets.dns : [];
         applyAutomationSnapshot(data.automation);
+        reconcileCloudResourceSelection();
       } catch (error) {
         ElMessage.error(error.message || '配置分发加载失败');
       } finally {
@@ -1084,6 +1109,108 @@ createApp({
       finally { setRowBusy('retry-cloud-resource', resourceId, false); }
     }
 
+    /**
+     * 提交一个或多个 CloudFront 资源删除计划。
+     * 待创建资源由服务端取消作业并归档；已经创建的资源进入停用、轮询、删除和归档队列。
+     * 页面只提交资源账本 ID，不携带 Distribution、ETag 或任何 AWS 凭据。
+     */
+    async function deleteCloudResources(resourceIds) {
+      const ids = Array.from(new Set((Array.isArray(resourceIds) ? resourceIds : [])
+        .map(value => Number(value))
+        .filter(id => Number.isInteger(id) && id > 0)));
+      if (!ids.length) return ElMessage.warning('请选择可删除的 CloudFront 资源');
+      if (ids.length > CLOUD_RESOURCE_DELETE_MAX) return ElMessage.warning(`单次最多删除 ${CLOUD_RESOURCE_DELETE_MAX} 个 CloudFront 资源，请分批处理`);
+
+      const rows = ids.map(id => automation.cloud_resources.find(row => cloudResourceId(row) === id)).filter(Boolean);
+      const stateSummary = Array.from(rows.reduce((counts, row) => {
+        const label = cloudResourceStateLabel(cloudResourceWorkflowState(row));
+        counts.set(label, (counts.get(label) || 0) + 1);
+        return counts;
+      }, new Map())).map(([label, count]) => `${label} ${count}`).join('、') || '资源台账中的指定资源';
+      const confirmed = await ElMessageBox.confirm(
+        `即将删除 ${ids.length} 个 CloudFront 资源（${stateSummary}）。已创建资源会先停用，再由后台队列删除；待创建作业会取消，并保留归档记录。`,
+        '确认删除 CloudFront 资源',
+        { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消', closeOnClickModal: false }
+      ).then(() => true).catch(() => false);
+      if (!confirmed) return;
+
+      cloudResourceDeleting.value = true;
+      try {
+        const data = await api('deleteApiDomainCloudResources', { resource_ids: ids });
+        const status = stateCode(data.status, 'queued');
+        ElMessage[(['partial', 'skipped', 'protected'].includes(status)) ? 'warning' : 'success'](data.message || `已提交 ${ids.length} 个资源的删除计划`);
+        clearCloudResourceSelection();
+        automationView.value = 'nodes';
+        await loadData(true);
+        requestCloudResourcePolling();
+      } catch (error) {
+        ElMessage.error(maskSensitiveText(error.message) || 'CloudFront 资源删除请求失败');
+      } finally {
+        cloudResourceDeleting.value = false;
+      }
+    }
+
+    /** 资源表的单行删除入口复用批量合同，确保单个和批量状态机完全一致。 */
+    function deleteSingleCloudResource(row) {
+      const resourceId = cloudResourceId(row);
+      const isNodeRow = !Object.prototype.hasOwnProperty.call(row || {}, 'resource_id')
+        && Object.prototype.hasOwnProperty.call(row || {}, 'cloud_resource_id');
+      if (!resourceId || (isNodeRow ? !canDeleteNodeCloudResource(row) : !canDeleteCloudResource(row))) {
+        return ElMessage.warning('当前阶段由生命周期队列处理，请先刷新资源状态');
+      }
+      return deleteCloudResources([resourceId]);
+    }
+
+    /** 选择变化时只保留仍处于可删除阶段的资源账本 ID。 */
+    function handleCloudResourceSelection(selection) {
+      cloudResourceSelection.value = Array.from(new Set((Array.isArray(selection) ? selection : [])
+        .filter(isCloudResourceSelectable)
+        .map(row => cloudResourceId(row))
+        .filter(id => id > 0)));
+    }
+
+    /** 清除表格选择，避免刷新后残留已提交的删除对象。 */
+    function clearCloudResourceSelection() {
+      cloudResourceSelection.value = [];
+      if (cloudResourceTable.value && typeof cloudResourceTable.value.clearSelection === 'function') cloudResourceTable.value.clearSelection();
+    }
+
+    /** 刷新台账后清除已归档或已进入生命周期队列的旧选择。 */
+    function reconcileCloudResourceSelection() {
+      const available = new Set(automation.cloud_resources.filter(isCloudResourceSelectable).map(row => cloudResourceId(row)));
+      cloudResourceSelection.value = cloudResourceSelection.value.filter(id => available.has(id));
+    }
+
+    /** 删除请求后的短轮询只用于展示后台状态推进，最多持续两分钟。 */
+    function requestCloudResourcePolling() {
+      cloudResourcePolling.value = true;
+      cloudResourcePollUntil = Date.now() + CLOUD_RESOURCE_ACTION_POLL_MS;
+      syncCloudResourcePolling();
+    }
+
+    function stopCloudResourcePolling() {
+      cloudResourcePolling.value = false;
+      cloudResourcePollUntil = 0;
+      if (cloudResourcePollTimer) clearTimeout(cloudResourcePollTimer);
+      cloudResourcePollTimer = null;
+    }
+
+    function syncCloudResourcePolling() {
+      if (!cloudResourcePolling.value) return;
+      const inFlight = automation.cloud_resources.some(row => {
+        const state = cloudResourceWorkflowState(row);
+        return !['archived', 'completed', 'deleted'].includes(state)
+          && (cloudResourceTransientStates.has(state) || Boolean(row.delete_requested_at));
+      });
+      if (Date.now() >= cloudResourcePollUntil || !inFlight) return stopCloudResourcePolling();
+      if (cloudResourcePollTimer) clearTimeout(cloudResourcePollTimer);
+      cloudResourcePollTimer = setTimeout(async () => {
+        cloudResourcePollTimer = null;
+        await loadData(true);
+        syncCloudResourcePolling();
+      }, CLOUD_RESOURCE_POLL_INTERVAL_MS);
+    }
+
     /** 固定与预留保护必须作为一个完整快照提交，请求失败时回滚当次开关。 */
     async function setNodeProtection(row, field, value) {
       if (nodeProtectionDisabled(row)) return;
@@ -1187,6 +1314,23 @@ createApp({
     function cloudDistributionId(row) { return String(row && (row.distribution_id || row.cloud_resource_ref || row.aws_distribution_id) || ''); }
     function cloudDistributionDomain(row) { return String(row && (row.distribution_domain || row.domain_name || row.cloudfront_domain || row.aws_domain_name) || ''); }
     function cloudResourceState(row) { return stateCode(row && (row.workflow_state || row.resource_state || row.cloud_state || row.cloud_cleanup_state || row.status || row.cloudfront_status), 'waiting_adapter'); }
+    /** 资源行优先使用 workflow_state；旧节点聚合行仅有 active 生命周期时映射为已入池。 */
+    function cloudResourceWorkflowState(row) {
+      const workflowState = String(row && row.workflow_state || '').trim().toLowerCase();
+      if (workflowState) return workflowState;
+      const lifecycleState = String(row && row.lifecycle_status || '').trim().toLowerCase();
+      return ['active', 'pending_verification', 'unused_marked'].includes(lifecycleState) ? 'ready' : cloudResourceState(row);
+    }
+    /** 只开放用户指定的待创建、创建中、部署中、探针中和已入池阶段。 */
+    function canDeleteCloudResource(row) {
+      return cloudResourceDeletableStates.has(cloudResourceWorkflowState(row)) && !String(row && row.delete_requested_at || '').trim();
+    }
+    /** 节点行必须携带明确的资源账本 ID，防止把域名池 ID 当作 CloudFront 资源 ID。 */
+    function canDeleteNodeCloudResource(row) {
+      const resourceId = integerValue(row && row.cloud_resource_id, 0);
+      return resourceId > 0 && canDeleteCloudResource(row);
+    }
+    function isCloudResourceSelectable(row) { return canDeleteCloudResource(row) && cloudResourceId(row) > 0; }
     function cloudResourceRetryCount(row) { return integerValue(row && (row.retry_count ?? row.retries), 0); }
     function cloudResourceStateLabel(value) {
       const code = stateCode(value, 'unlinked');
@@ -1380,7 +1524,13 @@ createApp({
     function modeLabel(value) { return ({ doh: 'DoH 直连', udp: 'UDP DNS', cache: '已验证缓存', system: '系统 DNS', unknown: '路径未上报' })[String(value || '').toLowerCase()] || value || '路径未上报'; }
     function modeTag(value) { return ({ doh: 'success', udp: 'warning', cache: 'primary', system: 'info', unknown: 'info' })[String(value || '').toLowerCase()] || 'info'; }
 
-    onMounted(() => loadData(false));
+    onMounted(async () => {
+      await loadData(false);
+      syncCloudResourcePolling();
+    });
+    onBeforeUnmount(() => {
+      stopCloudResourcePolling();
+    });
     return {
       activeTab, loading, appId, bucketFrameKey, dnsPoolEnabled, dnsPoolSaving,
       domains, dohRows, dnsRows, pathSummary, pathRows, pathTotals, pathNotice,
@@ -1394,6 +1544,8 @@ createApp({
       openCloudAccountEditor, saveCloudAccount, validateCloudAccountConnection, deleteCloudAccount,
       openAutomationGroupEditor, saveAutomationGroup, deleteAutomationGroup, runAutomationGroup,
       onAutomationAccountChange, dryRunAutomationGroup, toggleAutomationGroupPause, retryAutomationRun, retryCloudResource, setNodeProtection, requestNodeCleanup,
+      cloudResourceSelection, cloudResourceDeleting, cloudResourceTable, canDeleteCloudResource, canDeleteNodeCloudResource, isCloudResourceSelectable,
+      handleCloudResourceSelection, clearCloudResourceSelection, deleteCloudResources, deleteSingleCloudResource,
       summaryField, adapterStateLabel, adapterStateTag, automationStateLabel, automationStateTag,
       cloudAuthTypeLabel, cloudAccountState, cloudAccountActualId, cloudAccountVerifiedAt, maskedConnectionError,
       cloudConnectionStateLabel, cloudConnectionStateTag, automationAdapterReady, cloudAccountConnectionReady, generationReady,
