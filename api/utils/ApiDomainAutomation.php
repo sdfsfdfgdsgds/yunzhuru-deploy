@@ -249,6 +249,33 @@ if (!function_exists('apiDomainAutomationEnsurePoolColumn')) {
     }
 }
 
+if (!function_exists('apiDomainAutomationSeedPrimaryAccountMetadata')) {
+    /**
+     * 按 Railway 的非敏感元数据变量创建一个幂等的 PRIMARY 账号行。
+     * 这里只读取 Account ID 与 Region；Access Key、Secret Key、Session Token
+     * 仍由 CloudFront 适配器在验证/作业执行时按 credential_ref 读取，绝不落库。
+     */
+    function apiDomainAutomationSeedPrimaryAccountMetadata(PDO $pdo): void
+    {
+        $accountId = trim((string)(getenv('AWS_CDN_PRIMARY_ACCOUNT_ID') ?: ''));
+        if ($accountId === '' || preg_match('/^\d{12}$/', $accountId) !== 1) {
+            return;
+        }
+        $region = strtolower(trim((string)(getenv('AWS_CDN_PRIMARY_REGION') ?: 'us-east-1')));
+        if (preg_match('/^[a-z]{2}(?:-gov)?-[a-z0-9-]+-\d$/', $region) !== 1) {
+            $region = 'us-east-1';
+        }
+        $exists = $pdo->prepare("SELECT id FROM cainiao_api_domain_cloud_account
+            WHERE deleted_at IS NULL AND credential_ref='PRIMARY' LIMIT 1");
+        $exists->execute();
+        if ($exists->fetchColumn()) return;
+        $insert = $pdo->prepare("INSERT INTO cainiao_api_domain_cloud_account
+            (name,account_id,region,credential_ref,auth_type,enabled,connection_state)
+            VALUES ('aws-cdn',:account_id,:region,'PRIMARY','environment',1,'waiting_credentials')");
+        $insert->execute([':account_id' => $accountId, ':region' => $region]);
+    }
+}
+
 if (!function_exists('ensureApiDomainAutomationSchema')) {
     /** 幂等创建账号元数据、池组、批次及节点生命周期字段。 */
     function ensureApiDomainAutomationSchema(PDO $pdo): void
@@ -295,11 +322,12 @@ if (!function_exists('ensureApiDomainAutomationSchema')) {
             ipv6_enabled tinyint(1) NOT NULL DEFAULT 1,
             enabled tinyint(1) NOT NULL DEFAULT 0,
             generation_enabled tinyint(1) NOT NULL DEFAULT 0,
-            target_active_count int unsigned NOT NULL DEFAULT 20,
+            capacity_mode varchar(24) NOT NULL DEFAULT 'target_replenish',
+            target_active_count int unsigned NOT NULL DEFAULT 30,
             minimum_healthy_count int unsigned NOT NULL DEFAULT 4,
             interval_value int unsigned NOT NULL DEFAULT 1,
-            interval_unit varchar(16) NOT NULL DEFAULT 'day',
-            generate_count int unsigned NOT NULL DEFAULT 1,
+            interval_unit varchar(16) NOT NULL DEFAULT 'minute',
+            generate_count int unsigned NOT NULL DEFAULT 30,
             observation_days int unsigned NOT NULL DEFAULT 1,
             idle_mark_days int unsigned NOT NULL DEFAULT 3,
             cleanup_enabled tinyint(1) NOT NULL DEFAULT 0,
@@ -460,7 +488,22 @@ if (!function_exists('ensureApiDomainAutomationSchema')) {
                 $definition
             );
         }
+        // 仅在部署环境显式提供非敏感 AWS_CDN_PRIMARY_ACCOUNT_ID 时显示账号草稿；
+        // 不设变量则保持空态，不凭空创建不可验证的账号记录。
+        apiDomainAutomationSeedPrimaryAccountMetadata($pdo);
 
+        // 记录 V3 表是否已经有容量模式字段。若字段缺失，说明存量组仍
+        // 使用“按周期”旧合同；先保留自定义周期组，再只把旧默认组合迁移为固定目标。
+        $hadCapacityModeColumn = apiDomainAutomationMysqlColumnExists(
+            $pdo,
+            'cainiao_api_domain_automation_group',
+            'capacity_mode'
+        );
+        $hadTargetActiveCountColumn = apiDomainAutomationMysqlColumnExists(
+            $pdo,
+            'cainiao_api_domain_automation_group',
+            'target_active_count'
+        );
         $groupColumns = [
             'environment' => "varchar(32) NOT NULL DEFAULT 'production' AFTER `usage_scope`",
             'region' => "varchar(32) NOT NULL DEFAULT 'us-east-1' AFTER `environment`",
@@ -472,6 +515,14 @@ if (!function_exists('ensureApiDomainAutomationSchema')) {
             'price_class' => "varchar(32) NOT NULL DEFAULT 'PriceClass_All' AFTER `probe_app_id`",
             'ipv6_enabled' => 'tinyint(1) NOT NULL DEFAULT 1 AFTER `price_class`',
             'generation_enabled' => 'tinyint(1) NOT NULL DEFAULT 0 AFTER `enabled`',
+            'capacity_mode' => "varchar(24) NOT NULL DEFAULT 'target_replenish' AFTER `generation_enabled`",
+            // 兼容早期只建了自动化骨架、尚未带容量字段的存量库；不依赖
+            // AFTER，避免旧表缺少相邻字段时整次迁移失败。
+            'target_active_count' => 'int unsigned NOT NULL DEFAULT 30',
+            'minimum_healthy_count' => 'int unsigned NOT NULL DEFAULT 4',
+            'interval_value' => 'int unsigned NOT NULL DEFAULT 1',
+            'interval_unit' => "varchar(16) NOT NULL DEFAULT 'minute'",
+            'generate_count' => 'int unsigned NOT NULL DEFAULT 30',
             'observation_days' => 'int unsigned NOT NULL DEFAULT 1 AFTER `generate_count`',
         ];
         foreach ($groupColumns as $column => $definition) {
@@ -481,6 +532,19 @@ if (!function_exists('ensureApiDomainAutomationSchema')) {
                 $column,
                 $definition
             );
+        }
+
+        if (!$hadCapacityModeColumn) {
+            $targetColumnMissing = $hadTargetActiveCountColumn ? 0 : 1;
+            $pdo->exec("UPDATE cainiao_api_domain_automation_group
+                SET capacity_mode=CASE
+                    WHEN {$targetColumnMissing}=1 THEN 'target_replenish'
+                    WHEN target_active_count=20 AND minimum_healthy_count=4
+                         AND interval_value=1 AND interval_unit='day' AND generate_count=1
+                    THEN 'target_replenish'
+                    ELSE 'periodic'
+                END
+                WHERE deleted_at IS NULL");
         }
 
         $batchColumns = [
@@ -577,9 +641,30 @@ if (!function_exists('ensureApiDomainAutomationSchema')) {
                 public_path=IF(public_path='', '/shell.php', public_path)
             WHERE domain_provider IN ('route53','cloudfront_default')
               AND certificate_provider IN ('acm','cloudfront_default')");
+
+        // V4 将旧版“每天生成 1 个、目标 20 个”的默认合同一次性迁移为
+        // “固定目标 30 个、缺口补齐、每分钟检查”。只匹配旧默认组合，
+        // 保留管理员已经保存的其它自定义策略；版本写入后不重复覆盖。
+        $schemaVersionStmt = $pdo->query("SELECT key_value FROM cainiao_config_delivery_meta
+            WHERE key_name='api_domain_automation_schema_version' LIMIT 1");
+        $previousSchemaVersion = (int)$schemaVersionStmt->fetchColumn();
+        if ($previousSchemaVersion < 4) {
+            $pdo->exec("UPDATE cainiao_api_domain_automation_group
+                SET capacity_mode='target_replenish',target_active_count=30,
+                    interval_value=1,interval_unit='minute',generate_count=30,
+                    next_run_at=CASE WHEN enabled=1
+                        THEN DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)
+                        ELSE next_run_at END
+                WHERE capacity_mode IS NULL OR capacity_mode=''
+                   OR (capacity_mode='target_replenish'
+                       AND target_active_count=20 AND minimum_healthy_count=4
+                       AND interval_value=1 AND interval_unit='day' AND generate_count=1)");
+        }
+        // 版本 4 对应 CloudFront 默认域名模板与固定目标补齐合同；
+        // 使用 GREATEST 保留线上已登记的更高版本，避免旧代码倒退标记。
         $pdo->exec("INSERT INTO cainiao_config_delivery_meta (key_name,key_value)
-            VALUES ('api_domain_automation_schema_version','3')
-            ON DUPLICATE KEY UPDATE key_value=GREATEST(CAST(key_value AS UNSIGNED),3)");
+            VALUES ('api_domain_automation_schema_version','4')
+            ON DUPLICATE KEY UPDATE key_value=GREATEST(CAST(key_value AS UNSIGNED),4)");
         $ready = true;
     }
 }
@@ -1092,6 +1177,24 @@ if (!function_exists('apiDomainAutomationValidateCloudAccount')) {
     }
 }
 
+if (!function_exists('apiDomainAutomationNormalizeCapacityMode')) {
+    /**
+     * 统一池组容量策略：target_replenish 表示固定目标补齐，
+     * periodic 仅保留旧版按周期触发的兼容合同。
+     */
+    function apiDomainAutomationNormalizeCapacityMode($value): string
+    {
+        $mode = strtolower(trim((string)$value));
+        if ($mode === '' || in_array($mode, ['target_replenish', 'fixed_target', 'replenish', 'fixed'], true)) {
+            return 'target_replenish';
+        }
+        if (in_array($mode, ['periodic', 'scheduled', 'interval'], true)) {
+            return 'periodic';
+        }
+        throw new InvalidArgumentException('容量模式只允许 target_replenish 或 periodic');
+    }
+}
+
 if (!function_exists('apiDomainAutomationNormalizeGroup')) {
     /** 池组枚举类字段只保留可展示的稳定标识。 */
     function apiDomainAutomationNormalizeGroupLabel($value, string $label, string $default): string
@@ -1106,9 +1209,10 @@ if (!function_exists('apiDomainAutomationNormalizeGroup')) {
 
     function apiDomainAutomationNormalizeGroup(array $input): array
     {
-        // 当前壳配置合同最多下发 24 个 API 入口，池组活跃容量同步受此约束。
-        $target = apiDomainAutomationPositiveInt($input['target_active_count'] ?? 20, '目标活跃数', 1, 24);
-        $minimum = apiDomainAutomationPositiveInt($input['minimum_healthy_count'] ?? 4, '最低健康数', 1, 24);
+        // API 域名池最多向壳端下发 30 个入口，固定目标模式按缺口补齐而不是按天累加。
+        $capacityMode = apiDomainAutomationNormalizeCapacityMode($input['capacity_mode'] ?? 'target_replenish');
+        $target = apiDomainAutomationPositiveInt($input['target_active_count'] ?? 30, '目标活跃数', 1, 30);
+        $minimum = apiDomainAutomationPositiveInt($input['minimum_healthy_count'] ?? 4, '最低健康数', 1, 30);
         if ($minimum > $target) throw new InvalidArgumentException('最低健康数不得大于目标活跃数');
         $idleDays = apiDomainAutomationPositiveInt(
             $input['mark_after_days'] ?? ($input['idle_mark_days'] ?? 3),
@@ -1192,15 +1296,16 @@ if (!function_exists('apiDomainAutomationNormalizeGroup')) {
             ),
             'enabled' => $enabled,
             'generation_enabled' => $generationEnabled,
+            'capacity_mode' => $capacityMode,
             'target_active_count' => $target,
             'minimum_healthy_count' => $minimum,
             'interval_value' => apiDomainAutomationPositiveInt($input['interval_value'] ?? 1, '生成周期数值', 1, 10000),
-            'interval_unit' => apiDomainAutomationNormalizeUnit($input['interval_unit'] ?? 'day'),
+            'interval_unit' => apiDomainAutomationNormalizeUnit($input['interval_unit'] ?? 'minute'),
             'generate_count' => apiDomainAutomationPositiveInt(
-                $input['generate_per_run'] ?? ($input['generate_count'] ?? 1),
+                $input['generate_per_run'] ?? ($input['generate_count'] ?? 30),
                 '每次生成数量',
                 1,
-                24
+                30
             ),
             'observation_days' => apiDomainAutomationPositiveInt(
                 $input['observation_days'] ?? 1,
@@ -1249,7 +1354,7 @@ if (!function_exists('apiDomainAutomationSaveGroup')) {
             $existing = null;
             if ($id > 0) {
                 // 与 worker 共用行锁串行化时钟修改，避免管理员编辑与到期执行互相覆盖。
-                $existingStmt = $pdo->prepare('SELECT id,enabled,interval_value,interval_unit,
+                $existingStmt = $pdo->prepare('SELECT id,enabled,capacity_mode,interval_value,interval_unit,
                         schedule_anchor_at,next_run_at
                     FROM cainiao_api_domain_automation_group
                     WHERE id=:id AND deleted_at IS NULL FOR UPDATE');
@@ -1286,10 +1391,12 @@ if (!function_exists('apiDomainAutomationSaveGroup')) {
                 } catch (Throwable $ignored) {
                     $anchor = $now;
                 }
-                $scheduleChanged = (int)$existing['interval_value'] !== (int)$row['interval_value']
+                $existingMode = apiDomainAutomationNormalizeCapacityMode($existing['capacity_mode'] ?? 'target_replenish');
+                $scheduleChanged = $existingMode !== $row['capacity_mode']
+                    || (int)$existing['interval_value'] !== (int)$row['interval_value']
                     || (string)$existing['interval_unit'] !== (string)$row['interval_unit'];
                 if ($scheduleChanged) {
-                    // 只有周期参数变更才重建锚点；名称、容量、清理等策略编辑保留原时钟。
+                    // 容量模式或旧周期参数变更时重建锚点；其它策略编辑保留原时钟。
                     $anchor = $now;
                 }
                 if ($row['enabled']) {
@@ -1301,6 +1408,9 @@ if (!function_exists('apiDomainAutomationSaveGroup')) {
                             (string)$existing['next_run_at'],
                             apiDomainAutomationTimezone()
                         );
+                    } elseif ($row['capacity_mode'] === 'target_replenish') {
+                        // 固定目标模式保存/启用后立即检查一次缺口，不等待“下一天”。
+                        $next = $now;
                     } else {
                         $next = apiDomainAutomationNextRun(
                             $anchor,
@@ -1311,17 +1421,20 @@ if (!function_exists('apiDomainAutomationSaveGroup')) {
                     }
                 }
             } elseif ($row['enabled']) {
-                $next = apiDomainAutomationNextRun(
-                    $anchor,
-                    $row['interval_value'],
-                    $row['interval_unit'],
-                    $now
-                );
+                $next = $row['capacity_mode'] === 'target_replenish'
+                    ? $now
+                    : apiDomainAutomationNextRun(
+                        $anchor,
+                        $row['interval_value'],
+                        $row['interval_unit'],
+                        $now
+                    );
             }
 
             $params = [
                 ':name' => $row['name'], ':cloud_account_id' => $row['cloud_account_id'],
                 ':usage_scope' => $row['usage_scope'], ':enabled' => $row['enabled'],
+                ':capacity_mode' => $row['capacity_mode'],
                 ':environment' => $row['environment'], ':region' => $row['region'],
                 ':domain_provider' => $row['domain_provider'],
                 ':certificate_provider' => $row['certificate_provider'],
@@ -1342,7 +1455,7 @@ if (!function_exists('apiDomainAutomationSaveGroup')) {
             if ($existing) {
                 $stmt = $pdo->prepare("UPDATE cainiao_api_domain_automation_group SET
                     name=:name,cloud_account_id=:cloud_account_id,usage_scope=:usage_scope,enabled=:enabled,
-                    environment=:environment,region=:region,domain_provider=:domain_provider,
+                    capacity_mode=:capacity_mode,environment=:environment,region=:region,domain_provider=:domain_provider,
                     certificate_provider=:certificate_provider,origin_domain=:origin_domain,
                     public_path=:public_path,probe_app_id=:probe_app_id,price_class=:price_class,
                     ipv6_enabled=:ipv6_enabled,generation_enabled=:generation_enabled,
@@ -1361,13 +1474,13 @@ if (!function_exists('apiDomainAutomationSaveGroup')) {
                     (name,cloud_account_id,usage_scope,environment,region,domain_provider,certificate_provider,
                      origin_domain,public_path,probe_app_id,
                      price_class,ipv6_enabled,
-                     enabled,generation_enabled,target_active_count,minimum_healthy_count,
+                     enabled,generation_enabled,capacity_mode,target_active_count,minimum_healthy_count,
                      interval_value,interval_unit,generate_count,observation_days,idle_mark_days,cleanup_enabled,
                      cleanup_no_access_days,adapter_state,schedule_anchor_at,next_run_at)
                     VALUES (:name,:cloud_account_id,:usage_scope,:environment,:region,:domain_provider,
                      :certificate_provider,:origin_domain,:public_path,:probe_app_id,
                      :price_class,:ipv6_enabled,
-                     :enabled,:generation_enabled,:target_active_count,:minimum_healthy_count,
+                     :enabled,:generation_enabled,:capacity_mode,:target_active_count,:minimum_healthy_count,
                      :interval_value,:interval_unit,:generate_count,:observation_days,:idle_mark_days,:cleanup_enabled,
                      :cleanup_no_access_days,:adapter_state,:schedule_anchor_at,:next_run_at)");
                 $stmt->execute($params + [
@@ -1449,7 +1562,7 @@ if (!function_exists('apiDomainAutomationUnlock')) {
 
 if (!function_exists('apiDomainAutomationEffectiveIsolationGate')) {
     /**
-     * 使用真实下发的前 24 节点评估隔离影响。
+     * 使用真实下发的前 30 节点评估隔离影响。
      *
      * 候选节点本来就不在当前运行集合时，隔离不会减少壳的当前入口；
      * 在集合内时，才按 config/report/click 用途逐一检查移除后保底数。
@@ -1464,7 +1577,7 @@ if (!function_exists('apiDomainAutomationEffectiveIsolationGate')) {
             ? configDeliveryEnabledApiDomainRows($pdo)
             : $pdo->query("SELECT id,name,base_url,usage_scope,priority,updated_at
                 FROM cainiao_api_domain_pool WHERE enabled=1
-                ORDER BY priority DESC,id ASC LIMIT 24")->fetchAll(PDO::FETCH_ASSOC);
+                ORDER BY priority DESC,id ASC LIMIT 30")->fetchAll(PDO::FETCH_ASSOC);
         $candidateIsEffective = false;
         $remainingRows = [];
         foreach ($effectiveRows as $effectiveRow) {
@@ -1508,14 +1621,14 @@ if (!function_exists('apiDomainAutomationEffectiveIsolationGate')) {
 }
 
 if (!function_exists('apiDomainAutomationHealthyEffectiveCount')) {
-    /** 健康保底只统计真实前 24 运行集合中已验证且 active 的自动节点。 */
+    /** 健康保底只统计真实前 30 运行集合中已验证且 active 的自动节点。 */
     function apiDomainAutomationHealthyEffectiveCount(PDO $pdo, int $groupId): int
     {
         $effectiveRows = function_exists('configDeliveryEnabledApiDomainRows')
             ? configDeliveryEnabledApiDomainRows($pdo)
             : $pdo->query("SELECT id,name,base_url,usage_scope,priority,updated_at
                 FROM cainiao_api_domain_pool WHERE enabled=1
-                ORDER BY priority DESC,id ASC LIMIT 24")->fetchAll(PDO::FETCH_ASSOC);
+                ORDER BY priority DESC,id ASC LIMIT 30")->fetchAll(PDO::FETCH_ASSOC);
         $ids = [];
         foreach ($effectiveRows as $row) {
             $id = (int)($row['id'] ?? 0);
@@ -1535,16 +1648,17 @@ if (!function_exists('apiDomainAutomationHealthyEffectiveCount')) {
 
 if (!function_exists('apiDomainAutomationReservedResourceCount')) {
     /**
-     * 尚未入池的 CloudFront slot 也占用目标容量。失败 slot 仍保留容量，
-     * 须经资源重试或明确清理归档后才释放，防止下一周期重复超发。
+     * 尚未入池的 CloudFront slot 也占用目标容量。只有真实在途状态占位；
+     * create_failed/probe_failed/cleanup_failed 是终态故障，必须释放容量，
+     * 这样固定目标模式会在下一轮为失效节点补新入口，同时保留旧账本供人工重试。
      */
     function apiDomainAutomationReservedResourceCount(PDO $pdo, int $groupId): int
     {
         $stmt = $pdo->prepare("SELECT COUNT(*) FROM cainiao_api_domain_cloud_resource
             WHERE group_id=:group_id AND domain_pool_id IS NULL
               AND workflow_state IN (
-                'pending_create','deploying','verifying','create_failed','probe_failed',
-                'disable_pending','disabling','delete_pending','cleanup_failed','restore_pending','restoring'
+                'pending_create','deploying','verifying',
+                'disable_pending','disabling','delete_pending','restore_pending','restoring'
               )");
         $stmt->execute([':group_id' => $groupId]);
         return (int)$stmt->fetchColumn();
@@ -2134,6 +2248,7 @@ if (!function_exists('apiDomainAutomationRunGroup')) {
             $stmt->execute([':id' => $groupId]);
             $group = $stmt->fetch(PDO::FETCH_ASSOC);
             if (!$group) throw new RuntimeException('自动化池组不存在');
+            $capacityMode = apiDomainAutomationNormalizeCapacityMode($group['capacity_mode'] ?? 'target_replenish');
             // 与账号编辑使用同一身份锁：先持有池组，再锁所选账号行，
             // 确保下面写入资源账本时的 expected_account_id 来自未被并发修改的快照。
             $accountLock = $pdo->prepare('SELECT id,enabled,deleted_at,account_id,region,
@@ -2173,8 +2288,11 @@ if (!function_exists('apiDomainAutomationRunGroup')) {
             // 避免管理员刚编辑计划或暂停后仍提前执行。
             if ($triggerType === 'scheduled') {
                 $scheduledFor = trim((string)($group['next_run_at'] ?? ''));
-                if ($scheduledFor === ''
-                    || new DateTimeImmutable($scheduledFor, apiDomainAutomationTimezone()) > $now) {
+                $scheduleDue = $scheduledFor !== ''
+                    && new DateTimeImmutable($scheduledFor, apiDomainAutomationTimezone()) <= $now;
+                // 固定目标模式允许 next_run_at 为空时立即补齐；周期兼容模式仍要求明确到期时间。
+                if (($capacityMode === 'periodic' && !$scheduleDue)
+                    || ($capacityMode === 'target_replenish' && $scheduledFor !== '' && !$scheduleDue)) {
                     $pdo->commit();
                     return [
                         'status' => 'skipped',
@@ -2200,9 +2318,12 @@ if (!function_exists('apiDomainAutomationRunGroup')) {
                 && trim((string)($group['account_credential_ref'] ?? '')) !== '';
             if ($dryRun) {
                 $status = 'dry_run';
-                $message = "Dry-run 预览：当前可用 {$currentEligible} 个，在途/失败占位 {$reservedCapacity} 个，缺口 {$gap} 个，计划补 {$planned} 个"
-                    . (!$configurationReady && $planned > 0 ? '；尚未配置有效回源与探针应用' : '')
-                    . (!$connectionReady && $planned > 0 ? '；AWS 账号尚未通过连接验证' : '');
+                $message = $capacityMode === 'target_replenish'
+                    ? "固定目标预览：当前可用 {$currentEligible} 个，在途占位 {$reservedCapacity} 个，目标缺口 {$gap} 个，本轮补 {$planned} 个；达到目标后停止生成"
+                    : "周期 Dry-run 预览：当前可用 {$currentEligible} 个，在途占位 {$reservedCapacity} 个，缺口 {$gap} 个，计划补 {$planned} 个";
+                // 两种模式都显示配置与连接门禁，避免固定目标预览隐藏未就绪原因。
+                if (!$configurationReady && $planned > 0) $message .= '；尚未配置有效回源与探针应用';
+                if (!$connectionReady && $planned > 0) $message .= '；AWS 账号尚未通过连接验证';
             } elseif ($planned > 0) {
                 if (!$configurationReady) {
                     $status = 'invalid_config';
@@ -2212,7 +2333,9 @@ if (!function_exists('apiDomainAutomationRunGroup')) {
                     $message = "当前缺口 {$gap} 个，本轮未入队：请先完成 AWS 连接验证";
                 } else {
                     $status = 'queued';
-                    $message = "当前缺口 {$gap} 个，已入队 {$planned} 个 CloudFront 生成作业";
+                    $message = $capacityMode === 'target_replenish'
+                        ? "固定目标缺口 {$gap} 个，已入队 {$planned} 个 CloudFront 生成作业"
+                        : "当前缺口 {$gap} 个，已入队 {$planned} 个 CloudFront 生成作业";
                 }
             } elseif ((int)$lifecycle['cleanup_pending_count'] > 0) {
                 $status = 'succeeded';
@@ -2222,7 +2345,9 @@ if (!function_exists('apiDomainAutomationRunGroup')) {
                 $message = '自动生成已暂停，本轮仅执行生命周期检查';
             } else {
                 $status = 'skipped';
-                $message = '当前容量已达目标，本轮跳过生成';
+                $message = $capacityMode === 'target_replenish'
+                    ? '固定目标容量已满，本轮不生成'
+                    : '当前容量已达目标，本轮跳过生成';
             }
             $batch = null;
             if ($planned > 0) {
@@ -2268,7 +2393,10 @@ if (!function_exists('apiDomainAutomationRunGroup')) {
             }
 
             $nextRun = null;
-            if ($triggerType === 'scheduled') {
+            if ($capacityMode === 'target_replenish' && (int)$group['enabled'] === 1) {
+                // 固定目标模式只负责监控缺口；每分钟再检查一次，不按天制造新域名。
+                $nextRun = $now->modify('+60 seconds');
+            } elseif ($triggerType === 'scheduled') {
                 $anchor = new DateTimeImmutable((string)$group['schedule_anchor_at'], apiDomainAutomationTimezone());
                 $nextRun = apiDomainAutomationNextRun(
                     $anchor,
@@ -2345,7 +2473,7 @@ if (!function_exists('apiDomainAutomationSetGroupEnabled')) {
         ensureApiDomainAutomationSchema($pdo);
         $pdo->beginTransaction();
         try {
-            $stmt = $pdo->prepare('SELECT schedule_anchor_at,interval_value,interval_unit
+            $stmt = $pdo->prepare('SELECT schedule_anchor_at,capacity_mode,interval_value,interval_unit
                 FROM cainiao_api_domain_automation_group
                 WHERE id=:id AND deleted_at IS NULL FOR UPDATE');
             $stmt->execute([':id' => $groupId]);
@@ -2353,16 +2481,23 @@ if (!function_exists('apiDomainAutomationSetGroupEnabled')) {
             if (!$group) throw new RuntimeException('自动化池组不存在');
             $nextRun = null;
             if ($enabled) {
-                $anchor = new DateTimeImmutable(
-                    (string)$group['schedule_anchor_at'],
-                    apiDomainAutomationTimezone()
-                );
-                $nextRun = apiDomainAutomationNextRun(
-                    $anchor,
-                    (int)$group['interval_value'],
-                    (string)$group['interval_unit'],
-                    apiDomainAutomationNow()
-                );
+                $now = apiDomainAutomationNow();
+                $capacityMode = apiDomainAutomationNormalizeCapacityMode($group['capacity_mode'] ?? 'target_replenish');
+                if ($capacityMode === 'target_replenish') {
+                    // 恢复固定目标组后立即触发一次缺口检查。
+                    $nextRun = $now;
+                } else {
+                    $anchor = new DateTimeImmutable(
+                        (string)$group['schedule_anchor_at'],
+                        apiDomainAutomationTimezone()
+                    );
+                    $nextRun = apiDomainAutomationNextRun(
+                        $anchor,
+                        (int)$group['interval_value'],
+                        (string)$group['interval_unit'],
+                        $now
+                    );
+                }
             }
             $update = $pdo->prepare('UPDATE cainiao_api_domain_automation_group
                 SET enabled=:enabled,next_run_at=:next_run_at WHERE id=:id AND deleted_at IS NULL');
@@ -2647,7 +2782,7 @@ if (!function_exists('apiDomainAutomationAdvanceFailedGroup')) {
         }
         try {
             $pdo->beginTransaction();
-            $stmt = $pdo->prepare('SELECT schedule_anchor_at,interval_value,interval_unit,next_run_at
+            $stmt = $pdo->prepare('SELECT schedule_anchor_at,capacity_mode,interval_value,interval_unit,next_run_at
                 FROM cainiao_api_domain_automation_group
                 WHERE id=:id AND deleted_at IS NULL AND enabled=1 FOR UPDATE');
             $stmt->execute([':id' => $groupId]);
@@ -2658,22 +2793,28 @@ if (!function_exists('apiDomainAutomationAdvanceFailedGroup')) {
             }
             $now = apiDomainAutomationNow();
             $scheduledFor = trim((string)($group['next_run_at'] ?? ''));
+            $capacityMode = apiDomainAutomationNormalizeCapacityMode($group['capacity_mode'] ?? 'target_replenish');
             $clockWasReplaced = $expectedScheduledFor !== null
                 && trim($expectedScheduledFor) !== $scheduledFor;
-            $isStillDue = $scheduledFor !== ''
-                && new DateTimeImmutable($scheduledFor, apiDomainAutomationTimezone()) <= $now;
+            $isStillDue = $capacityMode === 'target_replenish'
+                ? ($scheduledFor === '' || new DateTimeImmutable($scheduledFor, apiDomainAutomationTimezone()) <= $now)
+                : ($scheduledFor !== '' && new DateTimeImmutable($scheduledFor, apiDomainAutomationTimezone()) <= $now);
             if ($clockWasReplaced || !$isStillDue) {
                 // worker 预选后若管理员更新了调度时钟，旧失败结果不覆盖新 next_run_at。
                 $pdo->commit();
                 return false;
             }
-            $anchor = new DateTimeImmutable((string)$group['schedule_anchor_at'], apiDomainAutomationTimezone());
-            $nextRun = apiDomainAutomationNextRun(
-                $anchor,
-                (int)$group['interval_value'],
-                (string)$group['interval_unit'],
-                $now
-            );
+            if ($capacityMode === 'target_replenish') {
+                $nextRun = $now->modify('+60 seconds');
+            } else {
+                $anchor = new DateTimeImmutable((string)$group['schedule_anchor_at'], apiDomainAutomationTimezone());
+                $nextRun = apiDomainAutomationNextRun(
+                    $anchor,
+                    (int)$group['interval_value'],
+                    (string)$group['interval_unit'],
+                    $now
+                );
+            }
             $update = $pdo->prepare("UPDATE cainiao_api_domain_automation_group SET
                 last_run_at=:last_run_at,last_run_status='failed',
                 last_run_message='本轮调度执行异常，已推进到下一周期',next_run_at=:next_run_at
@@ -2724,9 +2865,12 @@ if (!function_exists('apiDomainAutomationProcessDue')) {
         try {
             $stmt = $pdo->query("SELECT id,next_run_at AS scheduled_for
                 FROM cainiao_api_domain_automation_group
-                WHERE deleted_at IS NULL AND enabled=1 AND next_run_at IS NOT NULL
-                  AND next_run_at<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)
-                ORDER BY next_run_at ASC,id ASC LIMIT {$limit}");
+                WHERE deleted_at IS NULL AND enabled=1
+                  AND ((capacity_mode='target_replenish' AND (next_run_at IS NULL
+                        OR next_run_at<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)))
+                    OR (capacity_mode<>'target_replenish' AND next_run_at IS NOT NULL
+                        AND next_run_at<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)))
+                ORDER BY COALESCE(next_run_at,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)),id ASC LIMIT {$limit}");
             $dueRows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             $result = [
                 'checked' => count($dueRows), 'processed' => 0, 'waiting_adapter' => 0,
@@ -4584,6 +4728,11 @@ if (!function_exists('apiDomainAutomationOverview')) {
             $group['pending_resource_count'] = $reservedCapacity;
             $group['reserved_capacity_count'] = $reservedCapacity;
             $group['capacity_count'] = $metrics['current_eligible_count'] + $reservedCapacity;
+            $group['capacity_mode'] = apiDomainAutomationNormalizeCapacityMode($group['capacity_mode'] ?? 'target_replenish');
+            $group['capacity_mode_label'] = $group['capacity_mode'] === 'target_replenish'
+                ? '固定目标补齐'
+                : '兼容周期生成';
+            $group['replenish_interval_seconds'] = $group['capacity_mode'] === 'target_replenish' ? 60 : null;
             // 兼容经典页已使用的字段名，新 Pure Admin 直接读取更明确的别名。
             $group['active_count'] = $metrics['current_eligible_count'];
             $group['idle_count'] = $metrics['unused_marked_count'];

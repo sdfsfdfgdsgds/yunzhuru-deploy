@@ -234,6 +234,7 @@ function saveApiDomainAutomationGroup(PDO $pdo, array $input)
         'ipv6_enabled',
         'enabled',
         'generation_enabled',
+        'capacity_mode',
         'target_active_count',
         'minimum_healthy_count',
         'interval_value',

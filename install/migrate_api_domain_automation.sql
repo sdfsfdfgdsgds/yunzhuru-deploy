@@ -1,5 +1,5 @@
 -- ============================================================
--- API 域名池：稳定池组、不可变批次、CloudFront 资源与有界作业 V3
+-- API 域名池：稳定池组、不可变批次、CloudFront 资源与有界作业 V4
 -- 可在 MySQL 8 生产库重复执行；只变更本地结构和状态，不调用 AWS。
 -- AWS 账号表只保存引用元数据，不保存访问密钥、Secret 或网页登录信息。
 -- ============================================================
@@ -41,11 +41,12 @@ CREATE TABLE IF NOT EXISTS cainiao_api_domain_automation_group (
   `ipv6_enabled` tinyint(1) NOT NULL DEFAULT 1,
   `enabled` tinyint(1) NOT NULL DEFAULT 0,
   `generation_enabled` tinyint(1) NOT NULL DEFAULT 0,
-  `target_active_count` int unsigned NOT NULL DEFAULT 20,
+  `capacity_mode` varchar(24) NOT NULL DEFAULT 'target_replenish',
+  `target_active_count` int unsigned NOT NULL DEFAULT 30,
   `minimum_healthy_count` int unsigned NOT NULL DEFAULT 4,
   `interval_value` int unsigned NOT NULL DEFAULT 1,
-  `interval_unit` varchar(16) NOT NULL DEFAULT 'day',
-  `generate_count` int unsigned NOT NULL DEFAULT 1,
+  `interval_unit` varchar(16) NOT NULL DEFAULT 'minute',
+  `generate_count` int unsigned NOT NULL DEFAULT 30,
   `observation_days` int unsigned NOT NULL DEFAULT 1,
   `idle_mark_days` int unsigned NOT NULL DEFAULT 3,
   `cleanup_enabled` tinyint(1) NOT NULL DEFAULT 0,
@@ -226,6 +227,72 @@ SET @api_auto_ddl = (
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cainiao_api_domain_automation_group' AND COLUMN_NAME = 'generation_enabled'
 );
 PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+
+-- 先记录字段是否来自旧 V3 表，再执行 ALTER；这样可区分新建表默认值与
+-- 存量表的旧按周期策略，避免把管理员自定义周期组误标成固定补齐组。
+SET @api_auto_had_capacity_mode = (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cainiao_api_domain_automation_group' AND COLUMN_NAME = 'capacity_mode'
+);
+SET @api_auto_had_target_active_count = (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cainiao_api_domain_automation_group' AND COLUMN_NAME = 'target_active_count'
+);
+
+SET @api_auto_ddl = (
+  SELECT IF(COUNT(*) = 0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `capacity_mode` varchar(24) NOT NULL DEFAULT ''target_replenish'' AFTER `generation_enabled`', 'DO 1')
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cainiao_api_domain_automation_group' AND COLUMN_NAME = 'capacity_mode'
+);
+PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+
+-- 极早期自动化骨架可能没有容量字段；按无位置约束补齐，保证滚动升级可重复执行。
+SET @api_auto_ddl = (
+  SELECT IF(COUNT(*) = 0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `target_active_count` int unsigned NOT NULL DEFAULT 30', 'DO 1')
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cainiao_api_domain_automation_group' AND COLUMN_NAME = 'target_active_count'
+);
+PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+
+SET @api_auto_ddl = (
+  SELECT IF(COUNT(*) = 0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `minimum_healthy_count` int unsigned NOT NULL DEFAULT 4', 'DO 1')
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cainiao_api_domain_automation_group' AND COLUMN_NAME = 'minimum_healthy_count'
+);
+PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+
+SET @api_auto_ddl = (
+  SELECT IF(COUNT(*) = 0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `interval_value` int unsigned NOT NULL DEFAULT 1', 'DO 1')
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cainiao_api_domain_automation_group' AND COLUMN_NAME = 'interval_value'
+);
+PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+
+SET @api_auto_ddl = (
+  SELECT IF(COUNT(*) = 0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `interval_unit` varchar(16) NOT NULL DEFAULT ''minute''', 'DO 1')
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cainiao_api_domain_automation_group' AND COLUMN_NAME = 'interval_unit'
+);
+PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+
+SET @api_auto_ddl = (
+  SELECT IF(COUNT(*) = 0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `generate_count` int unsigned NOT NULL DEFAULT 30', 'DO 1')
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cainiao_api_domain_automation_group' AND COLUMN_NAME = 'generate_count'
+);
+PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+
+UPDATE `cainiao_api_domain_automation_group`
+SET `capacity_mode`=CASE
+    WHEN @api_auto_had_target_active_count=0 THEN 'target_replenish'
+    WHEN `target_active_count`=20 AND `minimum_healthy_count`=4
+         AND `interval_value`=1 AND `interval_unit`='day' AND `generate_count`=1
+    THEN 'target_replenish'
+    ELSE 'periodic'
+END
+WHERE @api_auto_had_capacity_mode = 0 AND `deleted_at` IS NULL;
 
 SET @api_auto_ddl = (
   SELECT IF(COUNT(*) = 0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `observation_days` int unsigned NOT NULL DEFAULT 1 AFTER `generate_count`', 'DO 1')
@@ -438,11 +505,34 @@ SET `verified_at`=COALESCE(`verified_at`,`created_at`),
     `eligible_at`=COALESCE(`eligible_at`,`created_at`)
 WHERE `origin`='aws_auto' AND `lifecycle_status` IN ('active','unused_marked');
 
+-- V4 只迁移旧版的默认组合：固定目标 30 个、缺口补齐、每分钟检查。
+-- 读取版本后只执行一次，避免管理员后续主动设置 20/天再次被覆盖。
+SET @api_auto_schema_version = COALESCE((
+  SELECT CAST(`key_value` AS UNSIGNED)
+  FROM `cainiao_config_delivery_meta`
+  WHERE `key_name`='api_domain_automation_schema_version'
+  LIMIT 1
+), 0);
+UPDATE `cainiao_api_domain_automation_group`
+SET `capacity_mode`='target_replenish',
+    `target_active_count`=30,
+    `interval_value`=1,
+    `interval_unit`='minute',
+    `generate_count`=30,
+    `next_run_at`=CASE WHEN `enabled`=1
+        THEN DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)
+        ELSE `next_run_at` END
+WHERE @api_auto_schema_version < 4
+  AND (`capacity_mode` IS NULL OR `capacity_mode`=''
+       OR (`capacity_mode`='target_replenish'
+           AND `target_active_count`=20 AND `minimum_healthy_count`=4
+           AND `interval_value`=1 AND `interval_unit`='day' AND `generate_count`=1));
+
 -- 对接 AWS 前，cleanup_pending 只代表本地隔离和云端待处理，不删除任何云资源或数据库行。
 UPDATE `cainiao_api_domain_pool`
 SET `cloud_cleanup_state`='waiting_adapter'
 WHERE `origin`='aws_auto' AND `lifecycle_status`='cleanup_pending';
 
 INSERT INTO `cainiao_config_delivery_meta` (`key_name`,`key_value`)
-VALUES ('api_domain_automation_schema_version','3')
-ON DUPLICATE KEY UPDATE `key_value`=GREATEST(CAST(`key_value` AS UNSIGNED),3);
+VALUES ('api_domain_automation_schema_version','4')
+ON DUPLICATE KEY UPDATE `key_value`=GREATEST(CAST(`key_value` AS UNSIGNED),4);

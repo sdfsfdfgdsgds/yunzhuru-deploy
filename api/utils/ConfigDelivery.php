@@ -375,7 +375,7 @@ if (!function_exists('configDeliveryEnabledApiDomainRows')) {
      * 读取当前会进入运行时配置的 API 域名池记录。
      *
      * 这是配置负载与管理页展示共用的单一数据源：只返回已启用的
-     * 前 24 个节点，排序与壳端最终收到的列表一致。
+     * 前 30 个节点，排序与壳端最终收到的列表一致。
      */
     function configDeliveryEnabledApiDomainRows(PDO $pdo): array
     {
@@ -383,7 +383,7 @@ if (!function_exists('configDeliveryEnabledApiDomainRows')) {
             FROM cainiao_api_domain_pool
             WHERE enabled=1
             ORDER BY priority DESC,id ASC
-            LIMIT 24")->fetchAll(PDO::FETCH_ASSOC);
+            LIMIT 30")->fetchAll(PDO::FETCH_ASSOC);
     }
 }
 

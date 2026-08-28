@@ -115,7 +115,7 @@
             type="warning"
             :closable="false"
             show-icon
-            title="生成规则：每个调度周期最多补 N 个，达到目标容量后暂停；有历史成功访问、pinned、reserved 或保底保护的节点始终保留；无访问节点先从 unused_marked 转入 cleanup_pending 并停止本地下发。只有 AWS 适配器和所选账号均已验证时才开放真实生成；清理继续经过隔离、禁用、删除和归档门禁。">
+            title="生成规则：固定目标补齐模式只维护目标活跃数，达到目标后停止创建；节点失效、探针失败或终态创建失败释放缺口，下一轮只补缺口，不按天无限累加。有历史成功访问、pinned、reserved 或保底保护的节点始终保留；无访问节点先从 unused_marked 转入 cleanup_pending 并停止本地下发。只有 AWS 适配器和所选账号均已验证时才开放真实生成；清理继续经过隔离、禁用、删除和归档门禁。">
           </el-alert>
 
           <div class="automation-summary">
@@ -170,7 +170,7 @@
                 <el-table-column label="池组" min-width="225" fixed="left"><template #default="scope"><div>{{ scope.row.name || `池组 #${scope.row.id}` }}</div><div class="automation-meta">{{ environmentLabel(scope.row.environment) }} · {{ scopeLabel(scope.row.usage_scope) }} · {{ scope.row.region || '-' }}</div><div class="automation-meta">{{ cloudAccountLabel(scope.row.cloud_account_id) }} · 验收 APPID {{ scope.row.probe_app_id || '-' }}</div><div class="automation-meta mono">{{ scope.row.origin_domain || scope.row.origin_domain_name || '-' }}{{ scope.row.public_path || '' }}</div></template></el-table-column>
                 <el-table-column label="提供方" width="155"><template #default="scope"><div>{{ providerLabel(scope.row.domain_provider, 'domain') }}</div><div class="automation-meta">证书 {{ providerLabel(scope.row.certificate_provider, 'certificate') }}</div></template></el-table-column>
                 <el-table-column label="容量" width="170"><template #default="scope"><div>可用 {{ number(groupEligibleCount(scope.row)) }} / {{ number(scope.row.target_active_count) }}</div><div class="automation-meta">已验健康 {{ number(groupActiveCount(scope.row)) }} · 保底 {{ number(scope.row.minimum_healthy_count) }}</div><div class="automation-meta">预计补 {{ number(groupExpectedReplenish(scope.row)) }}</div></template></el-table-column>
-                <el-table-column label="生成周期" width="165"><template #default="scope"><div>每 {{ number(scope.row.interval_value) }} {{ intervalUnitLabel(scope.row.interval_unit) }}</div><div class="automation-meta">每次最多 {{ number(scope.row.generate_count) }} 个 · 约 {{ number(estimatedAnnualRuns(scope.row)) }} 次/年</div></template></el-table-column>
+                <el-table-column label="容量策略" width="185"><template #default="scope"><div>{{ capacityModeLabel(scope.row.capacity_mode) }}</div><div class="automation-meta">{{ scope.row.capacity_mode === 'target_replenish' ? '每分钟检查缺口' : `每 ${number(scope.row.interval_value)} ${intervalUnitLabel(scope.row.interval_unit)} 检查` }}</div><div class="automation-meta">缺口每次最多 {{ number(scope.row.generate_count) }} 个</div></template></el-table-column>
                 <el-table-column label="观察 / 清理" width="160"><template #default="scope"><div>观察 {{ number(scope.row.observation_days) }} 天 · 标记 {{ number(scope.row.idle_mark_days) }} 天</div><div class="automation-meta">{{ enabledValue(scope.row.cleanup_enabled) ? `${number(scope.row.cleanup_no_access_days)} 天进队` : '定时清理关闭' }}</div></template></el-table-column>
                 <el-table-column label="下次执行" width="170"><template #default="scope">{{ timeText(scope.row.next_run_at) }}</template></el-table-column>
                 <el-table-column label="CloudFront" width="155"><template #default="scope"><div>{{ scope.row.price_class || 'PriceClass_All' }}</div><div class="automation-meta">IPv6 {{ enabledValue(scope.row.ipv6_enabled) ? '开' : '关' }}</div></template></el-table-column>
@@ -413,19 +413,26 @@
         <el-form-item label="HTTPS 证书"><div><el-tag>CloudFront 默认证书</el-tag><div class="form-help">本期模板不申请自定义域名证书。</div></div></el-form-item>
         <el-form-item label="池组调度"><el-switch v-model="automationGroupEditor.enabled" :active-value="1" :inactive-value="0" active-text="启用" inactive-text="暂停"></el-switch></el-form-item>
         <el-form-item label="定时生成"><el-switch v-model="automationGroupEditor.generation_enabled" :active-value="1" :inactive-value="0" :disabled="!generationReady(automationGroupEditor)" active-text="开启" inactive-text="关闭"></el-switch><div class="form-help">{{ generationReady(automationGroupEditor) ? '关闭后仍保留池组、批次和节点历史。' : 'AWS 适配器或所选账号尚未通过验证，真实生成开关已关闭。' }}</div></el-form-item>
-        <el-form-item label="目标活跃数" required><el-input-number v-model="automationGroupEditor.target_active_count" class="form-number" controls-position="right" :min="1" :max="24"></el-input-number><div class="form-help">活跃节点达到目标后暂停生成，默认 20；当前 APK 配置最多下发 24 个 API 入口。</div></el-form-item>
-        <el-form-item label="最低健康数" required><el-input-number v-model="automationGroupEditor.minimum_healthy_count" class="form-number" controls-position="right" :min="1" :max="24"></el-input-number><div class="form-help">始终保留的健康节点下限，默认 4。</div></el-form-item>
-        <el-form-item label="生成周期" required>
-          <div class="compound-control"><el-input-number v-model="automationGroupEditor.interval_value" class="form-number" controls-position="right" :min="1" :max="10000"></el-input-number><el-select v-model="automationGroupEditor.interval_unit"><el-option label="分" value="minute"></el-option><el-option label="时" value="hour"></el-option><el-option label="天" value="day"></el-option><el-option label="月" value="month"></el-option></el-select></div>
+        <el-form-item class="wide" label="容量策略" required>
+          <el-radio-group v-model="automationGroupEditor.capacity_mode" size="small">
+            <el-radio-button label="target_replenish">固定目标补齐</el-radio-button>
+            <el-radio-button label="periodic">兼容周期生成</el-radio-button>
+          </el-radio-group>
+          <div class="form-help">固定目标补齐：例如目标 30 个，当前可用 30 个时不创建；掉 1 个只补 1 个。worker 每分钟检查一次，不会按天无限生成。</div>
         </el-form-item>
-        <el-form-item label="每次生成上限" required><el-input-number v-model="automationGroupEditor.generate_count" class="form-number" controls-position="right" :min="1" :max="24"></el-input-number><div class="form-help">实际生成 min（每次上限，目标容量－当前可用数），默认 1。</div></el-form-item>
+        <el-form-item label="目标活跃数" required><el-input-number v-model="automationGroupEditor.target_active_count" class="form-number" controls-position="right" :min="1" :max="30"></el-input-number><div class="form-help">自动化池组要维持的有效入口数，默认 30，最高 30 个。</div></el-form-item>
+        <el-form-item label="最低健康数" required><el-input-number v-model="automationGroupEditor.minimum_healthy_count" class="form-number" controls-position="right" :min="1" :max="30"></el-input-number><div class="form-help">清理时始终保留的健康节点下限，默认 4。</div></el-form-item>
+        <el-form-item label="缺口检查周期" required>
+          <div class="compound-control"><el-input-number v-model="automationGroupEditor.interval_value" class="form-number" controls-position="right" :min="1" :max="10000" :disabled="automationGroupEditor.capacity_mode === 'target_replenish'"></el-input-number><el-select v-model="automationGroupEditor.interval_unit" :disabled="automationGroupEditor.capacity_mode === 'target_replenish'"><el-option label="分" value="minute"></el-option><el-option label="时" value="hour"></el-option><el-option label="天" value="day"></el-option><el-option label="月" value="month"></el-option></el-select></div><div class="form-help">固定目标补齐固定每分钟检查；只有选择兼容周期生成时才使用此周期。</div>
+        </el-form-item>
+        <el-form-item label="每轮补齐上限" required><el-input-number v-model="automationGroupEditor.generate_count" class="form-number" controls-position="right" :min="1" :max="30"></el-input-number><div class="form-help">实际补齐数量 = min（每轮上限，目标容量－当前可用数－在途占位），默认 30，最高 30。</div></el-form-item>
         <el-form-item label="新节点观察期（天）" required><el-input-number v-model="automationGroupEditor.observation_days" class="form-number" controls-position="right" :min="0" :max="3650"></el-input-number><div class="form-help">默认 1 天；观察期内保持 pending_verification，不进入无访问标记。</div></el-form-item>
         <el-form-item label="无访问标记阈值（天）" required><el-input-number v-model="automationGroupEditor.idle_mark_days" class="form-number" controls-position="right" :min="1" :max="3650"></el-input-number><div class="form-help">连续无访问达到阈值后标记，默认 3 天。</div></el-form-item>
         <el-form-item label="定时清理"><el-switch v-model="automationGroupEditor.cleanup_enabled" :active-value="1" :inactive-value="0" active-text="开启" inactive-text="关闭"></el-switch><div class="form-help">只将本池组创建、从未成功访问且通过保底门禁的 AWS 自动节点转入 cleanup_pending；适配器接入前只停止本地下发。</div></el-form-item>
         <el-form-item label="无访问清理天数" required><el-input-number v-model="automationGroupEditor.cleanup_no_access_days" class="form-number" controls-position="right" :min="1" :max="3650" :disabled="!enabledValue(automationGroupEditor.cleanup_enabled)"></el-input-number><div class="form-help">默认 7 天，最小 1 天，且不得小于无访问标记阈值。</div></el-form-item>
         <div class="wide automation-policy-preview">
-          <div><span class="muted">预计一年运行</span><strong>{{ number(estimatedAnnualRuns(automationGroupEditor)) }} 次</strong></div>
-          <div><span class="muted">实际活跃上限</span><strong>{{ number(automationGroupEditor.target_active_count) }} 个</strong></div>
+          <div><span class="muted">容量模式</span><strong>{{ capacityModeLabel(automationGroupEditor.capacity_mode) }}</strong></div>
+          <div><span class="muted">目标活跃上限</span><strong>{{ number(automationGroupEditor.target_active_count) }} 个</strong></div>
           <div><span class="muted">当前预计补充</span><strong>{{ number(groupExpectedReplenish(automationGroupEditor)) }} 个</strong></div>
           <div><span class="muted">下次运行</span><strong style="font-size:12px">{{ timeText(automationGroupEditor.next_run_at) }}</strong></div>
         </div>
@@ -499,11 +506,12 @@ createApp({
     ];
     const emptyCloudAccount = () => ({
       id: 0,
-      name: '',
-      account_id: '',
+      // 仅预填公开的账号识别资料与环境变量引用；真实密钥仍由 Railway Variables 提供。
+      name: 'aws-cdn',
+      account_id: '061039804769',
       region: 'us-east-1',
       auth_type: 'environment',
-      credential_ref: '',
+      credential_ref: 'PRIMARY',
       role_arn: '',
       external_id_ref: '',
       connection_state: 'unverified',
@@ -528,11 +536,12 @@ createApp({
       certificate_provider: 'cloudfront_default',
       enabled: 1,
       generation_enabled: 0,
-      target_active_count: 20,
+      capacity_mode: 'target_replenish',
+      target_active_count: 30,
       minimum_healthy_count: 4,
       interval_value: 1,
-      interval_unit: 'day',
-      generate_count: 1,
+      interval_unit: 'minute',
+      generate_count: 30,
       observation_days: 1,
       idle_mark_days: 3,
       cleanup_enabled: 0,
@@ -628,11 +637,12 @@ createApp({
         price_class: String(row.price_class || 'PriceClass_All'),
         ipv6_enabled: row.ipv6_enabled === undefined ? 1 : enabledValue(row.ipv6_enabled),
         probe_app_id: integerValue(row.probe_app_id, 0) || null,
-        target_active_count: integerValue(row.target_active_count, 20),
+        capacity_mode: String(row.capacity_mode || 'target_replenish'),
+        target_active_count: integerValue(row.target_active_count, 30),
         minimum_healthy_count: integerValue(row.minimum_healthy_count, 4),
         interval_value: integerValue(row.interval_value ?? row.schedule_every, 1),
-        interval_unit: String(row.interval_unit || row.schedule_unit || 'day'),
-        generate_count: integerValue(row.generate_count ?? row.daily_generation_limit, 1),
+        interval_unit: String(row.interval_unit || row.schedule_unit || 'minute'),
+        generate_count: integerValue(row.generate_count ?? row.daily_generation_limit, 30),
         observation_days: integerValue(row.observation_days, 1),
         idle_mark_days: integerValue(row.idle_mark_days ?? row.mark_no_access_after_days, 3),
         cleanup_no_access_days: integerValue(row.cleanup_no_access_days ?? row.archive_no_access_after_days, 7),
@@ -893,10 +903,11 @@ createApp({
         price_class: String(source.price_class || 'PriceClass_All'),
         ipv6_enabled: source.ipv6_enabled === undefined ? 1 : enabledValue(source.ipv6_enabled),
         probe_app_id: integerValue(source.probe_app_id, 0) || null,
-        target_active_count: integerValue(source.target_active_count, 20),
+        capacity_mode: String(source.capacity_mode || 'target_replenish'),
+        target_active_count: integerValue(source.target_active_count, 30),
         minimum_healthy_count: integerValue(source.minimum_healthy_count, 4),
         interval_value: integerValue(source.interval_value, 1),
-        generate_count: integerValue(source.generate_count, 1),
+        generate_count: integerValue(source.generate_count, 30),
         observation_days: integerValue(source.observation_days, 1),
         idle_mark_days: integerValue(source.idle_mark_days, 3),
         cleanup_no_access_days: integerValue(source.cleanup_no_access_days, 7),
@@ -931,12 +942,13 @@ createApp({
       if (integerValue(group.interval_value, 0) < 1) return '生成周期数值至少为 1';
       if (integerValue(group.interval_value, 0) > 10000) return '生成周期数值最多为 10000';
       if (integerValue(group.target_active_count, 0) < 1) return '目标活跃数至少为 1';
-      if (integerValue(group.target_active_count, 0) > 24) return '目标活跃数最多为 24';
+      if (!['target_replenish', 'periodic'].includes(String(group.capacity_mode || 'target_replenish'))) return '请选择有效容量策略';
+      if (integerValue(group.target_active_count, 0) > 30) return '目标活跃数最多为 30';
       if (integerValue(group.minimum_healthy_count, 0) < 1) return '最低健康数至少为 1';
-      if (integerValue(group.minimum_healthy_count, 0) > 24) return '最低健康数最多为 24';
+      if (integerValue(group.minimum_healthy_count, 0) > 30) return '最低健康数最多为 30';
       if (integerValue(group.minimum_healthy_count, 0) > integerValue(group.target_active_count, 0)) return '最低健康数不得大于目标活跃数';
       if (integerValue(group.generate_count, 0) < 1) return '每次数量至少为 1';
-      if (integerValue(group.generate_count, 0) > 24) return '每次数量最多为 24';
+      if (integerValue(group.generate_count, 0) > 30) return '每轮补齐数量最多为 30';
       if (integerValue(group.observation_days, -1) < 0) return '新节点观察天数不小于 0';
       if (integerValue(group.observation_days, 0) > 3650) return '新节点观察天数最多为 3650';
       if (integerValue(group.idle_mark_days, 0) < 1) return '无访问标记阈值至少为 1 天';
@@ -971,11 +983,12 @@ createApp({
           certificate_provider: 'cloudfront_default',
           enabled: enabledValue(group.enabled),
           generation_enabled: generationReady(group) ? enabledValue(group.generation_enabled) : 0,
-          target_active_count: integerValue(group.target_active_count, 20),
+          capacity_mode: String(group.capacity_mode || 'target_replenish'),
+          target_active_count: integerValue(group.target_active_count, 30),
           minimum_healthy_count: integerValue(group.minimum_healthy_count, 4),
           interval_value: integerValue(group.interval_value, 1),
-          interval_unit: String(group.interval_unit || 'day'),
-          generate_count: integerValue(group.generate_count, 1),
+          interval_unit: String(group.interval_unit || 'minute'),
+          generate_count: integerValue(group.generate_count, 30),
           observation_days: integerValue(group.observation_days, 1),
           idle_mark_days: integerValue(group.idle_mark_days, 3),
           cleanup_enabled: enabledValue(group.cleanup_enabled),
@@ -1214,11 +1227,14 @@ createApp({
     function intervalUnitLabel(value) { return ({ minute: '分', hour: '时', day: '天', month: '月' })[String(value || '').toLowerCase()] || value || '-'; }
     function groupActiveCount(row) { return row.effective_healthy_count ?? row.healthy_count ?? row.active_verified_count ?? row.active_count ?? 0; }
     function groupEligibleCount(row) { return row.current_eligible_count ?? row.eligible_count ?? row.capacity_count ?? row.active_count ?? row.managed_active_count ?? 0; }
+    function capacityModeLabel(value) {
+      return String(value || 'target_replenish') === 'target_replenish' ? '固定目标补齐' : '兼容周期生成';
+    }
     function groupExpectedReplenish(row) {
       if (row.generation_enabled !== undefined && !enabledValue(row.generation_enabled)) return 0;
       if (row.estimated_next_fill !== undefined && row.estimated_next_fill !== null) return integerValue(row.estimated_next_fill, 0);
       const gap = Math.max(0, integerValue(row.target_active_count, 0) - integerValue(groupEligibleCount(row), 0));
-      return Math.min(integerValue(row.generate_count, 1), gap);
+      return Math.min(integerValue(row.generate_count, 30), gap);
     }
     function estimatedAnnualRuns(row) {
       const unitBase = { minute: 525600, hour: 8760, day: 365, month: 12 };
@@ -1384,7 +1400,7 @@ createApp({
       cloudResourceId, linkedCloudResourceId, cloudDistributionId, cloudDistributionDomain, cloudResourceState,
       cloudResourceRetryCount, cloudResourceStateLabel, cloudResourceStateTag, cloudResourceRetryable,
       cloudAccountLabel, automationGroupLabel, intervalUnitLabel, groupActiveCount, groupEligibleCount,
-      groupExpectedReplenish, estimatedAnnualRuns, environmentLabel, providerLabel, triggerLabel, runRetryable,
+      groupExpectedReplenish, capacityModeLabel, estimatedAnnualRuns, environmentLabel, providerLabel, triggerLabel, runRetryable,
       groupState, groupResultText, enabledValue, metric, number, timeText,
       nodeName, nodeUrl, nodeEnvironment, nodeLifecycle, nodeAccessCount, nodeLastAccess, lifecycleLabel, lifecycleTag,
       nodeProtectionDisabled, nodeCleanupEligible, nodeActionHint,
