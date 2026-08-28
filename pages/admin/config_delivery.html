@@ -213,12 +213,12 @@
             <div class="cloud-resource-toolbar">
               <div class="cloud-resource-toolbar-note">可删除阶段：待创建、创建中、部署中、探针中、已入池。已创建资源会先进入停用、轮询和删除队列；待创建资源会取消作业并保留归档记录。<el-tag v-if="cloudResourceSelection.length" size="small" type="warning" style="margin-left:8px">已选 {{ cloudResourceSelection.length }} 个</el-tag></div>
               <div class="cloud-resource-toolbar-actions">
-                <el-button v-if="cloudResourceSelection.length" type="danger" :loading="cloudResourceDeleting" @click="deleteCloudResources(cloudResourceSelection)">批量删除（{{ cloudResourceSelection.length }}）</el-button>
+                <el-button type="danger" :disabled="!cloudResourceSelection.length" :loading="cloudResourceDeleting" @click="deleteCloudResources(cloudResourceSelection)">批量删除<span v-if="cloudResourceSelection.length">（{{ cloudResourceSelection.length }}）</span></el-button>
                 <el-button v-if="cloudResourceSelection.length" :disabled="cloudResourceDeleting" @click="clearCloudResourceSelection">清除选择</el-button>
               </div>
             </div>
             <el-table ref="cloudResourceTable" class="automation-table" :data="automation.cloud_resources" border size="small" empty-text="暂无 CloudFront 资源" row-key="resource_id" @selection-change="handleCloudResourceSelection">
-              <el-table-column type="selection" width="48" :selectable="isCloudResourceSelectable"></el-table-column>
+              <el-table-column type="selection" width="48" reserve-selection :selectable="isCloudResourceSelectable"></el-table-column>
               <el-table-column label="资源 ID" width="110"><template #default="scope"><span class="mono">{{ cloudResourceId(scope.row) ? `#${cloudResourceId(scope.row)}` : '-' }}</span></template></el-table-column>
               <el-table-column label="Distribution" min-width="290"><template #default="scope"><div class="cloud-resource"><span class="mono">{{ cloudDistributionId(scope.row) || '-' }}</span><span class="automation-meta mono">{{ cloudDistributionDomain(scope.row) || '-' }}</span><span class="automation-meta mono">{{ scope.row.public_api_url || '-' }}</span></div></template></el-table-column>
               <el-table-column label="池组 / 批次" min-width="180"><template #default="scope"><div>{{ scope.row.group_name || automationGroupLabel(scope.row.group_id) }}</div><div class="automation-meta mono">{{ scope.row.batch_code || scope.row.batch_no || scope.row.batch_id || '-' }}</div></template></el-table-column>
@@ -1328,7 +1328,9 @@ createApp({
     /** 节点行必须携带明确的资源账本 ID，防止把域名池 ID 当作 CloudFront 资源 ID。 */
     function canDeleteNodeCloudResource(row) {
       const resourceId = integerValue(row && row.cloud_resource_id, 0);
-      return resourceId > 0 && canDeleteCloudResource(row);
+      if (resourceId <= 0) return false;
+      const resource = automation.cloud_resources.find(item => cloudResourceId(item) === resourceId);
+      return canDeleteCloudResource(resource || row);
     }
     function isCloudResourceSelectable(row) { return canDeleteCloudResource(row) && cloudResourceId(row) > 0; }
     function cloudResourceRetryCount(row) { return integerValue(row && (row.retry_count ?? row.retries), 0); }
@@ -1549,7 +1551,7 @@ createApp({
       summaryField, adapterStateLabel, adapterStateTag, automationStateLabel, automationStateTag,
       cloudAuthTypeLabel, cloudAccountState, cloudAccountActualId, cloudAccountVerifiedAt, maskedConnectionError,
       cloudConnectionStateLabel, cloudConnectionStateTag, automationAdapterReady, cloudAccountConnectionReady, generationReady,
-      cloudResourceId, linkedCloudResourceId, cloudDistributionId, cloudDistributionDomain, cloudResourceState,
+      cloudResourceId, linkedCloudResourceId, cloudDistributionId, cloudDistributionDomain, cloudResourceState, cloudResourceWorkflowState,
       cloudResourceRetryCount, cloudResourceStateLabel, cloudResourceStateTag, cloudResourceRetryable,
       cloudAccountLabel, automationGroupLabel, intervalUnitLabel, groupActiveCount, groupEligibleCount,
       groupExpectedReplenish, capacityModeLabel, estimatedAnnualRuns, environmentLabel, providerLabel, triggerLabel, runRetryable,
