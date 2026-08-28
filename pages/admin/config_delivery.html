@@ -45,6 +45,11 @@
     .automation-table { margin-top: 10px; }
     .automation-meta { margin-top: 4px; color: var(--admin-text-secondary, #6b7280); font-size: 12px; line-height: 1.55; }
     .automation-account-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+    .automation-account-status { display: grid; gap: 4px; min-width: 0; }
+    .automation-account-error { max-width: 320px; overflow: hidden; color: var(--el-color-danger, #f56c6c); font-size: 12px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+    .automation-connection-panel { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; width: 100%; padding: 12px; border: 1px solid var(--admin-border, #e5e7eb); border-radius: var(--admin-radius, 8px); background: var(--admin-surface-soft, #f8fafc); }
+    .automation-connection-panel strong { display: block; margin-top: 4px; overflow: hidden; color: var(--admin-text-primary, #1f2937); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+    .cloud-resource { display: grid; gap: 3px; min-width: 0; }
     .automation-view-nav { margin: 4px 0 16px; overflow-x: auto; padding-bottom: 2px; }
     .automation-view-nav .el-radio-group { flex-wrap: nowrap; white-space: nowrap; }
     .automation-view-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -55,10 +60,12 @@
     .compound-control { display: grid; grid-template-columns: minmax(120px, 1fr) 100px; gap: 8px; width: 100%; }
     .form-number { width: 100%; }
     .automation-dialog { max-width: calc(100vw - 24px); }
+    .automation-dialog .el-dialog__footer { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+    .automation-dialog .el-dialog__footer .el-button { margin-left: 0; }
     .dialog-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; }
     .dialog-grid .wide { grid-column: 1 / -1; }
     @media (max-width: 1100px) { .header { align-items: flex-start; flex-direction: column; } .stats-grid { grid-template-columns: repeat(3, 1fr); } .automation-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-    @media (max-width: 720px) { .page { padding: 10px; } .header-actions, .date-actions { align-items: stretch; flex-direction: column; width: 100%; } .app-input { width: 100%; } .stats-grid, .automation-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bucket-frame { height: 1250px; } .dialog-grid { grid-template-columns: 1fr; } .dialog-grid .wide { grid-column: auto; } .automation-actions { align-items: stretch; flex-direction: column; } .automation-actions .el-button { width: 100%; margin-left: 0; } .automation-policy-preview { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 720px) { .page { padding: 10px; } .header-actions, .date-actions { align-items: stretch; flex-direction: column; width: 100%; } .app-input { width: 100%; } .stats-grid, .automation-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bucket-frame { height: 1250px; } .dialog-grid { grid-template-columns: 1fr; } .dialog-grid .wide { grid-column: auto; } .automation-actions { align-items: stretch; flex-direction: column; } .automation-actions .el-button { width: 100%; margin-left: 0; } .automation-policy-preview { grid-template-columns: repeat(2, minmax(0, 1fr)); } .automation-connection-panel { grid-template-columns: 1fr; } .automation-dialog .el-dialog__footer { align-items: stretch; flex-direction: column; } .automation-dialog .el-dialog__footer .el-button { width: 100%; } }
   </style>
 </head>
 <body>
@@ -94,7 +101,7 @@
             <div class="automation-header">
               <div>
                 <div class="automation-title">自动生成与清理</div>
-                <div class="automation-meta">AWS 账号元数据、池组容量策略与最近批次在此统一管理。</div>
+                <div class="automation-meta">AWS 身份引用、CloudFront 生成模板、池组容量策略与资源生命周期在此统一管理。</div>
               </div>
               <div class="header-actions">
                 <el-tag :type="adapterStateTag(automation.adapter_state)">{{ adapterStateLabel(automation.adapter_state) }}</el-tag>
@@ -108,7 +115,7 @@
             type="warning"
             :closable="false"
             show-icon
-            title="生成规则：每个调度周期最多补 N 个，达到目标容量后暂停；有历史成功访问、pinned、reserved 或保底保护的节点始终保留；无访问节点先从 unused_marked 转入 cleanup_pending 并停止本地下发。AWS 适配器接入前保持 waiting_adapter，不归档节点，也不删除云资源。">
+            title="生成规则：每个调度周期最多补 N 个，达到目标容量后暂停；有历史成功访问、pinned、reserved 或保底保护的节点始终保留；无访问节点先从 unused_marked 转入 cleanup_pending 并停止本地下发。只有 AWS 适配器和所选账号均已验证时才开放真实生成；清理继续经过隔离、禁用、删除和归档门禁。">
           </el-alert>
 
           <div class="automation-summary">
@@ -140,15 +147,17 @@
           <div v-show="automationView === 'groups'">
             <section class="automation-section">
               <div class="automation-section-header">
-                <div><h3 class="automation-section-title">AWS 账号元数据</h3><div class="automation-meta">只保存账号引用、名称、Account ID、Region 和启用状态；凭据由 AWS 适配器独立接管。</div></div>
+                <div><h3 class="automation-section-title">AWS 账号与连接验证</h3><div class="automation-meta">数据库只保存凭据引用和 Role ARN；Access Key、Secret Key 与 External ID 的真实值存放在 Railway Variables，页面不接收、不回显。</div></div>
                 <el-button type="primary" @click="openCloudAccountEditor()">新增 AWS 账号</el-button>
               </div>
               <el-table class="automation-table" :data="automation.accounts" border size="small" empty-text="暂无 AWS 账号元数据">
                 <el-table-column prop="name" label="名称" min-width="170"></el-table-column>
                 <el-table-column label="Account ID" min-width="170"><template #default="scope"><span class="mono">{{ scope.row.account_id || '-' }}</span></template></el-table-column>
-                <el-table-column prop="region" label="Region" min-width="135"><template #default="scope"><span class="mono">{{ scope.row.region || '-' }}</span></template></el-table-column>
+                <el-table-column label="认证方式 / 凭据引用" min-width="210"><template #default="scope"><div>{{ cloudAuthTypeLabel(scope.row.auth_type) }}</div><div class="automation-meta mono">{{ scope.row.credential_ref || '-' }}</div><div v-if="scope.row.role_arn" class="automation-meta mono">{{ scope.row.role_arn }}</div></template></el-table-column>
+                <el-table-column prop="region" label="Region" min-width="125"><template #default="scope"><span class="mono">{{ scope.row.region || '-' }}</span></template></el-table-column>
+                <el-table-column label="连接验证" min-width="235"><template #default="scope"><div class="automation-account-status"><div><el-tag size="small" :type="cloudConnectionStateTag(cloudAccountState(scope.row))">{{ cloudConnectionStateLabel(cloudAccountState(scope.row)) }}</el-tag></div><div class="automation-meta">实际账号 <span class="mono">{{ cloudAccountActualId(scope.row) || '-' }}</span> · {{ timeText(cloudAccountVerifiedAt(scope.row)) }}</div><el-tooltip v-if="maskedConnectionError(scope.row)" :content="maskedConnectionError(scope.row)" placement="top"><div class="automation-account-error">{{ maskedConnectionError(scope.row) }}</div></el-tooltip></div></template></el-table-column>
                 <el-table-column label="状态" width="90"><template #default="scope"><el-tag size="small" :type="enabledValue(scope.row.enabled) ? 'success' : 'info'">{{ enabledValue(scope.row.enabled) ? '启用' : '停用' }}</el-tag></template></el-table-column>
-                <el-table-column label="操作" width="140" fixed="right"><template #default="scope"><el-button link type="primary" @click="openCloudAccountEditor(scope.row)">编辑</el-button><el-button link type="danger" :loading="rowBusy('delete-cloud-account', scope.row.id)" @click="deleteCloudAccount(scope.row)">删除</el-button></template></el-table-column>
+                <el-table-column label="操作" width="330" fixed="right"><template #default="scope"><el-button link type="success" :loading="rowBusy('validate-cloud-account', scope.row.id)" @click="validateCloudAccountConnection(scope.row)">验证 AWS 身份与 CloudFront 读取权限</el-button><el-button link type="primary" @click="openCloudAccountEditor(scope.row)">编辑</el-button><el-button link type="danger" :loading="rowBusy('delete-cloud-account', scope.row.id)" @click="deleteCloudAccount(scope.row)">删除</el-button></template></el-table-column>
               </el-table>
             </section>
 
@@ -158,14 +167,15 @@
                 <el-button type="primary" :disabled="automation.accounts.length === 0" @click="openAutomationGroupEditor()">新增池组</el-button>
               </div>
               <el-table class="automation-table" :data="automation.groups" border size="small" empty-text="暂无自动化池组">
-                <el-table-column label="池组" min-width="210" fixed="left"><template #default="scope"><div>{{ scope.row.name || `池组 #${scope.row.id}` }}</div><div class="automation-meta">{{ environmentLabel(scope.row.environment) }} · {{ scopeLabel(scope.row.usage_scope) }} · {{ scope.row.region || '-' }}</div><div class="automation-meta">{{ cloudAccountLabel(scope.row.cloud_account_id) }}</div></template></el-table-column>
+                <el-table-column label="池组" min-width="225" fixed="left"><template #default="scope"><div>{{ scope.row.name || `池组 #${scope.row.id}` }}</div><div class="automation-meta">{{ environmentLabel(scope.row.environment) }} · {{ scopeLabel(scope.row.usage_scope) }} · {{ scope.row.region || '-' }}</div><div class="automation-meta">{{ cloudAccountLabel(scope.row.cloud_account_id) }} · 验收 APPID {{ scope.row.probe_app_id || '-' }}</div><div class="automation-meta mono">{{ scope.row.origin_domain || scope.row.origin_domain_name || '-' }}{{ scope.row.public_path || '' }}</div></template></el-table-column>
                 <el-table-column label="提供方" width="155"><template #default="scope"><div>{{ providerLabel(scope.row.domain_provider, 'domain') }}</div><div class="automation-meta">证书 {{ providerLabel(scope.row.certificate_provider, 'certificate') }}</div></template></el-table-column>
                 <el-table-column label="容量" width="170"><template #default="scope"><div>可用 {{ number(groupEligibleCount(scope.row)) }} / {{ number(scope.row.target_active_count) }}</div><div class="automation-meta">已验健康 {{ number(groupActiveCount(scope.row)) }} · 保底 {{ number(scope.row.minimum_healthy_count) }}</div><div class="automation-meta">预计补 {{ number(groupExpectedReplenish(scope.row)) }}</div></template></el-table-column>
                 <el-table-column label="生成周期" width="165"><template #default="scope"><div>每 {{ number(scope.row.interval_value) }} {{ intervalUnitLabel(scope.row.interval_unit) }}</div><div class="automation-meta">每次最多 {{ number(scope.row.generate_count) }} 个 · 约 {{ number(estimatedAnnualRuns(scope.row)) }} 次/年</div></template></el-table-column>
                 <el-table-column label="观察 / 清理" width="160"><template #default="scope"><div>观察 {{ number(scope.row.observation_days) }} 天 · 标记 {{ number(scope.row.idle_mark_days) }} 天</div><div class="automation-meta">{{ enabledValue(scope.row.cleanup_enabled) ? `${number(scope.row.cleanup_no_access_days)} 天进队` : '定时清理关闭' }}</div></template></el-table-column>
                 <el-table-column label="下次执行" width="170"><template #default="scope">{{ timeText(scope.row.next_run_at) }}</template></el-table-column>
-                <el-table-column label="状态" width="125"><template #default="scope"><el-tag size="small" :type="automationStateTag(groupState(scope.row))">{{ automationStateLabel(groupState(scope.row)) }}</el-tag><div class="automation-meta">生成 {{ enabledValue(scope.row.generation_enabled) ? '开' : '关' }} · 清理 {{ enabledValue(scope.row.cleanup_enabled) ? '开' : '关' }}</div></template></el-table-column>
-                <el-table-column label="操作" width="365" fixed="right"><template #default="scope"><el-button link type="primary" @click="openAutomationGroupEditor(scope.row)">编辑</el-button><el-button link type="warning" :disabled="!enabledValue(scope.row.enabled)" :loading="rowBusy('run-automation-group', scope.row.id)" @click="runAutomationGroup(scope.row)">立即运行</el-button><el-button link type="info" :loading="rowBusy('dry-run-automation-group', scope.row.id)" @click="dryRunAutomationGroup(scope.row)">dry-run</el-button><el-button link :type="enabledValue(scope.row.enabled) ? 'warning' : 'success'" :loading="rowBusy('toggle-automation-group', scope.row.id)" @click="toggleAutomationGroupPause(scope.row)">{{ enabledValue(scope.row.enabled) ? '暂停' : '恢复' }}</el-button><el-button link type="danger" :loading="rowBusy('delete-automation-group', scope.row.id)" @click="deleteAutomationGroup(scope.row)">删除</el-button></template></el-table-column>
+                <el-table-column label="CloudFront" width="155"><template #default="scope"><div>{{ scope.row.price_class || 'PriceClass_All' }}</div><div class="automation-meta">IPv6 {{ enabledValue(scope.row.ipv6_enabled) ? '开' : '关' }}</div></template></el-table-column>
+                <el-table-column label="状态" width="135"><template #default="scope"><el-tag size="small" :type="automationStateTag(groupState(scope.row))">{{ automationStateLabel(groupState(scope.row)) }}</el-tag><div class="automation-meta">生成 {{ generationReady(scope.row) && enabledValue(scope.row.generation_enabled) ? '开' : generationReady(scope.row) ? '关' : '待验证' }} · 清理 {{ enabledValue(scope.row.cleanup_enabled) ? '开' : '关' }}</div></template></el-table-column>
+                <el-table-column label="操作" width="365" fixed="right"><template #default="scope"><el-button link type="primary" @click="openAutomationGroupEditor(scope.row)">编辑</el-button><el-button link type="warning" :disabled="!enabledValue(scope.row.enabled) || !generationReady(scope.row)" :loading="rowBusy('run-automation-group', scope.row.id)" @click="runAutomationGroup(scope.row)">立即运行</el-button><el-button link type="info" :loading="rowBusy('dry-run-automation-group', scope.row.id)" @click="dryRunAutomationGroup(scope.row)">dry-run</el-button><el-button link :type="enabledValue(scope.row.enabled) ? 'warning' : 'success'" :loading="rowBusy('toggle-automation-group', scope.row.id)" @click="toggleAutomationGroupPause(scope.row)">{{ enabledValue(scope.row.enabled) ? '暂停' : '恢复' }}</el-button><el-button link type="danger" :loading="rowBusy('delete-automation-group', scope.row.id)" @click="deleteAutomationGroup(scope.row)">删除</el-button></template></el-table-column>
               </el-table>
             </section>
           </div>
@@ -194,10 +204,22 @@
           </section>
 
           <section v-show="automationView === 'nodes'" class="automation-section">
-            <div class="automation-view-toolbar"><div><h3 class="automation-section-title">自动化节点</h3><div class="automation-meta">节点按完整生命周期管理；有近期真实访问、固定、预留或属于最小健康保底集合的节点始终受保护。</div></div></div>
+            <div class="automation-view-toolbar"><div><h3 class="automation-section-title">自动化节点 / CloudFront 资源</h3><div class="automation-meta">资源从创建、部署、探针、入池到停用与删除全程可查；有近期真实访问、固定、预留或属于最小健康保底集合的节点始终受保护。</div></div></div>
+            <h4 class="section-title">CloudFront 资源台账</h4>
+            <el-table class="automation-table" :data="automation.cloud_resources" border size="small" empty-text="暂无 CloudFront 资源">
+              <el-table-column label="资源 ID" width="110"><template #default="scope"><span class="mono">{{ cloudResourceId(scope.row) ? `#${cloudResourceId(scope.row)}` : '-' }}</span></template></el-table-column>
+              <el-table-column label="Distribution" min-width="290"><template #default="scope"><div class="cloud-resource"><span class="mono">{{ cloudDistributionId(scope.row) || '-' }}</span><span class="automation-meta mono">{{ cloudDistributionDomain(scope.row) || '-' }}</span><span class="automation-meta mono">{{ scope.row.public_api_url || '-' }}</span></div></template></el-table-column>
+              <el-table-column label="池组 / 批次" min-width="180"><template #default="scope"><div>{{ scope.row.group_name || automationGroupLabel(scope.row.group_id) }}</div><div class="automation-meta mono">{{ scope.row.batch_code || scope.row.batch_no || scope.row.batch_id || '-' }}</div></template></el-table-column>
+              <el-table-column label="云端工作流" min-width="205"><template #default="scope"><el-tag size="small" :type="cloudResourceStateTag(cloudResourceState(scope.row))">{{ cloudResourceStateLabel(cloudResourceState(scope.row)) }}</el-tag><div class="automation-meta">AWS {{ scope.row.provider_status || scope.row.cloudfront_status || scope.row.aws_status || '-' }} · 已重试 {{ number(cloudResourceRetryCount(scope.row)) }} 次</div><div class="automation-meta">探针 {{ scope.row.probe_state || '-' }}<span v-if="scope.row.probe_http_code"> · HTTP {{ scope.row.probe_http_code }}</span></div><div class="automation-meta">下次 {{ timeText(scope.row.next_action_at || scope.row.next_retry_at) }}</div><div v-if="scope.row.delete_not_before" class="automation-meta">最早删除 {{ timeText(scope.row.delete_not_before) }}</div></template></el-table-column>
+              <el-table-column label="关联节点" width="130"><template #default="scope"><span class="mono">{{ scope.row.domain_pool_id ? `#${scope.row.domain_pool_id}` : '-' }}</span></template></el-table-column>
+              <el-table-column label="错误摘要" min-width="220"><template #default="scope"><el-tooltip v-if="maskedConnectionError(scope.row)" :content="maskedConnectionError(scope.row)" placement="top"><div class="automation-account-error">{{ maskedConnectionError(scope.row) }}</div></el-tooltip><span v-else class="muted">-</span></template></el-table-column>
+              <el-table-column label="操作" width="135" fixed="right"><template #default="scope"><el-button link type="danger" :disabled="!cloudResourceRetryable(scope.row)" :loading="rowBusy('retry-cloud-resource', cloudResourceId(scope.row))" @click="retryCloudResource(scope.row)">重试云资源</el-button></template></el-table-column>
+            </el-table>
+            <h4 class="section-title">已入池节点</h4>
             <el-table class="automation-table" :data="automation.nodes" border size="small" empty-text="暂无 AWS 自动节点">
               <el-table-column label="节点" min-width="260" fixed="left"><template #default="scope"><div>{{ nodeName(scope.row) }}</div><div class="automation-meta mono">{{ nodeUrl(scope.row) }}</div></template></el-table-column>
               <el-table-column label="池组 / 环境" min-width="160"><template #default="scope"><div>{{ scope.row.group_name || automationGroupLabel(scope.row.group_id || scope.row.automation_group_id) }}</div><div class="automation-meta">{{ environmentLabel(nodeEnvironment(scope.row)) }}</div></template></el-table-column>
+              <el-table-column label="关联云资源" min-width="175"><template #default="scope"><div class="mono">{{ linkedCloudResourceId(scope.row) ? `#${linkedCloudResourceId(scope.row)}` : '-' }}</div><div class="automation-meta"><el-tag size="small" :type="cloudResourceStateTag(scope.row.workflow_state)">{{ cloudResourceStateLabel(scope.row.workflow_state) }}</el-tag></div></template></el-table-column>
               <el-table-column label="生命周期" width="160"><template #default="scope"><el-tag size="small" :type="lifecycleTag(nodeLifecycle(scope.row))">{{ lifecycleLabel(nodeLifecycle(scope.row)) }}</el-tag><div class="automation-meta">{{ timeText(scope.row.lifecycle_updated_at || scope.row.updated_at) }}</div></template></el-table-column>
               <el-table-column label="访问" width="155"><template #default="scope"><div>累计 {{ number(nodeAccessCount(scope.row)) }}</div><div class="automation-meta">{{ timeText(nodeLastAccess(scope.row)) }}</div></template></el-table-column>
               <el-table-column label="保护" width="145"><template #default="scope"><div class="automation-protection"><label class="automation-protection-row"><span>pinned</span><el-switch v-model="scope.row.pinned" :active-value="1" :inactive-value="0" :disabled="nodeProtectionDisabled(scope.row)" :loading="rowBusy('protect-node', scope.row.id)" @change="value => setNodeProtection(scope.row, 'pinned', value)"></el-switch></label><label class="automation-protection-row"><span>reserved</span><el-switch v-model="scope.row.reserved" :active-value="1" :inactive-value="0" :disabled="nodeProtectionDisabled(scope.row)" :loading="rowBusy('protect-node', scope.row.id)" @change="value => setNodeProtection(scope.row, 'reserved', value)"></el-switch></label></div></template></el-table-column>
@@ -229,13 +251,14 @@
           </section>
 
           <section v-show="automationView === 'cleanup'" class="automation-section">
-            <div class="automation-view-toolbar"><div><h3 class="automation-section-title">清理队列</h3><div class="automation-meta">unused_marked 通过安全门禁后转为 cleanup_pending 并停止本地下发。AWS 适配器接入前停在 cleanup_pending / waiting_adapter，数据库保留完整记录，节点不归档，云资源不删除。</div></div></div>
+            <div class="automation-view-toolbar"><div><h3 class="automation-section-title">清理队列</h3><div class="automation-meta">unused_marked 通过安全门禁后转为 cleanup_pending 并停止本地下发；CloudFront 再按停用中、待删除、已完成顺序推进。delete_pending 至少保留 24 小时宽限，禁用期间出现真实访问会转入 restore_pending / restoring 自动恢复；失败项保留错误摘要与重试入口。</div></div></div>
             <el-table class="automation-table" :data="automation.cleanup_queue" border size="small" empty-text="暂无清理候选">
               <el-table-column label="节点" min-width="250"><template #default="scope"><div>{{ nodeName(scope.row) }}</div><div class="automation-meta">{{ scope.row.group_name || automationGroupLabel(scope.row.group_id || scope.row.automation_group_id) }}</div></template></el-table-column>
               <el-table-column label="状态" width="160"><template #default="scope"><el-tag size="small" :type="lifecycleTag(nodeLifecycle(scope.row))">{{ lifecycleLabel(nodeLifecycle(scope.row)) }}</el-tag></template></el-table-column>
               <el-table-column label="请求时间" width="180"><template #default="scope">{{ timeText(scope.row.cleanup_requested_at || scope.row.queued_at) }}</template></el-table-column>
-              <el-table-column label="云资源状态" min-width="170"><template #default="scope">{{ scope.row.cloud_cleanup_state || 'waiting_adapter' }}</template></el-table-column>
-              <el-table-column label="操作" width="105"><template #default="scope"><el-button link type="info" :loading="rowBusy('dry-run-automation-group', scope.row.group_id || scope.row.automation_group_id)" @click="dryRunAutomationGroup({ id: scope.row.group_id || scope.row.automation_group_id, name: scope.row.group_name })">dry-run</el-button></template></el-table-column>
+              <el-table-column label="Distribution" min-width="230"><template #default="scope"><div class="mono">{{ cloudDistributionId(scope.row) || '-' }}</div><div class="automation-meta mono">{{ cloudDistributionDomain(scope.row) || '-' }}</div></template></el-table-column>
+              <el-table-column label="云资源状态" min-width="185"><template #default="scope"><el-tag size="small" :type="cloudResourceStateTag(cloudResourceState(scope.row))">{{ cloudResourceStateLabel(cloudResourceState(scope.row)) }}</el-tag><div class="automation-meta">已重试 {{ number(cloudResourceRetryCount(scope.row)) }} 次</div><el-tooltip v-if="maskedConnectionError(scope.row)" :content="maskedConnectionError(scope.row)" placement="top"><div class="automation-account-error">{{ maskedConnectionError(scope.row) }}</div></el-tooltip></template></el-table-column>
+              <el-table-column label="操作" width="205"><template #default="scope"><el-button v-if="cloudResourceRetryable(scope.row)" link type="danger" :loading="rowBusy('retry-cloud-resource', scope.row.id)" @click="retryCloudResource(scope.row)">重试云资源</el-button><el-button link type="info" :loading="rowBusy('dry-run-automation-group', scope.row.group_id || scope.row.automation_group_id)" @click="dryRunAutomationGroup({ id: scope.row.group_id || scope.row.automation_group_id, name: scope.row.group_name })">dry-run</el-button></template></el-table-column>
             </el-table>
           </section>
 
@@ -339,39 +362,57 @@
     </el-tabs>
   </section>
 
-  <!-- AWS 账号只维护可公开的调度元数据，不在页面收集任何凭据。 -->
-  <el-dialog v-model="cloudAccountEditorVisible" class="automation-dialog" :title="cloudAccountEditor.id ? '编辑 AWS 账号' : '新增 AWS 账号'" width="560px" destroy-on-close :close-on-click-modal="false">
+  <!-- AWS 账号只保存可安全回显的身份引用，真实凭据由 Railway Variables 交给服务端解析。 -->
+  <el-dialog v-model="cloudAccountEditorVisible" class="automation-dialog" :title="cloudAccountEditor.id ? '编辑 AWS 账号' : '新增 AWS 账号'" width="720px" destroy-on-close :close-on-click-modal="false">
+    <el-alert title="Account ID 只作身份核对；真实凭据来自 Railway 的 AWS_CDN_&lt;REF&gt;_* 环境变量。“验证”只检查 AWS 身份与 CloudFront 读取权限，创建与删除写权限在首次实际生成或清理时确认。" type="info" :closable="false" show-icon style="margin-bottom:16px"></el-alert>
     <el-form label-position="top">
       <div class="dialog-grid">
         <el-form-item class="wide" label="名称" required><el-input v-model="cloudAccountEditor.name" maxlength="100" show-word-limit placeholder="例如：生产 AWS 账号"></el-input></el-form-item>
-        <el-form-item label="AWS Account ID（选填）"><el-input v-model="cloudAccountEditor.account_id" class="mono" maxlength="64" autocomplete="off" placeholder="123456789012"></el-input></el-form-item>
+        <el-form-item label="AWS Account ID" required><el-input v-model="cloudAccountEditor.account_id" class="mono" maxlength="12" autocomplete="off" placeholder="123456789012"></el-input><div class="form-help">验证连接时必须与 STS 返回的实际账号一致。</div></el-form-item>
         <el-form-item label="Region" required><el-input v-model="cloudAccountEditor.region" class="mono" maxlength="64" placeholder="us-east-1"></el-input></el-form-item>
+        <el-form-item label="认证方式" required><el-select v-model="cloudAccountEditor.auth_type" style="width:100%"><el-option label="Railway 环境变量" value="environment"></el-option><el-option label="STS AssumeRole" value="assume_role"></el-option></el-select></el-form-item>
+        <el-form-item label="凭据引用 REF" required><el-input v-model="cloudAccountEditor.credential_ref" class="mono" maxlength="64" autocomplete="off" placeholder="PRIMARY"></el-input><div class="form-help">例如 REF=PRIMARY 对应 AWS_CDN_PRIMARY_ACCESS_KEY_ID、AWS_CDN_PRIMARY_SECRET_ACCESS_KEY 和可选的 AWS_CDN_PRIMARY_SESSION_TOKEN。</div></el-form-item>
+        <template v-if="cloudAccountEditor.auth_type === 'assume_role'">
+          <el-form-item class="wide" label="Role ARN" required><el-input v-model="cloudAccountEditor.role_arn" class="mono" maxlength="255" autocomplete="off" placeholder="arn:aws:iam::123456789012:role/yunzhuru-cloudfront"></el-input></el-form-item>
+          <el-form-item class="wide" label="External ID 引用（选填）"><el-input v-model="cloudAccountEditor.external_id_ref" class="mono" maxlength="64" autocomplete="off" placeholder="PRIMARY"></el-input><div class="form-help">只填 REF；例如 REF=PRIMARY 时实际值放在 AWS_CDN_PRIMARY_EXTERNAL_ID。</div></el-form-item>
+        </template>
         <el-form-item class="wide" label="状态"><el-switch v-model="cloudAccountEditor.enabled" :active-value="1" :inactive-value="0" active-text="启用" inactive-text="停用"></el-switch></el-form-item>
+        <div v-if="cloudAccountEditor.id" class="wide automation-connection-panel">
+          <div><span class="muted">连接状态</span><strong><el-tag size="small" :type="cloudConnectionStateTag(cloudAccountState(cloudAccountEditor))">{{ cloudConnectionStateLabel(cloudAccountState(cloudAccountEditor)) }}</el-tag></strong></div>
+          <div><span class="muted">实际 AWS 账号</span><strong class="mono">{{ cloudAccountActualId(cloudAccountEditor) || '-' }}</strong></div>
+          <div><span class="muted">最近验证</span><strong>{{ timeText(cloudAccountVerifiedAt(cloudAccountEditor)) }}</strong></div>
+          <div v-if="maskedConnectionError(cloudAccountEditor)" class="wide automation-account-error">{{ maskedConnectionError(cloudAccountEditor) }}</div>
+        </div>
       </div>
     </el-form>
-    <template #footer><el-button @click="cloudAccountEditorVisible=false">取消</el-button><el-button type="primary" :loading="cloudAccountSaving" @click="saveCloudAccount">保存 AWS 账号</el-button></template>
+    <template #footer><el-button @click="cloudAccountEditorVisible=false">取消</el-button><el-button v-if="cloudAccountEditor.id" type="success" :loading="cloudAccountValidating" @click="validateCloudAccountConnection(cloudAccountEditor)">验证 AWS 身份与 CloudFront 读取权限</el-button><el-button type="primary" :loading="cloudAccountSaving" @click="saveCloudAccount">保存 AWS 账号</el-button></template>
   </el-dialog>
 
-  <!-- 池组对象只定义调度与生命周期策略，AWS 实际操作由后续适配器执行。 -->
+  <!-- 池组将调度策略与经安全审核的 CloudFront 模板绑定为一个长期 owner。 -->
   <el-dialog v-model="automationGroupEditorVisible" class="automation-dialog" :title="automationGroupEditor.id ? '编辑自动化池组' : '新增自动化池组'" width="780px" destroy-on-close :close-on-click-modal="false">
-    <el-alert title="策略可先保存并展示；AWS 实际创建、删除和凭据验证待适配器接入。" type="warning" :closable="false" show-icon style="margin-bottom:16px"></el-alert>
+    <el-alert :title="generationReady(automationGroupEditor) ? 'AWS 适配器与所选账号已通过验证，可开启真实 CloudFront 生成。' : '请先在 AWS 账号区完成连接验证；验证通过前定时生成保持关闭，dry-run 仍可预览计划。'" :type="generationReady(automationGroupEditor) ? 'success' : 'warning'" :closable="false" show-icon style="margin-bottom:16px"></el-alert>
     <el-form label-position="top">
       <div class="dialog-grid">
         <el-form-item label="池组名称" required><el-input v-model="automationGroupEditor.name" maxlength="100" show-word-limit placeholder="例如：生产配置域名池"></el-input></el-form-item>
         <el-form-item label="AWS 账号" required>
-          <el-select v-model="automationGroupEditor.cloud_account_id" filterable placeholder="选择 AWS 账号" style="width:100%">
+          <el-select v-model="automationGroupEditor.cloud_account_id" filterable placeholder="选择 AWS 账号" style="width:100%" @change="onAutomationAccountChange">
             <el-option v-for="account in automation.accounts" :key="account.id" :label="account.name" :value="Number(account.id)" :disabled="!enabledValue(account.enabled)">
               <div class="automation-account-option"><span>{{ account.name }}</span><span class="muted">{{ account.account_id || '未填 Account ID' }} · {{ account.region || '-' }}</span></div>
             </el-option>
           </el-select>
         </el-form-item>
-        <el-form-item label="用途" required><el-select v-model="automationGroupEditor.usage_scope" style="width:100%"><el-option label="全部" value="all"></el-option><el-option label="配置" value="config"></el-option><el-option label="上报" value="report"></el-option><el-option label="点击" value="click"></el-option></el-select></el-form-item>
+        <el-form-item label="用途"><div><el-tag type="primary">配置 config</el-tag><div class="form-help">自动生成的 CloudFront 入口固定用于应用配置获取。</div></div></el-form-item>
         <el-form-item label="环境" required><el-select v-model="automationGroupEditor.environment" style="width:100%"><el-option label="生产 production" value="production"></el-option><el-option label="预发 staging" value="staging"></el-option><el-option label="测试 test" value="test"></el-option><el-option label="开发 development" value="development"></el-option></el-select></el-form-item>
         <el-form-item label="Region" required><el-input v-model="automationGroupEditor.region" class="mono" maxlength="64" placeholder="us-east-1"></el-input></el-form-item>
-        <el-form-item label="域名提供方" required><el-select v-model="automationGroupEditor.domain_provider" style="width:100%"><el-option label="AWS Route 53" value="route53"></el-option><el-option label="Cloudflare" value="cloudflare"></el-option><el-option label="自定义适配器" value="custom"></el-option></el-select></el-form-item>
-        <el-form-item label="证书提供方" required><el-select v-model="automationGroupEditor.certificate_provider" style="width:100%"><el-option label="AWS Certificate Manager" value="acm"></el-option><el-option label="Cloudflare" value="cloudflare"></el-option><el-option label="自定义适配器" value="custom"></el-option></el-select></el-form-item>
+        <el-form-item class="wide" label="CloudFront 回源域名" required><el-input v-model="automationGroupEditor.origin_domain" class="mono" maxlength="253" placeholder="yunzhuru-app-production.up.railway.app"></el-input><div class="form-help">不带协议和路径；服务端还会用允许源站清单复核，避免回源环路。</div></el-form-item>
+        <el-form-item label="公开业务路径" required><el-input v-model="automationGroupEditor.public_path" class="mono" maxlength="255" placeholder="/shell.php" readonly></el-input><div class="form-help">入池地址使用 https://&lt;distribution&gt;.cloudfront.net{{ automationGroupEditor.public_path || '/shell.php' }}，本期模板固定 /shell.php。</div></el-form-item>
+        <el-form-item label="验收应用 APPID" required><el-input-number v-model="automationGroupEditor.probe_app_id" class="form-number" controls-position="right" :min="1" :max="2147483647"></el-input-number><div class="form-help">仅用于 CloudFront Deployed 后自动 POST 探针和解密核对 APPID；页面不收集、不传输也不展示卡密。</div></el-form-item>
+        <el-form-item label="CloudFront 价格等级" required><el-select v-model="automationGroupEditor.price_class" style="width:100%"><el-option label="全部边缘 PriceClass_All" value="PriceClass_All"></el-option><el-option label="美洲欧洲 PriceClass_100" value="PriceClass_100"></el-option><el-option label="扩展区域 PriceClass_200" value="PriceClass_200"></el-option></el-select></el-form-item>
+        <el-form-item label="IPv6"><el-switch v-model="automationGroupEditor.ipv6_enabled" :active-value="1" :inactive-value="0" active-text="开启" inactive-text="关闭"></el-switch></el-form-item>
+        <el-form-item label="公开域名"><div><el-tag>CloudFront 默认域名</el-tag><div class="form-help">AWS 分配 https://&lt;distribution&gt;.cloudfront.net。</div></div></el-form-item>
+        <el-form-item label="HTTPS 证书"><div><el-tag>CloudFront 默认证书</el-tag><div class="form-help">本期模板不申请自定义域名证书。</div></div></el-form-item>
         <el-form-item label="池组调度"><el-switch v-model="automationGroupEditor.enabled" :active-value="1" :inactive-value="0" active-text="启用" inactive-text="暂停"></el-switch></el-form-item>
-        <el-form-item label="定时生成"><el-switch v-model="automationGroupEditor.generation_enabled" :active-value="1" :inactive-value="0" active-text="开启" inactive-text="关闭"></el-switch><div class="form-help">关闭后仍保留池组、批次和节点历史。</div></el-form-item>
+        <el-form-item label="定时生成"><el-switch v-model="automationGroupEditor.generation_enabled" :active-value="1" :inactive-value="0" :disabled="!generationReady(automationGroupEditor)" active-text="开启" inactive-text="关闭"></el-switch><div class="form-help">{{ generationReady(automationGroupEditor) ? '关闭后仍保留池组、批次和节点历史。' : 'AWS 适配器或所选账号尚未通过验证，真实生成开关已关闭。' }}</div></el-form-item>
         <el-form-item label="目标活跃数" required><el-input-number v-model="automationGroupEditor.target_active_count" class="form-number" controls-position="right" :min="1" :max="24"></el-input-number><div class="form-help">活跃节点达到目标后暂停生成，默认 20；当前 APK 配置最多下发 24 个 API 入口。</div></el-form-item>
         <el-form-item label="最低健康数" required><el-input-number v-model="automationGroupEditor.minimum_healthy_count" class="form-number" controls-position="right" :min="1" :max="24"></el-input-number><div class="form-help">始终保留的健康节点下限，默认 4。</div></el-form-item>
         <el-form-item label="生成周期" required>
@@ -441,7 +482,7 @@ createApp({
 
     // 自动化返回数据始终保持稳定容器，兼容首次迁移时后端返回空对象。
     const automation = reactive({
-      accounts: [], groups: [], recent_batches: [], nodes: [], access_stats: [],
+      accounts: [], groups: [], recent_batches: [], cloud_resources: [], nodes: [], access_stats: [],
       mark_queue: [], cleanup_queue: [], recent_runs: [], lifecycle_options: [],
       summary: {}, adapter_state: 'waiting_adapter'
     });
@@ -456,7 +497,21 @@ createApp({
       { value: 'cleanup', label: '清理队列' },
       { value: 'runs', label: '运行记录' },
     ];
-    const emptyCloudAccount = () => ({ id: 0, name: '', account_id: '', region: 'us-east-1', enabled: 1 });
+    const emptyCloudAccount = () => ({
+      id: 0,
+      name: '',
+      account_id: '',
+      region: 'us-east-1',
+      auth_type: 'environment',
+      credential_ref: '',
+      role_arn: '',
+      external_id_ref: '',
+      connection_state: 'unverified',
+      actual_account_id: '',
+      last_verified_at: '',
+      last_error: '',
+      enabled: 1,
+    });
     const emptyAutomationGroup = () => ({
       id: 0,
       name: '',
@@ -464,10 +519,15 @@ createApp({
       usage_scope: 'config',
       environment: 'production',
       region: 'us-east-1',
-      domain_provider: 'route53',
-      certificate_provider: 'acm',
+      origin_domain: 'yunzhuru-app-production.up.railway.app',
+      public_path: '/shell.php',
+      price_class: 'PriceClass_All',
+      ipv6_enabled: 1,
+      probe_app_id: null,
+      domain_provider: 'cloudfront_default',
+      certificate_provider: 'cloudfront_default',
       enabled: 1,
-      generation_enabled: 1,
+      generation_enabled: 0,
       target_active_count: 20,
       minimum_healthy_count: 4,
       interval_value: 1,
@@ -480,6 +540,7 @@ createApp({
     });
     const cloudAccountEditorVisible = ref(false);
     const cloudAccountSaving = ref(false);
+    const cloudAccountValidating = ref(false);
     const cloudAccountEditor = reactive(emptyCloudAccount());
     const automationGroupEditorVisible = ref(false);
     const automationGroupSaving = ref(false);
@@ -524,14 +585,35 @@ createApp({
       return Number.isInteger(parsed) ? parsed : fallback;
     }
 
+    /**
+     * 任何来自 AWS SDK、CLI 或运行环境的错误在进入 Vue 状态前先脱敏。
+     * 页面只保留排查所需的错误类型与短摘要，并限制最大长度。
+     */
+    function maskSensitiveText(value) {
+      return String(value || '')
+        .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, '[AWS_KEY_REDACTED]')
+        .replace(/((?:access|secret|session|external)[ _-]?(?:key|token|id)?\s*[:=]\s*)[^\s,;]+/gi, '$1[REDACTED]')
+        .replace(/(AWS_CDN_[A-Z0-9_]+\s*[:=]\s*)[^\s,;]+/g, '$1[REDACTED]')
+        .slice(0, 500);
+    }
+
     /** 应用 getConfigDelivery 返回的自动化快照，缺失字段回落到安全默认值。 */
     function applyAutomationSnapshot(payload) {
       const source = payload && typeof payload === 'object' ? payload : {};
       automation.accounts = rowsWithEnabled(source.accounts).map(row => ({
-        ...row,
         id: integerValue(row.id, 0),
+        name: String(row.name || ''),
         account_id: String(row.account_id || row.aws_account_id || ''),
-        region: String(row.region || ''),
+        region: String(row.region || 'us-east-1'),
+        auth_type: String(row.auth_type || 'environment'),
+        credential_ref: String(row.credential_ref || ''),
+        role_arn: String(row.role_arn || ''),
+        external_id_ref: String(row.external_id_ref || ''),
+        connection_state: String(row.connection_state || row.validation_state || 'unverified'),
+        actual_account_id: String(row.actual_account_id || row.verified_account_id || row.caller_account_id || ''),
+        last_verified_at: String(row.last_verified_at || row.verified_at || row.connection_last_checked_at || ''),
+        last_error: maskSensitiveText(row.last_error || row.validation_error || row.error_message || row.connection_error_code || ''),
+        enabled: enabledValue(row.enabled),
       }));
       automation.groups = rowsWithEnabled(source.groups).map(row => ({
         ...emptyAutomationGroup(),
@@ -539,8 +621,13 @@ createApp({
         id: integerValue(row.id, 0),
         cloud_account_id: integerValue(row.cloud_account_id ?? row.aws_account_id, 0) || null,
         enabled: enabledValue(row.enabled),
-        generation_enabled: row.generation_enabled === undefined ? enabledValue(row.enabled) : enabledValue(row.generation_enabled),
+        generation_enabled: enabledValue(row.generation_enabled),
         cleanup_enabled: enabledValue(row.cleanup_enabled),
+        origin_domain: String(row.origin_domain || row.origin_domain_name || 'yunzhuru-app-production.up.railway.app'),
+        public_path: String(row.public_path || '/shell.php'),
+        price_class: String(row.price_class || 'PriceClass_All'),
+        ipv6_enabled: row.ipv6_enabled === undefined ? 1 : enabledValue(row.ipv6_enabled),
+        probe_app_id: integerValue(row.probe_app_id, 0) || null,
         target_active_count: integerValue(row.target_active_count, 20),
         minimum_healthy_count: integerValue(row.minimum_healthy_count, 4),
         interval_value: integerValue(row.interval_value ?? row.schedule_every, 1),
@@ -551,6 +638,12 @@ createApp({
         cleanup_no_access_days: integerValue(row.cleanup_no_access_days ?? row.archive_no_access_after_days, 7),
       }));
       automation.recent_batches = Array.isArray(source.recent_batches) ? source.recent_batches.map(row => ({ ...row })) : [];
+      automation.cloud_resources = Array.isArray(source.cloud_resources)
+        ? source.cloud_resources.map(row => ({
+          ...row,
+          last_error: maskSensitiveText(row.last_error || row.error_message || row.aws_error || ''),
+        }))
+        : [];
       automation.nodes = rowsWithProtection(source.nodes);
       automation.access_stats = Array.isArray(source.access_stats) ? source.access_stats.map(row => ({ ...row })) : [];
       automation.mark_queue = rowsWithProtection(source.mark_queue);
@@ -683,7 +776,7 @@ createApp({
       finally { setRowBusy(busyType, row.id, false); }
     }
 
-    /** 打开 AWS 账号元数据编辑器，对话框内永远只处理非敏感字段。 */
+    /** 打开 AWS 账号编辑器，仅复制可回显的身份引用和脱敏状态。 */
     function openCloudAccountEditor(row) {
       const source = row || emptyCloudAccount();
       Object.assign(cloudAccountEditor, emptyCloudAccount(), {
@@ -691,31 +784,84 @@ createApp({
         name: String(source.name || ''),
         account_id: String(source.account_id || source.aws_account_id || ''),
         region: String(source.region || 'us-east-1'),
+        auth_type: String(source.auth_type || 'environment'),
+        credential_ref: String(source.credential_ref || ''),
+        role_arn: String(source.role_arn || ''),
+        external_id_ref: String(source.external_id_ref || ''),
+        connection_state: String(source.connection_state || source.validation_state || 'unverified'),
+        actual_account_id: String(source.actual_account_id || source.verified_account_id || source.caller_account_id || ''),
+        last_verified_at: String(source.last_verified_at || source.verified_at || source.connection_last_checked_at || ''),
+        last_error: maskSensitiveText(source.last_error || source.validation_error || source.error_message || source.connection_error_code || ''),
         enabled: row ? enabledValue(source.enabled) : 1,
       });
       cloudAccountEditorVisible.value = true;
     }
 
-    /** 保存 AWS 账号的名称、Account ID、Region 和状态。 */
+    /** 校验 AWS 账号的公开元数据与 Railway 凭据引用。 */
+    function cloudAccountEditorError() {
+      const account = cloudAccountEditor;
+      if (!String(account.name || '').trim()) return '请填写 AWS 账号名称';
+      const accountId = String(account.account_id || '').trim();
+      if (!/^\d{12}$/.test(accountId)) return 'AWS Account ID 应为 12 位数字';
+      if (!/^[a-z]{2}(?:-gov)?-[a-z0-9-]+-\d$/.test(String(account.region || '').trim())) return '请填写有效 AWS Region';
+      if (!['environment', 'assume_role'].includes(String(account.auth_type || ''))) return '请选择认证方式';
+      if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(String(account.credential_ref || '').trim().toUpperCase())) return '凭据引用 REF 只使用字母、数字和下划线';
+      if (String(account.auth_type) === 'assume_role') {
+        if (!/^arn:(?:aws|aws-cn|aws-us-gov):iam::\d{12}:role\/[A-Za-z0-9+=,.@_\/-]+$/.test(String(account.role_arn || '').trim())) return '请填写有效 Role ARN';
+        const externalRef = String(account.external_id_ref || '').trim().toUpperCase();
+        if (externalRef && !/^[A-Z][A-Z0-9_]{0,63}$/.test(externalRef)) return 'External ID 引用只使用大写字母、数字和下划线';
+      }
+      return '';
+    }
+
+    /** 保存引用信息；请求体中没有 Access Key、Secret Key、Session Token 或 External ID 真实值。 */
     async function saveCloudAccount() {
-      if (!String(cloudAccountEditor.name || '').trim()) return ElMessage.warning('请填写 AWS 账号名称');
-      const accountId = String(cloudAccountEditor.account_id || '').trim();
-      if (accountId && !/^\d{12}$/.test(accountId)) return ElMessage.warning('AWS Account ID 应为 12 位数字');
-      if (!String(cloudAccountEditor.region || '').trim()) return ElMessage.warning('请填写 AWS Region');
+      const validation = cloudAccountEditorError();
+      if (validation) return ElMessage.warning(validation);
+      const authType = String(cloudAccountEditor.auth_type || 'environment');
       cloudAccountSaving.value = true;
       try {
         const data = await api('saveApiDomainCloudAccount', {
           id: integerValue(cloudAccountEditor.id, 0),
           name: String(cloudAccountEditor.name || '').trim(),
-          account_id: accountId,
+          account_id: String(cloudAccountEditor.account_id || '').trim(),
           region: String(cloudAccountEditor.region || '').trim(),
+          auth_type: authType,
+          credential_ref: String(cloudAccountEditor.credential_ref || '').trim().toUpperCase(),
+          role_arn: authType === 'assume_role' ? String(cloudAccountEditor.role_arn || '').trim() : '',
+          external_id_ref: authType === 'assume_role' ? String(cloudAccountEditor.external_id_ref || '').trim().toUpperCase() : '',
           enabled: enabledValue(cloudAccountEditor.enabled),
         });
-        ElMessage.success(data.message || 'AWS 账号元数据已保存');
+        ElMessage.success(data.message || 'AWS 账号引用已保存，请验证连接');
         cloudAccountEditorVisible.value = false;
         await loadData(true);
       } catch (error) { ElMessage.error(error.message || 'AWS 账号保存失败'); }
       finally { cloudAccountSaving.value = false; }
+    }
+
+    /** 由服务端读取 Railway Variables，通过 STS GetCallerIdentity 核对实际 Account ID。 */
+    async function validateCloudAccountConnection(row) {
+      const id = integerValue(row && row.id, 0);
+      if (!id) return ElMessage.warning('请先保存 AWS 账号引用');
+      setRowBusy('validate-cloud-account', id, true);
+      cloudAccountValidating.value = cloudAccountEditorVisible.value && integerValue(cloudAccountEditor.id, 0) === id;
+      try {
+        const data = await api('validateApiDomainCloudAccountConnection', { id });
+        const connected = enabledValue(data.connected) === 1 || ['connected', 'ready', 'verified'].includes(stateCode(data.connection_state, ''));
+        if (connected) ElMessage.success(data.message || 'AWS 身份与 CloudFront 读取权限验证成功');
+        else ElMessage.warning(maskSensitiveText(data.message || data.error_code || cloudConnectionStateLabel(data.connection_state)) || 'AWS 验证结果待处理');
+        await loadData(true);
+        if (cloudAccountEditorVisible.value && integerValue(cloudAccountEditor.id, 0) === id) {
+          const refreshed = automation.accounts.find(account => Number(account.id) === id);
+          if (refreshed) openCloudAccountEditor(refreshed);
+        }
+      } catch (error) {
+        ElMessage.error(maskSensitiveText(error.message) || 'AWS 连接验证失败');
+        await loadData(true);
+      } finally {
+        setRowBusy('validate-cloud-account', id, false);
+        cloudAccountValidating.value = false;
+      }
     }
 
     /** 删除 AWS 账号元数据，已关联池组时由服务端统一拦截并说明。 */
@@ -738,9 +884,15 @@ createApp({
       Object.assign(automationGroupEditor, emptyAutomationGroup(), source, {
         id: integerValue(source.id, 0),
         cloud_account_id: integerValue(source.cloud_account_id, 0) || null,
+        usage_scope: 'config',
         enabled: row ? enabledValue(source.enabled) : 1,
-        generation_enabled: row ? enabledValue(source.generation_enabled) : 1,
+        generation_enabled: row && generationReady(source) ? enabledValue(source.generation_enabled) : 0,
         cleanup_enabled: row ? enabledValue(source.cleanup_enabled) : 0,
+        origin_domain: String(source.origin_domain || source.origin_domain_name || 'yunzhuru-app-production.up.railway.app'),
+        public_path: String(source.public_path || '/shell.php'),
+        price_class: String(source.price_class || 'PriceClass_All'),
+        ipv6_enabled: source.ipv6_enabled === undefined ? 1 : enabledValue(source.ipv6_enabled),
+        probe_app_id: integerValue(source.probe_app_id, 0) || null,
         target_active_count: integerValue(source.target_active_count, 20),
         minimum_healthy_count: integerValue(source.minimum_healthy_count, 4),
         interval_value: integerValue(source.interval_value, 1),
@@ -752,6 +904,11 @@ createApp({
       automationGroupEditorVisible.value = true;
     }
 
+    /** 切换 AWS 账号时立即重算生成门禁，新账号尚未验证则同步关闭生成开关。 */
+    function onAutomationAccountChange() {
+      if (!generationReady(automationGroupEditor)) automationGroupEditor.generation_enabled = 0;
+    }
+
     /** 页面先验证字段间关系，边界、权限和并发规则继续以服务端为准。 */
     function automationGroupError() {
       const group = automationGroupEditor;
@@ -760,9 +917,14 @@ createApp({
       const account = automation.accounts.find(item => Number(item.id) === accountId);
       if (!accountId || !account) return '请选择 AWS 账号';
       if (!enabledValue(account.enabled)) return '所选 AWS 账号已停用';
-      if (!['all', 'config', 'report', 'click'].includes(String(group.usage_scope || ''))) return '请选择有效用途';
+      if (String(group.usage_scope || '') !== 'config') return 'CloudFront 自动池组用途固定为 config';
       if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(String(group.environment || ''))) return '请选择有效环境';
-      if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(String(group.region || ''))) return '请填写有效 Region';
+      if (!/^[a-z]{2}(?:-gov)?-[a-z0-9-]+-\d$/.test(String(group.region || ''))) return '请填写有效 Region';
+      if (!/^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(String(group.origin_domain || '').trim().toLowerCase())) return '请填写不带协议和路径的 CloudFront 回源域名';
+      if (!/^\/[A-Za-z0-9._~!$&'()*+,;=:@%\/-]*$/.test(String(group.public_path || '').trim())) return '公开业务路径必须以 / 开头';
+      if (String(group.public_path || '').trim() !== '/shell.php') return 'CloudFront 自动节点当前固定服务 /shell.php';
+      if (!['PriceClass_All', 'PriceClass_100', 'PriceClass_200'].includes(String(group.price_class || ''))) return '请选择有效 CloudFront 价格等级';
+      if (integerValue(group.probe_app_id, 0) < 1) return '请填写用于自动验收的应用 APPID';
       if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(String(group.domain_provider || ''))) return '请选择有效域名提供方';
       if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(String(group.certificate_provider || ''))) return '请选择有效证书提供方';
       if (!['minute', 'hour', 'day', 'month'].includes(String(group.interval_unit || ''))) return '请选择有效生成周期单位';
@@ -782,6 +944,7 @@ createApp({
       if (integerValue(group.cleanup_no_access_days, 0) < 1) return '无访问清理天数至少为 1 天';
       if (integerValue(group.cleanup_no_access_days, 0) > 3650) return '无访问清理天数最多为 3650 天';
       if (integerValue(group.cleanup_no_access_days, 0) < integerValue(group.idle_mark_days, 0)) return '无访问清理天数不得小于标记阈值';
+      if (enabledValue(group.generation_enabled) && !generationReady(group)) return '请先完成 AWS 适配器与所选账号连接验证';
       return '';
     }
 
@@ -796,13 +959,18 @@ createApp({
           id: integerValue(group.id, 0),
           name: String(group.name || '').trim(),
           cloud_account_id: integerValue(group.cloud_account_id, 0),
-          usage_scope: String(group.usage_scope || 'config'),
+          usage_scope: 'config',
           environment: String(group.environment || 'production'),
           region: String(group.region || 'us-east-1'),
-          domain_provider: String(group.domain_provider || 'route53'),
-          certificate_provider: String(group.certificate_provider || 'acm'),
+          origin_domain: String(group.origin_domain || '').trim().toLowerCase(),
+          public_path: String(group.public_path || '/shell.php').trim(),
+          price_class: String(group.price_class || 'PriceClass_All'),
+          ipv6_enabled: enabledValue(group.ipv6_enabled),
+          probe_app_id: integerValue(group.probe_app_id, 0),
+          domain_provider: 'cloudfront_default',
+          certificate_provider: 'cloudfront_default',
           enabled: enabledValue(group.enabled),
-          generation_enabled: enabledValue(group.generation_enabled),
+          generation_enabled: generationReady(group) ? enabledValue(group.generation_enabled) : 0,
           target_active_count: integerValue(group.target_active_count, 20),
           minimum_healthy_count: integerValue(group.minimum_healthy_count, 4),
           interval_value: integerValue(group.interval_value, 1),
@@ -833,8 +1001,9 @@ createApp({
       finally { setRowBusy('delete-automation-group', row.id, false); }
     }
 
-    /** 按当前策略创建一个运行批次；适配器待接入时批次保持 waiting_adapter。 */
+    /** 按当前策略创建一个运行批次；服务端再次执行账号、容量和并发门禁。 */
     async function runAutomationGroup(row) {
+      if (!generationReady(row)) return ElMessage.warning('请先完成 AWS 适配器与所选账号连接验证');
       const confirmed = await ElMessageBox.confirm(`立即执行池组“${row.name || row.id}”一轮？服务端会按当前适配器状态记录批次。`, '执行自动化池组', { type: 'info', confirmButtonText: '确认执行', cancelButtonText: '取消' }).then(() => true).catch(() => false);
       if (!confirmed) return;
       setRowBusy('run-automation-group', row.id, true);
@@ -889,6 +1058,19 @@ createApp({
       finally { setRowBusy('retry-automation-run', row.id, false); }
     }
 
+    /** 失败云资源按原台账记录继续状态机，由服务端执行幂等与并发锁校验。 */
+    async function retryCloudResource(row) {
+      const resourceId = cloudResourceId(row);
+      if (!resourceId || !cloudResourceRetryable(row)) return ElMessage.warning('当前云资源没有可重试的失败阶段');
+      setRowBusy('retry-cloud-resource', resourceId, true);
+      try {
+        const data = await api('retryApiDomainCloudResource', { resource_id: resourceId });
+        ElMessage.success(data.message || '云资源已进入重试队列');
+        await loadData(true);
+      } catch (error) { ElMessage.error(maskSensitiveText(error.message) || '云资源重试失败'); }
+      finally { setRowBusy('retry-cloud-resource', resourceId, false); }
+    }
+
     /** 固定与预留保护必须作为一个完整快照提交，请求失败时回滚当次开关。 */
     async function setNodeProtection(row, field, value) {
       if (nodeProtectionDisabled(row)) return;
@@ -912,12 +1094,12 @@ createApp({
 
     /**
      * 手工请求只把已标记、零成功访问且未受保护的节点转入待清理。
-     * 服务端会再校验最小健康数和当前实际下发集合，并将云操作保持在 waiting_adapter。
+     * 服务端会再校验最小健康数和当前实际下发集合，再让关联云资源进入禁用与删除工作流。
      */
     async function requestNodeCleanup(row) {
       if (!nodeCleanupEligible(row)) return ElMessage.warning('节点当前不符合待清理门禁');
       const confirmed = await ElMessageBox.confirm(
-        `将节点“${nodeName(row)}”转入 cleanup_pending 并停止本地下发？AWS 适配器接入前云资源保持原状。`,
+        `将节点“${nodeName(row)}”转入 cleanup_pending 并停止本地下发？关联 CloudFront 资源将在服务端门禁通过后依次禁用和删除。`,
         '转入待清理',
         { type: 'warning', confirmButtonText: '确认转入', cancelButtonText: '取消' }
       ).then(() => true).catch(() => false);
@@ -941,26 +1123,75 @@ createApp({
       if (value && typeof value === 'object') return String(value.state || value.status || value.code || fallback || '').toLowerCase();
       return String(value || fallback || '').toLowerCase();
     }
+    function cloudAuthTypeLabel(value) { return String(value || 'environment') === 'assume_role' ? 'STS AssumeRole' : 'Railway 环境变量'; }
+    function cloudAccountState(row) { return stateCode(row && (row.connection_state || row.validation_state || row.connection_status), 'unverified'); }
+    function cloudAccountActualId(row) { return String(row && (row.actual_account_id || row.verified_account_id || row.caller_account_id) || ''); }
+    function cloudAccountVerifiedAt(row) { return row && (row.last_verified_at || row.verified_at || row.connection_last_checked_at || row.connection_checked_at) || ''; }
+    function maskedConnectionError(row) { return maskSensitiveText(row && (row.last_error || row.validation_error || row.error_message || row.connection_error_code || row.last_error_code || row.aws_error) || ''); }
+    function cloudConnectionStateLabel(value) {
+      const code = stateCode(value, 'unverified');
+      return ({ unverified: '待验证', waiting_account_id: '待填写 Account ID', waiting_credentials: '待配置 Railway 凭据', pending_validation: '待验证', pending: '验证中', validating: '验证中', verified: '已验证', connected: '已连接', ready: '已就绪', mismatch: 'Account ID 不匹配', identity_mismatch: 'Account ID 不匹配', validation_failed: '验证失败', configuration_changed: '配置已变更，请重试', failed: '验证失败', error: '验证失败', disabled: '已停用' })[code] || code || '-';
+    }
+    function cloudConnectionStateTag(value) {
+      const code = stateCode(value, 'unverified');
+      if (['verified', 'connected', 'ready', 'succeeded', 'success'].includes(code)) return 'success';
+      if (['mismatch', 'identity_mismatch', 'validation_failed', 'failed', 'error', 'degraded'].includes(code)) return 'danger';
+      if (['pending', 'validating'].includes(code)) return 'primary';
+      return 'warning';
+    }
+    function automationAdapterReady() {
+      if (automation.adapter_state && typeof automation.adapter_state === 'object' && automation.adapter_state.ready === true) return true;
+      return ['ready', 'connected'].includes(stateCode(automation.adapter_state, 'waiting_adapter'));
+    }
+    function cloudAccountConnectionReady(id) {
+      const account = automation.accounts.find(item => Number(item.id) === Number(id));
+      return Boolean(account && enabledValue(account.enabled) && ['verified', 'connected', 'ready', 'succeeded', 'success'].includes(cloudAccountState(account)));
+    }
+    /** 真实生成同时需要全局适配器与所选 AWS 账号验证就绪。 */
+    function generationReady(row) { return automationAdapterReady() && cloudAccountConnectionReady(row && row.cloud_account_id); }
     function adapterStateLabel(value) {
       const code = stateCode(value, 'waiting_adapter');
-      return ({ ready: 'AWS 适配器已就绪', waiting_adapter: 'waiting_adapter · 待 AWS 对接', pending: 'waiting_adapter · 待 AWS 对接', degraded: 'AWS 适配器异常', error: 'AWS 适配器异常' })[code] || code || '-';
+      return ({ ready: 'AWS 适配器已就绪', connected: 'AWS 适配器已就绪', waiting_connection: '等待 AWS 账号连接', waiting_adapter: 'waiting_adapter · 待运行环境配置', pending: '待运行环境配置', degraded: 'AWS 适配器异常', error: 'AWS 适配器异常' })[code] || code || '-';
     }
     function adapterStateTag(value) {
       const code = stateCode(value, 'waiting_adapter');
-      return code === 'ready' ? 'success' : ['degraded', 'error', 'failed'].includes(code) ? 'danger' : 'warning';
+      return ['ready', 'connected'].includes(code) ? 'success' : ['degraded', 'error', 'failed'].includes(code) ? 'danger' : 'warning';
     }
     function automationStateLabel(value) {
       const code = stateCode(value, 'waiting_adapter');
-      return ({ disabled: '已暂停', paused: '已暂停', waiting_account: '等待 AWS 账号', waiting_adapter: 'waiting_adapter', pending: '待执行', scheduled: '已排程', due: '待执行', queued: '已入队', running: '执行中', dry_run: 'dry-run', succeeded: '成功', success: '成功', partial: '部分完成', degraded: '部分异常', failed: '失败', cleanup_failed: '清理失败', error: '失败', skipped: '已跳过' })[code] || code || '-';
+      return ({ disabled: '已暂停', paused: '已暂停', connected: 'AWS 已连接', ready: 'AWS 已就绪', waiting_connection: '等待 AWS 账号连接', waiting_account: '等待 AWS 账号', waiting_adapter: 'waiting_adapter', pending: '待执行', scheduled: '已排程', due: '待执行', queued: '已入队', running: '执行中', dry_run: 'dry-run', succeeded: '成功', success: '成功', partial: '部分完成', degraded: '部分异常', failed: '失败', cleanup_failed: '清理失败', error: '失败', skipped: '已跳过' })[code] || code || '-';
     }
     function automationStateTag(value) {
       const code = stateCode(value, 'waiting_adapter');
-      if (['succeeded', 'success'].includes(code)) return 'success';
+      if (['connected', 'ready', 'succeeded', 'success'].includes(code)) return 'success';
       if (['failed', 'cleanup_failed', 'error', 'degraded'].includes(code)) return 'danger';
-      if (['waiting_adapter', 'waiting_account', 'due', 'partial', 'skipped'].includes(code)) return 'warning';
+      if (['waiting_adapter', 'waiting_connection', 'waiting_account', 'due', 'partial', 'skipped'].includes(code)) return 'warning';
       if (['running', 'scheduled', 'queued'].includes(code)) return 'primary';
       return 'info';
     }
+    function cloudResourceId(row) { return integerValue(row && (row.resource_id || row.cloud_resource_id || row.id), 0); }
+    function linkedCloudResourceId(row) { return integerValue(row && (row.cloud_resource_id || row.resource_id), 0); }
+    function cloudDistributionId(row) { return String(row && (row.distribution_id || row.cloud_resource_ref || row.aws_distribution_id) || ''); }
+    function cloudDistributionDomain(row) { return String(row && (row.distribution_domain || row.domain_name || row.cloudfront_domain || row.aws_domain_name) || ''); }
+    function cloudResourceState(row) { return stateCode(row && (row.workflow_state || row.resource_state || row.cloud_state || row.cloud_cleanup_state || row.status || row.cloudfront_status), 'waiting_adapter'); }
+    function cloudResourceRetryCount(row) { return integerValue(row && (row.retry_count ?? row.retries), 0); }
+    function cloudResourceStateLabel(value) {
+      const code = stateCode(value, 'unlinked');
+      return ({
+        unlinked: '待关联', waiting_adapter: '等待适配器', waiting_account: '等待账号验证', planned: '已计划', pending_create: '待创建', create_pending: '待创建', creating: '创建中',
+        waiting_deploy: '部署中', deploying: '部署中', in_progress: '部署中', deployed: '已部署', pending_probe: '待探针', probe_pending: '待探针', verifying: '探针中', probing: '探针中', probe_succeeded: '探针通过', verified: '探针通过', pending_pool: '待入池', pool_pending: '待入池', ready: '已入池', in_pool: '已入池', active: '已入池',
+        pending_disable: '待停用', disable_pending: '待停用', disabling: '停用中', disabled: '已停用', restore_pending: '待恢复', restoring: '恢复中', pending_delete: '待删除', delete_pending: '待删除', deleting: '删除中', deleted: '已完成', completed: '已完成', archived: '已完成',
+        failed: '失败', error: '失败', create_failed: '创建失败', deploy_failed: '部署失败', probe_failed: '探针失败', pool_failed: '入池失败', cleanup_failed: '清理失败', disable_failed: '停用失败', delete_failed: '删除失败',
+      })[code] || code || '-';
+    }
+    function cloudResourceStateTag(value) {
+      const code = stateCode(value, 'unlinked');
+      if (['ready', 'in_pool', 'active', 'probe_succeeded', 'verified', 'completed', 'deleted', 'archived'].includes(code)) return 'success';
+      if (['failed', 'error', 'create_failed', 'deploy_failed', 'probe_failed', 'pool_failed', 'cleanup_failed', 'disable_failed', 'delete_failed'].includes(code)) return 'danger';
+      if (['creating', 'waiting_deploy', 'deploying', 'in_progress', 'verifying', 'probing', 'disabling', 'restoring', 'deleting'].includes(code)) return 'primary';
+      return 'warning';
+    }
+    function cloudResourceRetryable(row) { return ['create_failed', 'probe_failed', 'cleanup_failed'].includes(cloudResourceState(row)); }
     function cloudAccountLabel(id) {
       const row = automation.accounts.find(account => Number(account.id) === Number(id));
       return row ? row.name : (id ? `AWS 账号 #${id}` : '未选 AWS 账号');
@@ -1008,7 +1239,9 @@ createApp({
     function environmentLabel(value) { return ({ production: '生产', staging: '预发', test: '测试', development: '开发' })[String(value || '').toLowerCase()] || value || '-'; }
     function providerLabel(value, type) {
       const code = String(value || '').toLowerCase();
-      const labels = type === 'certificate' ? { acm: 'ACM', cloudflare: 'Cloudflare', custom: '自定义' } : { route53: 'Route 53', cloudflare: 'Cloudflare', custom: '自定义' };
+      const labels = type === 'certificate'
+        ? { cloudfront_default: 'CloudFront 默认证书', acm: 'ACM', cloudflare: 'Cloudflare', custom: '自定义' }
+        : { cloudfront_default: 'CloudFront 默认域名', cloudfront: 'CloudFront 默认域名', route53: 'Route 53', cloudflare: 'Cloudflare', custom: '自定义' };
       return labels[code] || value || '-';
     }
     function triggerLabel(value) { return ({ schedule: '定时', scheduled: '定时', manual: '手动', dry_run: 'dry-run', retry: '重试' })[String(value || '').toLowerCase()] || value || '-'; }
@@ -1138,14 +1371,18 @@ createApp({
       presets, previewText, previewLoading, dohPreset, dnsPreset, importing,
       editorVisible, editorSaving, editorType, editor, editorTitle, dateRange,
       automation, automationView, automationViews, batchMonthFilter, batchMonthOptions, filteredAutomationBatches,
-      cloudAccountEditorVisible, cloudAccountSaving, cloudAccountEditor,
+      cloudAccountEditorVisible, cloudAccountSaving, cloudAccountValidating, cloudAccountEditor,
       automationGroupEditorVisible, automationGroupSaving, automationGroupEditor,
       loadData, refreshAll, updateDnsPool, openEditor, saveEditor, toggleEnabled,
       deleteRow, rowBusy, applyPreset, importCommon, previewConfig, copyPreview,
-      openCloudAccountEditor, saveCloudAccount, deleteCloudAccount,
+      openCloudAccountEditor, saveCloudAccount, validateCloudAccountConnection, deleteCloudAccount,
       openAutomationGroupEditor, saveAutomationGroup, deleteAutomationGroup, runAutomationGroup,
-      dryRunAutomationGroup, toggleAutomationGroupPause, retryAutomationRun, setNodeProtection, requestNodeCleanup,
+      onAutomationAccountChange, dryRunAutomationGroup, toggleAutomationGroupPause, retryAutomationRun, retryCloudResource, setNodeProtection, requestNodeCleanup,
       summaryField, adapterStateLabel, adapterStateTag, automationStateLabel, automationStateTag,
+      cloudAuthTypeLabel, cloudAccountState, cloudAccountActualId, cloudAccountVerifiedAt, maskedConnectionError,
+      cloudConnectionStateLabel, cloudConnectionStateTag, automationAdapterReady, cloudAccountConnectionReady, generationReady,
+      cloudResourceId, linkedCloudResourceId, cloudDistributionId, cloudDistributionDomain, cloudResourceState,
+      cloudResourceRetryCount, cloudResourceStateLabel, cloudResourceStateTag, cloudResourceRetryable,
       cloudAccountLabel, automationGroupLabel, intervalUnitLabel, groupActiveCount, groupEligibleCount,
       groupExpectedReplenish, estimatedAnnualRuns, environmentLabel, providerLabel, triggerLabel, runRetryable,
       groupState, groupResultText, enabledValue, metric, number, timeText,

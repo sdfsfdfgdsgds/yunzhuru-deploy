@@ -99,6 +99,12 @@ if (strpos($path, '/.') !== false) {
 
 // ========== 白名单路径（放行） ==========
 
+// Pure Admin 是独立的静态后台入口。目录请求需要交给 PHP 内置服务器，
+// 由它继续解析 admin-pure/index.html；Hash 路由后续只访问已放行的静态资源。
+if ($path === '/admin-pure' || $path === '/admin-pure/') {
+    return false;
+}
+
 if (servePrecompressedStatic($path)) {
     return true;
 }

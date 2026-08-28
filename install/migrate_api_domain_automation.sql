@@ -1,5 +1,5 @@
 -- ============================================================
--- API 域名池：稳定池组、不可变批次、运行记录与节点生命周期 V2
+-- API 域名池：稳定池组、不可变批次、CloudFront 资源与有界作业 V3
 -- 可在 MySQL 8 生产库重复执行；只变更本地结构和状态，不调用 AWS。
 -- AWS 账号表只保存引用元数据，不保存访问密钥、Secret 或网页登录信息。
 -- ============================================================
@@ -9,8 +9,15 @@ CREATE TABLE IF NOT EXISTS cainiao_api_domain_cloud_account (
   `name` varchar(100) NOT NULL,
   `account_id` varchar(32) NOT NULL DEFAULT '',
   `region` varchar(32) NOT NULL DEFAULT 'us-east-1',
+  `credential_ref` varchar(64) NOT NULL DEFAULT '',
+  `auth_type` varchar(24) NOT NULL DEFAULT 'environment',
+  `role_arn` varchar(255) NOT NULL DEFAULT '',
+  `external_id_ref` varchar(64) NOT NULL DEFAULT '',
   `enabled` tinyint(1) NOT NULL DEFAULT 1,
-  `connection_state` varchar(24) NOT NULL DEFAULT 'waiting_adapter',
+  `connection_state` varchar(24) NOT NULL DEFAULT 'waiting_credentials',
+  `verified_account_id` varchar(32) NOT NULL DEFAULT '',
+  `connection_last_checked_at` datetime DEFAULT NULL,
+  `connection_error_code` varchar(64) NOT NULL DEFAULT '',
   `deleted_at` datetime DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -25,8 +32,13 @@ CREATE TABLE IF NOT EXISTS cainiao_api_domain_automation_group (
   `usage_scope` varchar(16) NOT NULL DEFAULT 'config',
   `environment` varchar(32) NOT NULL DEFAULT 'production',
   `region` varchar(32) NOT NULL DEFAULT 'us-east-1',
-  `domain_provider` varchar(32) NOT NULL DEFAULT 'route53',
-  `certificate_provider` varchar(32) NOT NULL DEFAULT 'acm',
+  `domain_provider` varchar(32) NOT NULL DEFAULT 'cloudfront_default',
+  `certificate_provider` varchar(32) NOT NULL DEFAULT 'cloudfront_default',
+  `origin_domain` varchar(253) NOT NULL DEFAULT 'yunzhuru-app-production.up.railway.app',
+  `public_path` varchar(255) NOT NULL DEFAULT '/shell.php',
+  `probe_app_id` int unsigned NOT NULL DEFAULT 0,
+  `price_class` varchar(32) NOT NULL DEFAULT 'PriceClass_All',
+  `ipv6_enabled` tinyint(1) NOT NULL DEFAULT 1,
   `enabled` tinyint(1) NOT NULL DEFAULT 0,
   `generation_enabled` tinyint(1) NOT NULL DEFAULT 0,
   `target_active_count` int unsigned NOT NULL DEFAULT 20,
@@ -104,6 +116,78 @@ CREATE TABLE IF NOT EXISTS cainiao_api_domain_automation_run (
   KEY `idx_automation_run_status` (`status`,`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='API域名池自动化独立运行记录';
 
+CREATE TABLE IF NOT EXISTS cainiao_api_domain_cloud_resource (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `group_id` int unsigned NOT NULL,
+  `batch_id` bigint unsigned NOT NULL,
+  `run_id` bigint unsigned NOT NULL,
+  `cloud_account_id` int unsigned NOT NULL,
+  `expected_account_id` varchar(32) NOT NULL,
+  `domain_pool_id` int unsigned DEFAULT NULL,
+  `slot_index` int unsigned NOT NULL,
+  `caller_reference` varchar(128) NOT NULL,
+  `resource_type` varchar(32) NOT NULL DEFAULT 'cloudfront_distribution',
+  `origin_domain` varchar(253) NOT NULL,
+  `public_path` varchar(255) NOT NULL DEFAULT '/shell.php',
+  `usage_scope` varchar(16) NOT NULL DEFAULT 'config',
+  `price_class` varchar(32) NOT NULL DEFAULT 'PriceClass_All',
+  `ipv6_enabled` tinyint(1) NOT NULL DEFAULT 1,
+  `distribution_id` varchar(64) NOT NULL DEFAULT '',
+  `distribution_arn` varchar(255) NOT NULL DEFAULT '',
+  `domain_name` varchar(253) NOT NULL DEFAULT '',
+  `public_api_url` varchar(512) NOT NULL DEFAULT '',
+  `distribution_etag` varchar(255) NOT NULL DEFAULT '',
+  `provider_status` varchar(32) NOT NULL DEFAULT 'not_created',
+  `workflow_state` varchar(32) NOT NULL DEFAULT 'pending_create',
+  `provider_enabled` tinyint(1) NOT NULL DEFAULT 0,
+  `probe_state` varchar(32) NOT NULL DEFAULT 'not_started',
+  `probe_http_code` int unsigned NOT NULL DEFAULT 0,
+  `retry_count` int unsigned NOT NULL DEFAULT 0,
+  `next_action_at` datetime DEFAULT NULL,
+  `last_error_code` varchar(64) NOT NULL DEFAULT '',
+  `last_aws_request_id` varchar(128) NOT NULL DEFAULT '',
+  `cloud_created_at` datetime DEFAULT NULL,
+  `deployed_at` datetime DEFAULT NULL,
+  `verified_at` datetime DEFAULT NULL,
+  `disabled_at` datetime DEFAULT NULL,
+  `delete_not_before` datetime DEFAULT NULL,
+  `archived_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_cloud_resource_caller` (`caller_reference`),
+  UNIQUE KEY `uniq_cloud_resource_slot` (`batch_id`,`slot_index`),
+  UNIQUE KEY `uniq_cloud_resource_pool` (`domain_pool_id`),
+  KEY `idx_cloud_resource_work` (`workflow_state`,`next_action_at`,`id`),
+  KEY `idx_cloud_resource_group` (`group_id`,`id`),
+  KEY `idx_cloud_resource_distribution` (`distribution_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='API域名池CloudFront资源账本';
+
+CREATE TABLE IF NOT EXISTS cainiao_api_domain_cloud_job (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `resource_id` bigint unsigned NOT NULL,
+  `group_id` int unsigned NOT NULL,
+  `cloud_account_id` int unsigned NOT NULL,
+  `job_type` varchar(32) NOT NULL,
+  `status` varchar(24) NOT NULL DEFAULT 'pending',
+  `attempt_count` int unsigned NOT NULL DEFAULT 0,
+  `max_attempts` int unsigned NOT NULL DEFAULT 12,
+  `cancel_requested` tinyint(1) NOT NULL DEFAULT 0,
+  `next_attempt_at` datetime NOT NULL,
+  `lock_token` varchar(64) NOT NULL DEFAULT '',
+  `locked_at` datetime DEFAULT NULL,
+  `last_error_code` varchar(64) NOT NULL DEFAULT '',
+  `last_aws_request_id` varchar(128) NOT NULL DEFAULT '',
+  `started_at` datetime DEFAULT NULL,
+  `finished_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_cloud_job_due` (`status`,`next_attempt_at`,`id`),
+  KEY `idx_cloud_job_resource` (`resource_id`,`id`),
+  KEY `idx_cloud_job_group` (`group_id`,`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='API域名池CloudFront有界作业队列';
+
 -- MySQL 8 各小版对 ADD COLUMN IF NOT EXISTS 支持不一致，以下逐列查询后迁移。
 -- lifecycle_status 合同：pending_verification -> active -> unused_marked
 -- -> cleanup_pending -> archived / cleanup_failed。
@@ -123,14 +207,14 @@ SET @api_auto_ddl = (
 PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
 
 SET @api_auto_ddl = (
-  SELECT IF(COUNT(*) = 0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `domain_provider` varchar(32) NOT NULL DEFAULT ''route53'' AFTER `region`', 'DO 1')
+  SELECT IF(COUNT(*) = 0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `domain_provider` varchar(32) NOT NULL DEFAULT ''cloudfront_default'' AFTER `region`', 'DO 1')
   FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cainiao_api_domain_automation_group' AND COLUMN_NAME = 'domain_provider'
 );
 PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
 
 SET @api_auto_ddl = (
-  SELECT IF(COUNT(*) = 0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `certificate_provider` varchar(32) NOT NULL DEFAULT ''acm'' AFTER `domain_provider`', 'DO 1')
+  SELECT IF(COUNT(*) = 0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `certificate_provider` varchar(32) NOT NULL DEFAULT ''cloudfront_default'' AFTER `domain_provider`', 'DO 1')
   FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cainiao_api_domain_automation_group' AND COLUMN_NAME = 'certificate_provider'
 );
@@ -318,6 +402,25 @@ SET @api_auto_ddl = (
 );
 PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
 
+-- V3 账号、池组及作业字段幂等补齐。
+-- 采用 PREPARE + information_schema，兼容 MySQL 8 各小版本。
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_account` ADD COLUMN `credential_ref` varchar(64) NOT NULL DEFAULT '''' AFTER `region`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_account' AND COLUMN_NAME='credential_ref'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_account` ADD COLUMN `auth_type` varchar(24) NOT NULL DEFAULT ''environment'' AFTER `credential_ref`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_account' AND COLUMN_NAME='auth_type'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_account` ADD COLUMN `role_arn` varchar(255) NOT NULL DEFAULT '''' AFTER `auth_type`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_account' AND COLUMN_NAME='role_arn'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_account` ADD COLUMN `external_id_ref` varchar(64) NOT NULL DEFAULT '''' AFTER `role_arn`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_account' AND COLUMN_NAME='external_id_ref'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_account` ADD COLUMN `verified_account_id` varchar(32) NOT NULL DEFAULT '''' AFTER `connection_state`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_account' AND COLUMN_NAME='verified_account_id'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_account` ADD COLUMN `connection_last_checked_at` datetime DEFAULT NULL AFTER `verified_account_id`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_account' AND COLUMN_NAME='connection_last_checked_at'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_account` ADD COLUMN `connection_error_code` varchar(64) NOT NULL DEFAULT '''' AFTER `connection_last_checked_at`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_account' AND COLUMN_NAME='connection_error_code'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `origin_domain` varchar(253) NOT NULL DEFAULT ''yunzhuru-app-production.up.railway.app'' AFTER `certificate_provider`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_automation_group' AND COLUMN_NAME='origin_domain'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `public_path` varchar(255) NOT NULL DEFAULT ''/shell.php'' AFTER `origin_domain`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_automation_group' AND COLUMN_NAME='public_path'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `probe_app_id` int unsigned NOT NULL DEFAULT 0 AFTER `public_path`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_automation_group' AND COLUMN_NAME='probe_app_id'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `price_class` varchar(32) NOT NULL DEFAULT ''PriceClass_All'' AFTER `probe_app_id`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_automation_group' AND COLUMN_NAME='price_class'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_automation_group` ADD COLUMN `ipv6_enabled` tinyint(1) NOT NULL DEFAULT 1 AFTER `price_class`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_automation_group' AND COLUMN_NAME='ipv6_enabled'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_resource` ADD COLUMN `expected_account_id` varchar(32) NOT NULL DEFAULT '''' AFTER `cloud_account_id`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_resource' AND COLUMN_NAME='expected_account_id'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_resource` ADD COLUMN `price_class` varchar(32) NOT NULL DEFAULT ''PriceClass_All'' AFTER `usage_scope`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_resource' AND COLUMN_NAME='price_class'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_resource` ADD COLUMN `ipv6_enabled` tinyint(1) NOT NULL DEFAULT 1 AFTER `price_class`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_resource' AND COLUMN_NAME='ipv6_enabled'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_resource` ADD COLUMN `delete_not_before` datetime DEFAULT NULL AFTER `disabled_at`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_resource' AND COLUMN_NAME='delete_not_before'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
+SET @api_auto_ddl = (SELECT IF(COUNT(*)=0, 'ALTER TABLE `cainiao_api_domain_cloud_job` ADD COLUMN `cancel_requested` tinyint(1) NOT NULL DEFAULT 0 AFTER `max_attempts`', 'DO 1') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cainiao_api_domain_cloud_job' AND COLUMN_NAME='cancel_requested'); PREPARE api_auto_stmt FROM @api_auto_ddl; EXECUTE api_auto_stmt; DEALLOCATE PREPARE api_auto_stmt;
 -- 存量节点不属于自动生成，永久保护；旧 no_access 状态只做语义升级。
 UPDATE `cainiao_api_domain_pool`
 SET `origin`='manual',`cleanup_protected`=1,`lifecycle_status`='active'
@@ -341,5 +444,5 @@ SET `cloud_cleanup_state`='waiting_adapter'
 WHERE `origin`='aws_auto' AND `lifecycle_status`='cleanup_pending';
 
 INSERT INTO `cainiao_config_delivery_meta` (`key_name`,`key_value`)
-VALUES ('api_domain_automation_schema_version','2')
-ON DUPLICATE KEY UPDATE `key_value`=GREATEST(CAST(`key_value` AS UNSIGNED),2);
+VALUES ('api_domain_automation_schema_version','3')
+ON DUPLICATE KEY UPDATE `key_value`=GREATEST(CAST(`key_value` AS UNSIGNED),3);

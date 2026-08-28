@@ -43,9 +43,10 @@ function apiDomainAutomationWorkerResultMetric(array $result, string $field): in
  * 不把返回数组整体写入日志，避免云账号引用或后续适配器字段
  * 在合同扩展后被意外输出。
  */
-function apiDomainAutomationWorkerSummary($result): array
+function apiDomainAutomationWorkerSummary($result, $cloudResult = []): array
 {
     $result = is_array($result) ? $result : [];
+    $cloudResult = is_array($cloudResult) ? $cloudResult : [];
     $summary = [
         'checked' => apiDomainAutomationWorkerMetric($result, 'checked'),
         'processed' => apiDomainAutomationWorkerMetric($result, 'processed'),
@@ -55,6 +56,15 @@ function apiDomainAutomationWorkerSummary($result): array
         'protected' => apiDomainAutomationWorkerResultMetric($result, 'protected_count'),
         'skipped' => apiDomainAutomationWorkerMetric($result, 'skipped'),
         'failed' => apiDomainAutomationWorkerMetric($result, 'failed'),
+        'cloud_checked' => apiDomainAutomationWorkerMetric($cloudResult, 'checked'),
+        'cloud_processed' => apiDomainAutomationWorkerMetric($cloudResult, 'processed'),
+        'cloud_succeeded' => apiDomainAutomationWorkerMetric($cloudResult, 'succeeded'),
+        'cloud_retry_wait' => apiDomainAutomationWorkerMetric($cloudResult, 'retry_wait'),
+        'cloud_created' => apiDomainAutomationWorkerMetric($cloudResult, 'created'),
+        'cloud_probed' => apiDomainAutomationWorkerMetric($cloudResult, 'probed'),
+        'cloud_archived' => apiDomainAutomationWorkerMetric($cloudResult, 'archived'),
+        'cloud_failed' => apiDomainAutomationWorkerMetric($cloudResult, 'failed'),
+        'cloud_skipped' => apiDomainAutomationWorkerMetric($cloudResult, 'skipped'),
     ];
     $summary['total'] = array_sum($summary);
     return $summary;
@@ -72,6 +82,15 @@ function apiDomainAutomationWorkerLog(string $status, array $summary = []): void
         'protected',
         'skipped',
         'failed',
+        'cloud_checked',
+        'cloud_processed',
+        'cloud_succeeded',
+        'cloud_retry_wait',
+        'cloud_created',
+        'cloud_probed',
+        'cloud_archived',
+        'cloud_failed',
+        'cloud_skipped',
     ];
     $parts = [date('Y-m-d H:i:s'), 'status=' . $status];
     foreach ($fields as $field) {
@@ -114,12 +133,14 @@ try {
     $idleCycles = 0;
     while ($running) {
         $result = apiDomainAutomationProcessDue($pdo, 10);
-        $summary = apiDomainAutomationWorkerSummary($result);
+        // 云写作业每轮严格最多 1 个，避免多个 STS/CloudFront 长请求串行占用停机窗口。
+        $cloudResult = apiDomainAutomationProcessCloudJobs($pdo, 1);
+        $summary = apiDomainAutomationWorkerSummary($result, $cloudResult);
         if ($summary['total'] > 0) {
             $idleCycles = 0;
-            $status = $summary['failed'] > 0
+            $status = ($summary['failed'] + $summary['cloud_failed']) > 0
                 ? 'completed_with_failures'
-                : ($summary['processed'] > 0 ? 'processed' : 'checked');
+                : (($summary['processed'] + $summary['cloud_processed']) > 0 ? 'processed' : 'checked');
             apiDomainAutomationWorkerLog($status, $summary);
         } else {
             $idleCycles++;

@@ -170,11 +170,14 @@ function getConfigDelivery(PDO $pdo, array $input)
     ];
 }
 
-/** 新增或更新 AWS 账号非敏感元数据。 */
+/** 新增或更新 AWS 账号元数据与运行环境凭据引用。 */
 function saveApiDomainCloudAccount(PDO $pdo, array $input)
 {
     configDeliveryRequireAdmin($pdo);
-    $allowedKeys = ['id', 'name', 'account_id', 'region', 'enabled'];
+    $allowedKeys = [
+        'id', 'name', 'account_id', 'region', 'credential_ref', 'auth_type',
+        'role_arn', 'external_id_ref', 'enabled',
+    ];
     if (array_diff(array_keys($input), $allowedKeys)) {
         throw new InvalidArgumentException('AWS 账号请求参数不合法');
     }
@@ -182,6 +185,21 @@ function saveApiDomainCloudAccount(PDO $pdo, array $input)
         $input['id'] = configDeliveryAutomationParseId($input['id'], 'AWS 账号 ID', true);
     }
     return apiDomainAutomationSaveCloudAccount($pdo, $input);
+}
+
+/** 只读核对 STS 身份和 CloudFront 列表权限，不触发云资源写操作。 */
+function validateApiDomainCloudAccountConnection(PDO $pdo, array $input)
+{
+    configDeliveryRequireAdmin($pdo);
+    $allowedKeys = ['id'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('AWS 账号连接验证请求参数不合法');
+    }
+    if (!array_key_exists('id', $input)) {
+        throw new InvalidArgumentException('AWS 账号连接验证请求参数不完整');
+    }
+    $id = configDeliveryAutomationParseId($input['id'], 'AWS 账号 ID');
+    return apiDomainAutomationValidateCloudAccount($pdo, $id);
 }
 
 /** 归档 AWS 账号非敏感元数据。 */
@@ -209,6 +227,11 @@ function saveApiDomainAutomationGroup(PDO $pdo, array $input)
         'region',
         'domain_provider',
         'certificate_provider',
+        'origin_domain',
+        'public_path',
+        'probe_app_id',
+        'price_class',
+        'ipv6_enabled',
         'enabled',
         'generation_enabled',
         'target_active_count',
@@ -231,6 +254,26 @@ function saveApiDomainAutomationGroup(PDO $pdo, array $input)
         $input['cloud_account_id'] = configDeliveryAutomationParseId($input['cloud_account_id'], 'AWS 账号 ID');
     }
     return apiDomainAutomationSaveGroup($pdo, $input);
+}
+
+/** 按资源账本状态重建一个有界作业，CallerReference 和历史事实保持不变。 */
+function retryApiDomainCloudResource(PDO $pdo, array $input)
+{
+    configDeliveryRequireAdmin($pdo);
+    $allowedKeys = ['resource_id'];
+    if (array_diff(array_keys($input), $allowedKeys)) {
+        throw new InvalidArgumentException('CloudFront 资源重试请求参数不合法');
+    }
+    if (!array_key_exists('resource_id', $input)) {
+        throw new InvalidArgumentException('CloudFront 资源重试请求参数不完整');
+    }
+    $resourceId = apiDomainAutomationPositiveInt(
+        $input['resource_id'],
+        'CloudFront 资源 ID',
+        1,
+        PHP_INT_MAX
+    );
+    return apiDomainAutomationRetryCloudResource($pdo, $resourceId);
 }
 
 /** 归档自动化池组，保留历史批次与节点证据。 */
@@ -646,14 +689,21 @@ function configDeliveryInsertPathReceipt(
                 if ($poolRow && (string)($poolRow['origin'] ?? '') === 'aws_auto') {
                     $lifecycleStatus = (string)($poolRow['lifecycle_status'] ?? 'active');
                     $restorable = in_array($lifecycleStatus, ['unused_marked', 'cleanup_pending'], true);
-                    $distributionChanged = $restorable && (int)($poolRow['enabled'] ?? 0) !== 1;
+                    $cloudRestore = $restorable
+                        ? apiDomainAutomationHandleSuccessfulReceipt($pdo, (int)$row[':domain_pool_id'])
+                        : ['provider_ready' => 1, 'restore_queued' => 0];
+                    $providerReady = !empty($cloudRestore['provider_ready']);
+                    $targetEnabled = $providerReady ? 1 : 0;
+                    $distributionChanged = $restorable
+                        && (int)($poolRow['enabled'] ?? 0) !== $targetEnabled;
                     if ($restorable) {
                         $protect = $pdo->prepare("UPDATE cainiao_api_domain_pool SET
                             access_count=access_count+1,last_access_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),
                             verified_at=COALESCE(verified_at,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)),
                             lifecycle_status='active',lifecycle_updated_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR),
                             idle_marked_at=NULL,cleanup_requested_at=NULL,
-                            enabled=1,cleanup_reason='',cloud_cleanup_state='not_required'
+                            enabled=:provider_ready,cleanup_reason='',
+                            cloud_cleanup_state=IF(:restore_queued=1,'restore_pending','not_required')
                             WHERE id=:id AND origin='aws_auto'");
                     } else {
                         $protect = $pdo->prepare("UPDATE cainiao_api_domain_pool SET
@@ -662,7 +712,12 @@ function configDeliveryInsertPathReceipt(
                             lifecycle_updated_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 8 HOUR)
                             WHERE id=:id AND origin='aws_auto'");
                     }
-                    $protect->execute([':id' => (int)$row[':domain_pool_id']]);
+                    $protectParams = [':id' => (int)$row[':domain_pool_id']];
+                    if ($restorable) {
+                        $protectParams[':provider_ready'] = $targetEnabled;
+                        $protectParams[':restore_queued'] = !empty($cloudRestore['restore_queued']) ? 1 : 0;
+                    }
+                    $protect->execute($protectParams);
                 }
             } catch (PDOException $schemaError) {
                 // 滚动升级初始数秒内旧表尚无生命周期字段时，真实统计仍照常入库。
