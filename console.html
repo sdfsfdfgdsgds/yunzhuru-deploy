@@ -2,262 +2,997 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>菜鸟云注入 - 后台</title>
+  <title>菜鸟云注入 - 管理后台</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  
+  <link rel="canonical" href="/console.html" />
+
   <link rel="stylesheet" href="/element/css/index.css" />
   <script src="/element/js/vue.global.js"></script>
   <script src="/element/js/index.full.js"></script>
   <script src="/element/js/index.iife.min.js"></script>
   <script src="/config.js"></script>
-  
+
   <style>
-  .el-menu-vertical .el-sub-menu .el-menu {
-  background-color: #f5f5f5 !important;
-}
-html, body {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-}
+    :root {
+      --admin-primary: #3b82f6;
+      --admin-primary-dark: #2563eb;
+      --admin-primary-soft: #eff6ff;
+      --admin-sidebar: #ffffff;
+      --admin-canvas: #f4f7fb;
+      --admin-border: #e7edf5;
+      --admin-text: #182230;
+      --admin-muted: #667085;
+      --admin-sidebar-width: 238px;
+      --admin-sidebar-collapsed-width: 72px;
+      --admin-topbar-height: 64px;
+      --admin-tabs-height: 44px;
+      --el-color-primary: var(--admin-primary);
+      --el-border-radius-base: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body,
     #app {
+      width: 100%;
       height: 100%;
+      margin: 0;
+      overflow: hidden;
     }
-    .main-layout,
-    .el-container {
+
+    body {
+      color: var(--admin-text);
+      background: var(--admin-canvas);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "PingFang SC", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button,
+    input,
+    textarea,
+    select {
+      font: inherit;
+    }
+
+    [v-cloak] {
+      display: none;
+    }
+
+    .admin-shell {
+      display: flex;
+      width: 100%;
       height: 100%;
+      background: var(--admin-canvas);
     }
-/* 主体区域填满 header 以外的剩余空间 */
-.el-container {
-  flex: 1;
-  overflow: hidden;
-}
-/* 左侧菜单栏可滚动 */
-.el-aside {
-  height: 100%;
-  overflow-y: auto;
-}
-/* 菜单本身撑满侧栏并可滚动 */
-.el-menu-vertical {
-  height: 100%;
-  overflow-y: auto;
-}
-.main-layout {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-.iframe-wrapper {
-  width: 100%;
-  height: 100%;
-  border: none;
-  overflow: hidden;
-  scrollbar-width: none;
-}
-.iframe-wrapper::-webkit-scrollbar {
-  display: none;
-}
-    .footer {
-      text-align: center;
-      padding: 10px 0;
-      font-size: 12px;
-      color: #999;
-      background: #f5f5f5;
+
+    /* 侧栏只负责导航，业务页面仍由原有同源 iframe 承载。 */
+    .admin-sidebar {
+      position: relative;
+      z-index: 20;
+      display: flex;
+      flex: 0 0 var(--admin-sidebar-width);
+      flex-direction: column;
+      width: var(--admin-sidebar-width);
+      height: 100%;
+      overflow: hidden;
+      background: var(--admin-sidebar);
+      border-right: 1px solid var(--admin-border);
+      box-shadow: 5px 0 18px rgb(16 24 40 / 2%);
+      /*
+       * Element Plus 菜单树在 collapse-transition=false 时会立即切换结构。
+       * 侧栏宽度同步切换，避免子菜单已收起而外框仍在缩放的错位帧。
+       */
+      transition: none;
     }
+
+    .admin-shell.is-collapsed .admin-sidebar {
+      flex-basis: var(--admin-sidebar-collapsed-width);
+      width: var(--admin-sidebar-collapsed-width);
+    }
+
+    .brand-button {
+      display: flex;
+      flex: 0 0 var(--admin-topbar-height);
+      align-items: center;
+      width: 100%;
+      min-width: 0;
+      padding: 0 18px;
+      color: inherit;
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--admin-border);
+      cursor: pointer;
+    }
+
+    .brand-logo {
+      display: grid;
+      flex: 0 0 38px;
+      width: 38px;
+      height: 38px;
+      overflow: hidden;
+      place-items: center;
+      color: #ffffff;
+      font-size: 18px;
+      font-weight: 800;
+      background: linear-gradient(145deg, #60a5fa, #2563eb);
+      border-radius: 11px;
+      box-shadow: 0 7px 16px rgb(37 99 235 / 22%);
+    }
+
+    .brand-logo img {
+      width: 24px;
+      height: 24px;
+      object-fit: contain;
+    }
+
+    .brand-copy {
+      min-width: 0;
+      margin-left: 11px;
+      white-space: nowrap;
+      transition: opacity 0.16s ease;
+    }
+
+    .brand-title {
+      display: block;
+      overflow: hidden;
+      color: #172033;
+      font-size: 15px;
+      font-weight: 700;
+      line-height: 20px;
+      text-overflow: ellipsis;
+    }
+
+    .brand-subtitle {
+      display: block;
+      margin-top: 1px;
+      color: #98a2b3;
+      font-size: 11px;
+      letter-spacing: 0.02em;
+    }
+
+    .admin-shell.is-collapsed .brand-button {
+      justify-content: center;
+      padding: 0;
+    }
+
+    .admin-shell.is-collapsed .brand-copy,
+    .admin-shell.is-collapsed .sidebar-status-copy,
+    .admin-shell.is-collapsed .sidebar-version {
+      display: none;
+    }
+
+    .sidebar-scroll {
+      flex: 1;
+      min-height: 0;
+      padding: 12px 9px;
+      overflow-x: hidden;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #d8e1ec transparent;
+    }
+
+    .sidebar-scroll::-webkit-scrollbar {
+      width: 5px;
+    }
+
+    .sidebar-scroll::-webkit-scrollbar-thumb {
+      background: #d8e1ec;
+      border-radius: 999px;
+    }
+
     .el-menu-vertical {
-      min-height: 100%;
+      width: 100%;
+      background: transparent !important;
+      border-right: 0 !important;
     }
-.el-header {
-  height: 50px;
-  flex-shrink: 0;
-  background: #ffffff;
-  color: #333;
-  font-size: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 20px;
-  border-bottom: 1px solid #e4e7ed;
-}
-.el-header .title {
-  font-weight: bold;
-}
 
-/* 添加类时触发逆时针半圈动画 */
-.rotate-half-ccw {
-  animation: rotate-half-ccw 0.4s linear;
-}
+    .el-menu-vertical:not(.el-menu--collapse) {
+      width: 100%;
+    }
 
-@keyframes rotate-half-ccw {
-  0% {
-    transform: rotate(0deg);
-  }
-  100% {
-    transform: rotate(-180deg);
-  }
-}
+    .el-menu-vertical .el-menu-item,
+    .el-menu-vertical .el-sub-menu__title {
+      height: 44px;
+      margin: 3px 0;
+      color: #475467 !important;
+      line-height: 44px;
+      border-radius: 9px;
+    }
 
-.el-main {
-  overflow: hidden; /* 禁止滚动条 */
-  scrollbar-width: none; /* Firefox 隐藏滚动条 */
-}
-.el-main::-webkit-scrollbar {
-  display: none; /* Chrome/Safari 隐藏滚动条 */
-}
+    .el-menu-vertical .el-menu-item:hover,
+    .el-menu-vertical .el-sub-menu__title:hover {
+      color: var(--admin-primary-dark) !important;
+      background: #f5f8fd !important;
+    }
 
-/* 平滑菜单宽度变化 */
-.el-aside {
-  transition: width 0.3s ease;
-}
+    .el-menu-vertical .el-menu-item.is-active {
+      color: var(--admin-primary-dark) !important;
+      font-weight: 600;
+      background: var(--admin-primary-soft) !important;
+    }
 
-/* 平滑文字显示隐藏 */
-.el-menu-vertical {
-  transition: opacity 0.3s ease;
-}
+    .el-menu-vertical .el-menu-item.is-active::before {
+      position: absolute;
+      top: 11px;
+      left: 0;
+      width: 3px;
+      height: 22px;
+      background: var(--admin-primary);
+      border-radius: 0 4px 4px 0;
+      content: "";
+    }
 
-.el-menu-vertical .el-menu-item span,
-.el-menu-vertical .el-submenu__title span {
-  transition: opacity 0.2s ease;
-}
+    .el-menu-vertical .el-sub-menu .el-menu {
+      background: transparent !important;
+    }
+
+    .el-menu-vertical .el-menu-item .el-icon,
+    .el-menu-vertical .el-sub-menu__title .el-icon {
+      color: #7f8da3;
+      font-size: 18px;
+    }
+
+    .el-menu-vertical .el-menu-item.is-active .el-icon {
+      color: var(--admin-primary-dark);
+    }
+
+    .sidebar-footer {
+      display: flex;
+      flex: 0 0 58px;
+      align-items: center;
+      min-width: 0;
+      margin: 0 10px 10px;
+      padding: 10px 11px;
+      background: #f8fafc;
+      border: 1px solid #eef2f6;
+      border-radius: 11px;
+    }
+
+    .sidebar-status {
+      flex: 0 0 8px;
+      width: 8px;
+      height: 8px;
+      background: #12b76a;
+      border: 2px solid #d1fadf;
+      border-radius: 50%;
+      box-shadow: 0 0 0 2px #ecfdf3;
+    }
+
+    .sidebar-status-copy {
+      min-width: 0;
+      margin-left: 10px;
+    }
+
+    .sidebar-status-title {
+      display: block;
+      color: #344054;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .sidebar-status-desc {
+      display: block;
+      margin-top: 2px;
+      color: #98a2b3;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .sidebar-version {
+      margin-left: auto;
+      color: #98a2b3;
+      font-size: 10px;
+    }
+
+    .admin-shell.is-collapsed .sidebar-footer {
+      justify-content: center;
+      padding: 0;
+    }
+
+    .admin-workspace {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      min-width: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    .topbar {
+      position: relative;
+      z-index: 15;
+      display: flex;
+      flex: 0 0 var(--admin-topbar-height);
+      align-items: center;
+      justify-content: space-between;
+      height: var(--admin-topbar-height);
+      padding: 0 22px;
+      background: rgb(255 255 255 / 96%);
+      border-bottom: 1px solid var(--admin-border);
+      backdrop-filter: blur(12px);
+    }
+
+    .topbar-left,
+    .topbar-actions,
+    .user-trigger,
+    .avatar-wrap {
+      display: flex;
+      align-items: center;
+    }
+
+    .topbar-left {
+      min-width: 0;
+      gap: 14px;
+    }
+
+    .shell-icon-button {
+      display: inline-grid;
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      place-items: center;
+      color: #475467;
+      background: #ffffff;
+      border: 1px solid #e4eaf2;
+      border-radius: 9px;
+      cursor: pointer;
+      transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+    }
+
+    .shell-icon-button:hover {
+      color: var(--admin-primary-dark);
+      background: #f8fbff;
+      border-color: #bfdbfe;
+    }
+
+    .shell-icon-button .el-icon {
+      font-size: 18px;
+    }
+
+    .breadcrumb-wrap {
+      min-width: 0;
+    }
+
+    .breadcrumb-wrap .el-breadcrumb__inner {
+      color: #98a2b3;
+      font-size: 13px;
+      font-weight: 400;
+    }
+
+    .breadcrumb-wrap .el-breadcrumb__item:last-child .el-breadcrumb__inner {
+      color: #344054;
+      font-weight: 600;
+    }
+
+    .topbar-actions {
+      gap: 8px;
+    }
+
+    .top-action-button {
+      position: relative;
+    }
+
+    .top-action-button img {
+      width: 18px;
+      height: 18px;
+      object-fit: contain;
+    }
+
+    .message-badge .el-badge__content {
+      border: 2px solid #ffffff;
+      transform: translate(55%, -46%) scale(0.86);
+    }
+
+    .topbar-divider {
+      width: 1px;
+      height: 25px;
+      margin: 0 4px;
+      background: #e6ebf2;
+    }
+
+    .user-trigger {
+      min-width: 0;
+      padding: 4px 7px 4px 5px;
+      border-radius: 10px;
+      cursor: pointer;
+      outline: none;
+      transition: background 0.16s ease;
+    }
+
+    .user-trigger:hover {
+      background: #f5f8fd;
+    }
+
+    .avatar-wrap {
+      position: relative;
+      justify-content: center;
+    }
+
+    .vip-mark {
+      position: absolute;
+      right: -4px;
+      bottom: -2px;
+      width: 17px;
+      height: 10px;
+      object-fit: contain;
+    }
+
+    .user-copy {
+      min-width: 0;
+      margin: 0 9px;
+      line-height: 1.2;
+    }
+
+    .user-name {
+      display: block;
+      max-width: 112px;
+      overflow: hidden;
+      color: #344054;
+      font-size: 13px;
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .user-role {
+      display: block;
+      max-width: 112px;
+      margin-top: 3px;
+      overflow: hidden;
+      color: #98a2b3;
+      font-size: 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .workspace-tabs {
+      display: flex;
+      flex: 0 0 var(--admin-tabs-height);
+      align-items: flex-end;
+      min-width: 0;
+      height: var(--admin-tabs-height);
+      padding: 0 16px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      background: #ffffff;
+      border-bottom: 1px solid var(--admin-border);
+      scrollbar-width: none;
+    }
+
+    .workspace-tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .workspace-tab {
+      position: relative;
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      height: 35px;
+      margin-right: 5px;
+      padding: 0 12px;
+      color: #667085;
+      font-size: 12px;
+      white-space: nowrap;
+      background: transparent;
+      border: 0;
+      border-radius: 8px 8px 0 0;
+      cursor: pointer;
+    }
+
+    .workspace-tab:hover {
+      color: #344054;
+      background: #f7f9fc;
+    }
+
+    .workspace-tab.is-active {
+      color: var(--admin-primary-dark);
+      font-weight: 600;
+      background: #f1f6ff;
+    }
+
+    .workspace-tab.is-active::after {
+      position: absolute;
+      right: 9px;
+      bottom: 0;
+      left: 9px;
+      height: 2px;
+      background: var(--admin-primary);
+      border-radius: 2px 2px 0 0;
+      content: "";
+    }
+
+    .tab-dot {
+      width: 6px;
+      height: 6px;
+      margin-right: 7px;
+      background: #c5ced9;
+      border-radius: 50%;
+    }
+
+    .workspace-tab.is-active .tab-dot {
+      background: var(--admin-primary);
+      box-shadow: 0 0 0 3px rgb(59 130 246 / 12%);
+    }
+
+    .tab-close {
+      display: inline-grid;
+      width: 17px;
+      height: 17px;
+      margin-left: 7px;
+      place-items: center;
+      color: #98a2b3;
+      border-radius: 5px;
+    }
+
+    .tab-close:hover {
+      color: #344054;
+      background: #dce8f9;
+    }
+
+    .tab-close .el-icon {
+      font-size: 12px;
+    }
+
+    .content-stage {
+      position: relative;
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      padding: 12px 14px 10px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 100% 0, rgb(219 234 254 / 45%), transparent 27%),
+        var(--admin-canvas);
+    }
+
+    .iframe-card {
+      position: relative;
+      flex: 1;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: #ffffff;
+      border: 1px solid #e4eaf2;
+      border-radius: 12px;
+      box-shadow: 0 7px 22px rgb(16 24 40 / 4%);
+    }
+
+    .iframe-wrapper {
+      display: block;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      visibility: hidden;
+      opacity: 0;
+      pointer-events: none;
+      background: #ffffff;
+      border: 0;
+      scrollbar-width: none;
+      transition: opacity 0.12s ease;
+    }
+
+    /* 子页统一主题加载完成后再显示，避免刷新时闪过旧样式。 */
+    .iframe-wrapper.is-ready {
+      visibility: visible;
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .iframe-wrapper::-webkit-scrollbar {
+      display: none;
+    }
+
+    .workspace-footer {
+      display: flex;
+      flex: 0 0 27px;
+      align-items: center;
+      justify-content: center;
+      color: #98a2b3;
+      font-size: 10px;
+      background: var(--admin-canvas);
+    }
+
+    .mobile-nav-drawer .el-drawer__body {
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      overflow: hidden;
+      background: #ffffff;
+    }
+
+    .mobile-drawer-menu {
+      flex: 1;
+      min-height: 0;
+      padding: 12px 9px;
+      overflow-y: auto;
+    }
+
+    .mobile-drawer-footer {
+      margin: 10px 14px 14px;
+      color: #98a2b3;
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .rotate-half-ccw {
+      animation: rotate-half-ccw 0.4s linear;
+    }
+
+    @keyframes rotate-half-ccw {
+      from {
+        transform: rotate(0deg);
+      }
+      to {
+        transform: rotate(-180deg);
+      }
+    }
+
+    /* 对旧弹窗只做外观与响应式收口，字段和请求合同继续沿用原实现。 */
+    .el-dialog {
+      max-width: calc(100vw - 28px);
+      border-radius: 13px;
+    }
+
+    .el-dialog__header {
+      margin-right: 0;
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid #eef2f6;
+    }
+
+    .el-dialog__body {
+      padding: 20px;
+    }
+
+    .el-dialog__footer {
+      padding: 13px 20px 18px;
+      border-top: 1px solid #eef2f6;
+    }
+
+    @media (max-width: 900px) {
+      .admin-sidebar {
+        display: none;
+      }
+
+      .topbar {
+        padding: 0 14px;
+      }
+
+      .breadcrumb-wrap {
+        max-width: 42vw;
+      }
+
+      .topbar-divider,
+      .user-role,
+      .user-copy {
+        display: none;
+      }
+
+      .content-stage {
+        padding: 8px;
+      }
+
+      .iframe-card {
+        border-radius: 9px;
+      }
+    }
+
+    @media (max-width: 600px) {
+      :root {
+        --admin-topbar-height: 56px;
+        --admin-tabs-height: 40px;
+      }
+
+      .topbar {
+        padding: 0 10px;
+      }
+
+      .topbar-left {
+        gap: 8px;
+      }
+
+      .breadcrumb-wrap .el-breadcrumb__item:not(:last-child) {
+        display: none;
+      }
+
+      .topbar-actions {
+        gap: 4px;
+      }
+
+      .shell-icon-button {
+        width: 34px;
+        height: 34px;
+      }
+
+      .user-trigger {
+        padding: 2px;
+      }
+
+      .workspace-tabs {
+        padding: 0 8px;
+      }
+
+      .workspace-tab {
+        height: 33px;
+        padding: 0 10px;
+      }
+
+      .content-stage {
+        padding: 0;
+      }
+
+      .iframe-card {
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+
+      .workspace-footer {
+        display: none;
+      }
+
+      .el-dialog__body {
+        max-height: 70vh;
+        overflow-y: auto;
+      }
+    }
+
+    @media (max-width: 420px) {
+      .breadcrumb-wrap {
+        display: none;
+      }
+    }
+
+    @media (max-width: 350px) {
+      .topbar-actions .refresh-btn {
+        display: none;
+      }
+    }
   </style>
 </head>
 <body>
-  <div id="app">
-    <el-container class="main-layout">
-        <el-header height="50px">
-            <div style="display: flex; align-items: center; width: 100%;">
-              <div style="width: 200px; display: flex; align-items: center; " title="回到首页">
-                <!--<img :src="adminInfo.logo || '/images/logo.png'" alt="logo" style="height: 28px; margin-left: 10px; cursor: pointer;" @click="goHome"  />-->
-                <el-popover
-                  placement="bottom"
-                  trigger="manual"
-                  content="点击可展开/折叠菜单"
-                  v-model:visible="showMenuTip"
-                >
-                  <template #reference>
-                    <el-button
-                      size="small"
-                      icon="Menu"
-                      circle
-                      style="margin-left: 10px;"
-                      @click.stop="toggleCollapse"
-                    ></el-button>
-                  </template>
-                </el-popover>
-              </div>
-              
-              <div style="flex: 1;"></div>
-              <div style="display: flex; align-items: center; gap: 20px;">
-                  <el-tooltip content="下载客户端APP" placement="bottom">
-                    <el-button
-                      class="android-btn"
-                      circle
-                      size="small"
-                      @click="handleAndroidClick()"
-                    >
-                      <img src="/logo.png" alt="Android" style="height:16px;width:16px;" />
-                    </el-button>
-                  </el-tooltip>
-                    <el-tooltip content="刷新当前页面" placement="bottom">
-                      <el-button
-                        class="refresh-btn"
-                        icon="Refresh"
-                        circle
-                        size="small"
-                        @click="refreshIframe"
-                        @mouseenter="animateRefresh"
-                        @mouseleave="animateRefresh"
-                      ></el-button>
-                    </el-tooltip>
-                <el-dropdown @command="handleMessageMenu">
-                  <el-badge :value="unreadCount" class="item" v-if="unreadCount > 0">
-                    <el-button icon="ChatDotRound" circle size="small"></el-button>
-                  </el-badge>
-                  <el-button v-else icon="ChatDotRound" circle size="small"></el-button>
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item command="received">我收到的消息</el-dropdown-item>
-                      <el-dropdown-item command="sent">我发出的消息</el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
-                <el-dropdown @command="handleUserCommand">
-                  <span class="el-dropdown-link" style="cursor: pointer; display: flex; align-items: center; outline: none;">
-                    <span style="margin-right: 8px;">{{ adminInfo.name }}</span>
-                    
-                    <!-- 外层容器用于定位 -->
-                    <div style="position: relative; display: inline-block;">
-                      <el-avatar :src="adminInfo.profile" size="default"></el-avatar>
-                
-                      <!-- VIP 标志：条件渲染 -->
-                      <img
-                          v-if="adminInfo.vip_days > 0"
-                          src="/images/vip-icon.png"
-                          alt="VIP"
-                          style="
-                            position: absolute;
-                            bottom: 0px;
-                            left: 50%;
-                            transform: translateX(-50%);
-                            height: 13px;
-                            width: auto;
-                          "
-                        />
+  <div id="app" v-cloak>
+    <div class="admin-shell" :class="{ 'is-collapsed': isCollapse }">
+      <aside class="admin-sidebar" aria-label="主导航">
+        <button class="brand-button" type="button" title="回到工作台" @click="goHome">
+          <span class="brand-logo">
+            <img src="/logo.png" alt="" />
+          </span>
+          <span class="brand-copy">
+            <span class="brand-title">菜鸟云注入</span>
+            <span class="brand-subtitle">云端注入控制台</span>
+          </span>
+        </button>
 
-                    </div>
-                    
-                  </span>
-                
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item command="profile">个人中心</el-dropdown-item>
-                      <el-dropdown-item command="lanzou">蓝奏云盘</el-dropdown-item>
-                      <el-dropdown-item command="s3">S3 桶配置</el-dropdown-item>
-                      <el-dropdown-item command="password">修改密码</el-dropdown-item>
-                      <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
-
-              </div>
-              
-              
-              
-            </div>
-          </el-header>
-          
-          
-
-      <el-container>
-        <el-aside :width="isCollapse ? '64px' : '200px'">
+        <div class="sidebar-scroll">
           <el-menu
             :default-active="activeMenu"
             class="el-menu-vertical"
-            background-color="#ffffff"
-            text-color="#333"
-            active-text-color="#409EFF"
+            background-color="transparent"
+            text-color="#475467"
+            active-text-color="#2563eb"
             @select="handleMenuSelect"
             :collapse="isCollapse"
+            :collapse-transition="false"
             :default-openeds="defaultOpeneds"
           >
-            <template v-for="(item, index) in menuList" :key="item.id">
+            <template v-for="item in menuList" :key="item.id">
               <menu-item :item="item"></menu-item>
             </template>
           </el-menu>
-        </el-aside>
+        </div>
 
-        <el-container>
-          <el-main style="padding: 0;">
-            <iframe class="iframe-wrapper" :src="iframeSrc"></iframe>
-          </el-main>
-          <el-footer height="40px" class="footer">
-            © 2025 {{ siteTitle }} · 版权所有
-          </el-footer>
-        </el-container>
-      </el-container>
-    </el-container>
-    
+        <div class="sidebar-footer" title="管理后台">
+          <span class="sidebar-status"></span>
+          <span class="sidebar-status-copy">
+            <span class="sidebar-status-title">管理控制台</span>
+            <span class="sidebar-status-desc">{{ iframeLoading ? '正在加载业务页面' : '业务页面已加载' }}</span>
+          </span>
+          <span class="sidebar-version">v{{ appVersion }}</span>
+        </div>
+      </aside>
+
+      <section class="admin-workspace">
+        <header class="topbar">
+          <div class="topbar-left">
+            <el-popover
+              placement="bottom-start"
+              trigger="manual"
+              content="点击可展开或折叠菜单"
+              v-model:visible="showMenuTip"
+            >
+              <template #reference>
+                <button
+                  class="shell-icon-button"
+                  type="button"
+                  :aria-label="isMobileViewport ? '打开导航菜单' : (isCollapse ? '展开导航菜单' : '折叠导航菜单')"
+                  @click.stop="toggleCollapse"
+                >
+                  <el-icon>
+                    <component :is="isMobileViewport || isCollapse ? 'Expand' : 'Fold'"></component>
+                  </el-icon>
+                </button>
+              </template>
+            </el-popover>
+
+            <div class="breadcrumb-wrap" aria-label="面包屑导航">
+              <el-breadcrumb separator="/">
+                <el-breadcrumb-item @click="goHome">控制台</el-breadcrumb-item>
+                <el-breadcrumb-item
+                  v-for="item in breadcrumbItems"
+                  :key="item"
+                >{{ item }}</el-breadcrumb-item>
+              </el-breadcrumb>
+            </div>
+          </div>
+
+          <div class="topbar-actions">
+            <el-tooltip content="下载客户端 APP" placement="bottom">
+              <button
+                class="shell-icon-button top-action-button android-action"
+                type="button"
+                aria-label="下载客户端 APP"
+                @click="handleAndroidClick"
+              >
+                <img src="/logo.png" alt="" />
+              </button>
+            </el-tooltip>
+
+            <el-tooltip content="刷新当前页面" placement="bottom">
+              <button
+                class="shell-icon-button top-action-button refresh-btn"
+                type="button"
+                aria-label="刷新当前页面"
+                @click="refreshIframe"
+                @mouseenter="animateRefresh"
+                @mouseleave="animateRefresh"
+              >
+                <el-icon><refresh></refresh></el-icon>
+              </button>
+            </el-tooltip>
+
+            <el-dropdown @command="handleMessageMenu">
+              <el-badge
+                :value="unreadCount"
+                :hidden="unreadCount <= 0"
+                :max="99"
+                class="message-badge"
+              >
+                <button
+                  class="shell-icon-button top-action-button"
+                  type="button"
+                  aria-label="站内消息"
+                >
+                  <el-icon><chat-dot-round></chat-dot-round></el-icon>
+                </button>
+              </el-badge>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="received">我收到的消息</el-dropdown-item>
+                  <el-dropdown-item command="sent">我发出的消息</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+
+            <span class="topbar-divider"></span>
+
+            <el-dropdown @command="handleUserCommand">
+              <span class="user-trigger">
+                <span class="avatar-wrap">
+                  <el-avatar :src="adminInfo.profile" :size="34">
+                    {{ (adminInfo.name || '管').slice(0, 1) }}
+                  </el-avatar>
+                  <img
+                    v-if="adminInfo.vip_days > 0"
+                    class="vip-mark"
+                    src="/images/vip-icon.png"
+                    alt="VIP"
+                  />
+                </span>
+                <span class="user-copy">
+                  <span class="user-name">{{ adminInfo.name || '管理员' }}</span>
+                  <span class="user-role">{{ adminInfo.role || '控制台用户' }}</span>
+                </span>
+                <el-icon><arrow-down></arrow-down></el-icon>
+              </span>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="profile">个人中心</el-dropdown-item>
+                  <el-dropdown-item command="lanzou">蓝奏云盘</el-dropdown-item>
+                  <el-dropdown-item command="s3">S3 桶配置</el-dropdown-item>
+                  <el-dropdown-item command="password">修改密码</el-dropdown-item>
+                  <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
+        </header>
+
+        <nav class="workspace-tabs" aria-label="已打开页面">
+          <button
+            v-for="tab in openedTabs"
+            :key="tab.path"
+            class="workspace-tab"
+            :class="{ 'is-active': activeMenu === tab.path }"
+            type="button"
+            @click="switchTab(tab.path)"
+          >
+            <span class="tab-dot"></span>
+            <span>{{ tab.title }}</span>
+            <span
+              v-if="tab.closable"
+              class="tab-close"
+              role="button"
+              tabindex="0"
+              :aria-label="'关闭' + tab.title"
+              @click.stop="closeTab(tab.path)"
+              @keydown.enter.stop="closeTab(tab.path)"
+            >
+              <el-icon><close></close></el-icon>
+            </span>
+          </button>
+        </nav>
+
+        <main class="content-stage">
+          <div class="iframe-card" v-loading="iframeLoading" element-loading-text="页面加载中">
+            <iframe
+              :key="iframeLoadToken"
+              ref="contentIframe"
+              class="iframe-wrapper"
+              :class="{ 'is-ready': !iframeLoading }"
+              :data-load-token="iframeLoadToken"
+              :src="iframeSrc"
+              :title="pageTitle"
+              @load="handleIframeLoaded"
+            ></iframe>
+          </div>
+        </main>
+
+        <footer class="workspace-footer">
+          © {{ currentYear }} {{ siteTitle }} · v{{ appVersion }}
+        </footer>
+      </section>
+    </div>
+
+    <el-drawer
+      v-model="mobileMenuVisible"
+      class="mobile-nav-drawer"
+      direction="ltr"
+      size="280px"
+      :with-header="false"
+      append-to-body
+    >
+      <button class="brand-button" type="button" @click="goHome">
+        <span class="brand-logo"><img src="/logo.png" alt="" /></span>
+        <span class="brand-copy">
+          <span class="brand-title">菜鸟云注入</span>
+          <span class="brand-subtitle">云端注入控制台</span>
+        </span>
+      </button>
+      <div class="mobile-drawer-menu">
+        <el-menu
+          :default-active="activeMenu"
+          class="el-menu-vertical"
+          background-color="transparent"
+          text-color="#475467"
+          active-text-color="#2563eb"
+          @select="handleMenuSelect"
+          :default-openeds="defaultOpeneds"
+        >
+          <template v-for="item in menuList" :key="'mobile-' + item.id">
+            <menu-item :item="item"></menu-item>
+          </template>
+        </el-menu>
+      </div>
+      <div class="mobile-drawer-footer">v{{ appVersion }} · {{ siteTitle }}</div>
+    </el-drawer>
+
     <el-dialog v-model="passwordDialogVisible" title="修改密码" width="400px">
       <el-form :model="passwordForm" label-width="100px">
         <el-form-item label="原密码">
@@ -316,7 +1051,7 @@ html, body {
           📦 <b>专属大存储空间</b>
         </li>
         <li style="margin: 6px 0;">
-          📁 <b>上传的安装包永久保存(会员过期删除)</b>（不含注入任务安装包以及无法注入的应用）
+        📁 <b>上传的安装包永久保存(会员过期删除)</b>（不含注入任务安装包以及未成功注入的应用）
         </li>
         <li style="margin: 6px 0;">
           🔓 <b>全站功能无限制使用</b>
@@ -454,7 +1189,7 @@ html, body {
               <el-avatar :src="messageMode === 'received' ? msg.send_avatar : msg.receive_avatar" size="small"></el-avatar>
             </el-badge>
             <el-avatar v-else :src="messageMode === 'received' ? msg.send_avatar : msg.receive_avatar" size="small"></el-avatar>
-        
+
             <div style="margin-left: 10px; flex: 1;">
               <div style="font-weight: bold;">
                 {{ messageMode === 'received' ? '来自:'+msg.send_nickname : '发给:'+msg.receive_nickname }}
@@ -531,23 +1266,23 @@ html, body {
   </div>
   <script>
     const tokenKey = config.tokenKey;
-  
+
     // 获取 cookie 中的 token
     const cookieToken = document.cookie
       .split('; ')
       .find(row => row.startsWith(tokenKey + '='))
       ?.split('=')[1] || '';
-  
+
     // 获取 localStorage 中的 token
     const localToken = localStorage.getItem(tokenKey) || '';
-  
+
     // 判断是否跳转登录页
     const shouldRedirect = (
       !cookieToken ||                  // cookie 不存在或为空
       !localToken ||                  // localStorage 不存在或为空
       (cookieToken && localToken && cookieToken !== localToken) // 值不一致
     );
-  
+
     if (!cookieToken || !localToken) {
       // 缺任何一个直接跳登录
       const loginUrl = config.pagePath + config.loginPage + config.pageSuffix;
@@ -557,20 +1292,39 @@ html, body {
       localStorage.setItem(tokenKey, cookieToken);
     }
   </script>
-  
-  
+
+
   <script>
-    const { createApp, ref, reactive, onMounted, computed } = Vue;
-    
+    const { createApp, ref, reactive, onMounted, onBeforeUnmount, computed } = Vue;
+
     const app = createApp({
       setup() {
         const siteTitle = config.siteTitle;
         const pagePrefix = config.pagePath;
         const pageSuffix = config.pageSuffix;
-        
+        const appVersion = config.version || '2.0.0';
+        const currentYear = new Date().getFullYear();
+
         const menuList = ref([]);
-        const activeMenu = ref('');
-        const iframeSrc = ref(pagePrefix + config.defaultPage + pageSuffix);
+        // 首屏直接恢复上次菜单，避免先请求默认页、挂载后再请求目标页造成双重闪切。
+        const savedInitialMenu = localStorage.getItem('active_menu') || '';
+        const initialMenu = savedInitialMenu || config.defaultPage;
+        const activeMenu = ref(initialMenu);
+        const iframeSrc = ref(pagePrefix + initialMenu + pageSuffix);
+        const contentIframe = ref(null);
+        const iframeLoading = ref(true);
+        // 每轮导航使用独立 iframe 节点，从 DOM 层隔离已取消页面的迟到 load 事件。
+        const iframeLoadToken = ref(0);
+        let activeIframeThemeCleanup = null;
+        const isMobileViewport = ref(window.innerWidth <= 900);
+        const mobileMenuVisible = ref(false);
+        const openedTabs = ref([
+          {
+            path: config.defaultPage,
+            title: '工作台',
+            closable: false
+          }
+        ]);
         const adminInfo = ref({
             logo: '',
             name: '',
@@ -809,9 +1563,261 @@ async function submitNickname() {
 }
 
 
-const isCollapse = ref(false);
+const isCollapse = ref(localStorage.getItem('admin_sidebar_collapsed_v2') === '1');
+
+/**
+ * 根据当前视口决定折叠按钮的行为：桌面端折叠侧栏，移动端打开抽屉导航。
+ */
 function toggleCollapse() {
+  if (isMobileViewport.value) {
+    mobileMenuVisible.value = true;
+    return;
+  }
+
   isCollapse.value = !isCollapse.value;
+  localStorage.setItem('admin_sidebar_collapsed_v2', isCollapse.value ? '1' : '0');
+}
+
+/**
+ * 同步响应式视口状态。移动端关闭后回到桌面时，同时收起残留的抽屉层。
+ */
+function updateViewport() {
+  isMobileViewport.value = window.innerWidth <= 900;
+  if (!isMobileViewport.value) {
+    mobileMenuVisible.value = false;
+  }
+}
+
+/**
+ * 在动态菜单树中查找目标页面的完整名称路径，用于标签页和面包屑显示。
+ */
+function findMenuTrail(menu, path, parents = []) {
+  for (const item of menu) {
+    const trail = [...parents, item.name].filter(Boolean);
+    if (item.path === path) {
+      return trail;
+    }
+    if (item.menu && item.menu.length) {
+      const childTrail = findMenuTrail(item.menu, path, trail);
+      if (childTrail.length) {
+        return childTrail;
+      }
+    }
+  }
+  return [];
+}
+
+const breadcrumbItems = computed(() => {
+  const trail = findMenuTrail(menuList.value, activeMenu.value);
+  if (trail.length) {
+    return trail;
+  }
+  return activeMenu.value === config.defaultPage ? ['工作台'] : ['当前页面'];
+});
+
+const pageTitle = computed(() => {
+  const trail = breadcrumbItems.value;
+  return trail[trail.length - 1] || siteTitle;
+});
+
+function getMenuTitle(path) {
+  const trail = findMenuTrail(menuList.value, path);
+  if (trail.length) {
+    return trail[trail.length - 1];
+  }
+  return path === config.defaultPage ? '工作台' : '业务页面';
+}
+
+/**
+ * 将当前页面加入多标签栏。相同路径只保留一个标签，避免重复打开。
+ */
+function ensureTab(path) {
+  const existing = openedTabs.value.find(tab => tab.path === path);
+  if (existing) {
+    existing.title = getMenuTitle(path);
+    return;
+  }
+  openedTabs.value.push({
+    path,
+    title: getMenuTitle(path),
+    closable: path !== config.defaultPage
+  });
+}
+
+function syncTabTitles() {
+  openedTabs.value.forEach(tab => {
+    tab.title = getMenuTitle(tab.path);
+  });
+}
+
+function switchTab(path) {
+  handleMenuSelect(path);
+}
+
+/**
+ * 关闭标签后，若关闭的是当前页，则切换到左侧最近的可用标签。
+ */
+function closeTab(path) {
+  const index = openedTabs.value.findIndex(tab => tab.path === path);
+  if (index < 0 || openedTabs.value[index].closable === false) {
+    return;
+  }
+
+  const wasActive = activeMenu.value === path;
+  openedTabs.value.splice(index, 1);
+  if (wasActive) {
+    const nextTab = openedTabs.value[Math.max(0, index - 1)] || openedTabs.value[0];
+    if (nextTab) {
+      handleMenuSelect(nextTab.path);
+    }
+  }
+}
+
+/**
+ * iframe 每次完成导航后注入统一主题。注入过程严格幂等，并隔离跨域或 DOM 异常。
+ */
+function handleIframeLoaded(event) {
+  const frameElement = event && event.currentTarget ? event.currentTarget : contentIframe.value;
+  const loadTokenValue = frameElement && frameElement.dataset ? frameElement.dataset.loadToken : '';
+  const loadToken = Number(loadTokenValue);
+
+  // 旧 iframe 节点即使在被移除后才触发 load，也不得参与当前页面的显示决策。
+  if (loadTokenValue === '' || !Number.isSafeInteger(loadToken) || loadToken !== iframeLoadToken.value) {
+    return;
+  }
+
+  if (activeIframeThemeCleanup) {
+    activeIframeThemeCleanup();
+    activeIframeThemeCleanup = null;
+  }
+
+  let revealRequested = false;
+  let fallbackTimer = null;
+  let themeLink = null;
+  let handleThemeLoaded = null;
+  let handleThemeFailed = null;
+
+  /** 清理当前主题等待器，避免旧文档的事件与计时器残留。 */
+  const cleanupThemeWait = () => {
+    if (fallbackTimer !== null) {
+      window.clearTimeout(fallbackTimer);
+      fallbackTimer = null;
+    }
+    if (themeLink && handleThemeLoaded && handleThemeFailed) {
+      themeLink.removeEventListener('load', handleThemeLoaded);
+      themeLink.removeEventListener('error', handleThemeFailed);
+    }
+    if (activeIframeThemeCleanup === cleanupThemeWait) {
+      activeIframeThemeCleanup = null;
+    }
+  };
+  activeIframeThemeCleanup = cleanupThemeWait;
+
+  /**
+   * 在主题样式已解析后等待两帧再显示 iframe，
+   * 确保浏览器先完成样式计算和绘制。令牌可防止上一个页面的延迟回调覆盖新导航状态。
+   */
+  const revealFrame = () => {
+    if (revealRequested || loadToken !== iframeLoadToken.value) {
+      return;
+    }
+    revealRequested = true;
+    cleanupThemeWait();
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (loadToken === iframeLoadToken.value) {
+          iframeLoading.value = false;
+        }
+      });
+    });
+  };
+
+  /** 主题加载失败或超时时移除当前 link，保证兜底页面不再被迟到样式二次切换。 */
+  const revealWithoutTheme = () => {
+    try {
+      if (themeLink && themeLink.parentNode) {
+        themeLink.parentNode.removeChild(themeLink);
+      }
+    } finally {
+      revealFrame();
+    }
+  };
+
+  /** load 事件是动态 link 完成的权威信号，同时留下可复用的已就绪标记。 */
+  handleThemeLoaded = () => {
+    if (themeLink) {
+      themeLink.dataset.adminThemeLoaded = 'true';
+    }
+    revealFrame();
+  };
+  handleThemeFailed = revealWithoutTheme;
+
+  /**
+   * link.sheet 在某些 Chromium 状态下会在请求完成前存在，
+   * 因此必须同时确认已解析规则，或使用本页记录的 load 标记。
+   */
+  const isThemeLinkLoaded = (link) => {
+    if (!link) {
+      return false;
+    }
+    if (link.dataset.adminThemeLoaded === 'true') {
+      return true;
+    }
+    try {
+      return Boolean(link.sheet && link.sheet.cssRules && link.sheet.cssRules.length > 0);
+    } catch (error) {
+      return false;
+    }
+  };
+
+  try {
+    const frameDocument = frameElement && frameElement.contentDocument;
+    if (!frameDocument || !frameDocument.documentElement) {
+      revealFrame();
+      return;
+    }
+
+    // 从当前文档 load 开始计时；主题失败时也会在有界时间内恢复页面操作。
+    fallbackTimer = window.setTimeout(revealWithoutTheme, 3000);
+
+    frameDocument.documentElement.classList.add('admin-v2-frame');
+    frameDocument.documentElement.dataset.theme = 'light';
+    if (frameDocument.body) {
+      frameDocument.body.classList.add('admin-v2-frame');
+      frameDocument.body.dataset.theme = 'light';
+    }
+
+    themeLink = frameDocument.querySelector('link[data-admin-theme-v2="true"]');
+    if (!themeLink) {
+      themeLink = frameDocument.createElement('link');
+      themeLink.rel = 'stylesheet';
+      themeLink.href = '/element/css/admin-theme-v2.css';
+      themeLink.dataset.adminThemeV2 = 'true';
+      themeLink.addEventListener('load', handleThemeLoaded, { once: true });
+      themeLink.addEventListener('error', handleThemeFailed, { once: true });
+      (frameDocument.head || frameDocument.documentElement).appendChild(themeLink);
+    } else if (isThemeLinkLoaded(themeLink)) {
+      themeLink.dataset.adminThemeLoaded = 'true';
+      revealFrame();
+    } else {
+      themeLink.addEventListener('load', handleThemeLoaded, { once: true });
+      themeLink.addEventListener('error', handleThemeFailed, { once: true });
+    }
+  } catch (error) {
+    // 同源业务页会正常注入；若未来出现跨域页面，仅跳过主题注入并保留页面访问。
+    console.debug('子页面主题注入已跳过：', error);
+    revealWithoutTheme();
+  }
+}
+
+/** 标记新的 iframe 导航周期，使旧页面的异步样式回调自动失效。 */
+function beginIframeLoad() {
+  if (activeIframeThemeCleanup) {
+    activeIframeThemeCleanup();
+    activeIframeThemeCleanup = null;
+  }
+  iframeLoading.value = true;
+  iframeLoadToken.value += 1;
 }
 
 
@@ -889,7 +1895,7 @@ async function openS3Dialog() {
 
 async function submitS3() {
   if (!s3Form.endpoint || !s3Form.accessKey || !s3Form.secretKey || !s3Form.bucket) {
-    ElementPlus.ElMessage.warning('端点、Access Key、Secret Key、桶名不能为空');
+    ElementPlus.ElMessage.warning('请填写端点、Access Key、Secret Key 和桶名');
     return;
   }
   s3Saving.value = true;
@@ -948,24 +1954,24 @@ async function clearS3Config() {
           passwordForm.confirm_password = '';
           passwordDialogVisible.value = true;
         }
-        
+
         async function submitPassword() {
           if (!passwordForm.old_password || !passwordForm.new_password || !passwordForm.confirm_password) {
             ElementPlus.ElMessage.warning('请填写完整');
             return;
           }
-        
+
           if (passwordForm.new_password !== passwordForm.confirm_password) {
             ElementPlus.ElMessage.error('两次新密码不一致');
             return;
           }
-        
+
           const res = await fetch('/api/?module=user&method=changePassword', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(passwordForm)
           });
-        
+
           const json = await res.json();
           if (json.code === 200) {
             ElementPlus.ElMessage.success(json.message || '密码修改成功');
@@ -983,23 +1989,41 @@ async function clearS3Config() {
                 return;
             }
 
+            if (!path) {
+              return;
+            }
+
             activeMenu.value = path;
-            iframeSrc.value = pagePrefix + path + pageSuffix;
+            const nextIframeSrc = pagePrefix + path + pageSuffix;
+            // 重复点击当前菜单时不会产生新 load 事件，因此保持当前就绪状态。
+            if (iframeSrc.value !== nextIframeSrc) {
+              beginIframeLoad();
+              iframeSrc.value = nextIframeSrc;
+            }
+            ensureTab(path);
             localStorage.setItem('active_menu', path);
+            mobileMenuVisible.value = false;
             if (isCollapse.value) {
                 defaultOpeneds.value = [];
               }
-            
+
         }
         function refreshIframe() {
           // 强制刷新 iframe，并保持 URL 结构干净，避免多次刷新把查询串拼乱。
+          beginIframeLoad();
           const url = new URL(iframeSrc.value || (pagePrefix + config.defaultPage + pageSuffix), window.location.origin);
           url.searchParams.set('_t', Date.now());
           iframeSrc.value = url.pathname.replace(/^\//, '') + url.search + url.hash;
         }
         function goHome() {
-            activeMenu.value = '';
-            iframeSrc.value = pagePrefix + config.defaultPage + pageSuffix;
+            activeMenu.value = config.defaultPage;
+            const homeIframeSrc = pagePrefix + config.defaultPage + pageSuffix;
+            if (iframeSrc.value !== homeIframeSrc) {
+              beginIframeLoad();
+              iframeSrc.value = homeIframeSrc;
+            }
+            ensureTab(config.defaultPage);
+            mobileMenuVisible.value = false;
             localStorage.setItem('active_menu', config.defaultPage);
         }
         function handleUserCommand(command) {
@@ -1016,7 +2040,7 @@ async function clearS3Config() {
                   document.cookie = config.tokenKey + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
                   localStorage.removeItem(config.tokenKey);
                   localStorage.removeItem('adminInfo');
-    
+
                   // 跳转到登录页（自动拼接配置路径）
                   window.location.href = '/' + config.pagePath + config.loginPage + config.pageSuffix;
               }
@@ -1068,8 +2092,8 @@ async function clearS3Config() {
                 console.error('管理员信息加载失败：', e);
             }
         }
-        
-        
+
+
 
         async function handleAndroidClick() {
           try {
@@ -1087,37 +2111,37 @@ async function clearS3Config() {
             // 用户取消
             return;
           }
-        
+
           // 显示加载中提示
           const loading = ElementPlus.ElLoading.service({
             lock: true,
             text: '正在获取最新版本，请稍候…',
             background: 'rgba(0, 0, 0, 0.4)'
           });
-        
+
           try {
             const res = await fetch('/api/index.php?module=site&method=getAndroidUrl', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: "{}"
             });
-        
+
             const json = await res.json();
             loading.close();
-        
+
             if (json.code !== 200) {
               ElementPlus.ElMessage.error(json.message || '获取下载地址失败');
               return;
             }
-        
+
             if (!json.data || !json.data.download) {
               ElementPlus.ElMessage.error('后端未返回有效下载地址');
               return;
             }
-        
+
             // 打开下载
             window.open(json.data.download, '_blank');
-        
+
           } catch (err) {
             loading.close();
             ElementPlus.ElMessage.error('网络错误，请稍后再试');
@@ -1130,25 +2154,14 @@ async function clearS3Config() {
             const json = await res.json();
             if (json.code === 200) {
               menuList.value = filterVisibleMenu(json.data);
+              syncTabTitles();
               // 可选：加载第一个页面
               const firstPath = findFirstPath(menuList.value);
               /* if (firstPath) {
                 handleMenuSelect(firstPath);
               } */
-        
-              // 初始判断：高度大于宽度的1.5倍才折叠
-              if (window.innerHeight / window.innerWidth >= 1.5) {
-                isCollapse.value = true;
-              }
-        
-              // 响应式监听窗口大小变化
-              window.addEventListener('resize', () => {
-                if (window.innerHeight / window.innerWidth >= 1.5) {
-                  isCollapse.value = true;
-                } else {
-                  isCollapse.value = false;
-                }
-              });
+
+              updateViewport();
             }
           } catch (e) {
             console.error('菜单加载失败：', e);
@@ -1167,13 +2180,17 @@ async function clearS3Config() {
           return '';
         }
 
-        
+
+        let unreadTimer = null;
+
         onMounted(() => {
+          updateViewport();
+          window.addEventListener('resize', updateViewport);
           loadMenu();
           loadAdminInfo();
           loadUnreadCount();
-          setInterval(loadUnreadCount, 180000);
-        
+          unreadTimer = window.setInterval(loadUnreadCount, 180000);
+
           // 弹出公告提示（只显示一次）
           /*const noticeKey = 'admin_notice_shown';
           if (!localStorage.getItem(noticeKey)) {
@@ -1187,26 +2204,13 @@ async function clearS3Config() {
             );
             localStorage.setItem(noticeKey, '1');
           }*/
-          
-          /*ElementPlus.ElMessageBox.alert(
-          'B站来的看这里：本平台<br><span style="color:red;font-weight:bold;">不能破解卡密验证</span>，<br><span style="color:red;font-weight:bold;">不能破解卡密验证</span>，<br><span style="color:red;font-weight:bold;">不能破解卡密验证</span>，<br>去除弹窗也只是隐藏弹窗，并不能去掉卡密验证。本平台是一个注入平台，不是破解平台。如有问题,请加QQ群反馈：793107266',
-          '系统公告',
-          {
-            confirmButtonText: '我知道了',
-            type: 'info',
-            dangerouslyUseHTMLString: true // 开启 HTML 渲染
-          }
-        );*/
 
-        
-          const savedMenu = localStorage.getItem('active_menu');
-          if (savedMenu) {
-            activeMenu.value = savedMenu;
-            iframeSrc.value = pagePrefix + savedMenu + pageSuffix;
+          if (savedInitialMenu) {
+            ensureTab(savedInitialMenu);
           }
           const ua = navigator.userAgent.toLowerCase();
             const isMobile = /iphone|ipad|android|mobile|phone/.test(ua);
-            
+
             if (isMobile) {
               ElementPlus.ElMessageBox.alert(
                 '推荐下载APP客户端操作更方便,点击上方小图标可下载',
@@ -1221,21 +2225,45 @@ async function clearS3Config() {
             setTimeout(() => {
               showMenuTip.value = false;
             }, 3000);
-          
-          
-          
-          
-          
-          
-          
-          
+
+
+
+
+
+
+
+
+        });
+
+        onBeforeUnmount(() => {
+          window.removeEventListener('resize', updateViewport);
+          if (activeIframeThemeCleanup) {
+            activeIframeThemeCleanup();
+            activeIframeThemeCleanup = null;
+          }
+          if (unreadTimer) {
+            window.clearInterval(unreadTimer);
+          }
         });
 
         return {
           siteTitle,
+          appVersion,
+          currentYear,
           menuList,
           activeMenu,
           iframeSrc,
+          contentIframe,
+          iframeLoading,
+          iframeLoadToken,
+          handleIframeLoaded,
+          pageTitle,
+          breadcrumbItems,
+          openedTabs,
+          switchTab,
+          closeTab,
+          isMobileViewport,
+          mobileMenuVisible,
           handleMenuSelect,
           adminInfo,
           handleUserCommand,

@@ -709,7 +709,7 @@
             </div>
             <div>
               <div class="brand-name">{{ siteTitle }}</div>
-              <div class="brand-version">ADMIN CONSOLE · V2</div>
+              <div class="brand-version">ADMIN CONSOLE</div>
             </div>
           </div>
 
@@ -912,8 +912,8 @@
                 const token = json.data.admin_token;
                 localStorage.setItem(config.tokenKey, token);
                 localStorage.setItem('adminInfo', JSON.stringify(json.data));
-                // 登录后优先进入视觉统一的 V2 外壳；经典 console.html 仍保留为回退入口。
-                window.location.href = "/console-v2.html";
+                // 登录后进入唯一正式后台入口；历史 /console-v2.html 仅保留兼容跳转。
+                window.location.href = "/console.html";
               } else {
                 ElementPlus.ElMessage.error(json.message || '登录失败');
                 refreshCaptcha();
