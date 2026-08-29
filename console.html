@@ -231,6 +231,25 @@
       background: transparent !important;
     }
 
+    /*
+     * Element Plus 的子菜单使用 max-height/overflow 高度过渡。
+     * 建立独立的块格式化上下文，避免首尾菜单项的外边距在过渡结束时
+     * 穿透子菜单容器并发生折叠，从而消除展开/收起时的瞬时位置跳动。
+     */
+    .el-menu-vertical .el-sub-menu > .el-menu {
+      display: flow-root;
+    }
+
+    /* 保留菜单项之间的 3px 间距，但把首尾外边距收回容器内部，
+     * 让过渡前后子菜单高度和最终视觉间距保持一致。 */
+    .el-menu-vertical .el-sub-menu > .el-menu > :first-child {
+      margin-top: 0;
+    }
+
+    .el-menu-vertical .el-sub-menu > .el-menu > :last-child {
+      margin-bottom: 0;
+    }
+
     .el-menu-vertical .el-menu-item .el-icon,
     .el-menu-vertical .el-sub-menu__title .el-icon {
       color: #7f8da3;
