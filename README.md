@@ -28,6 +28,12 @@ railway up \
   --detach
 ```
 
+GitHub SSH 可用时优先推送 `main`，让已连接的 trigger 发布；本机 SSH 不可用时，
+上面的固定目标 `railway up` 是显式的手动发布路径。一次提交只走一条路径，发布后
+保存 deployment ID 并执行线上验收。Railway CLI 当前提示 `railway.json` 将在
+2026-12-01 后停止作为配置入口，迁移到 `.railway/railway.ts` 前先单独执行
+`railway config plan`，不要和业务变更一起切换。
+
 发布后在主源码仓执行：
 
 ```bash
