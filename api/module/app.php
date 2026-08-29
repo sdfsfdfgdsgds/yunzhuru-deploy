@@ -1593,8 +1593,8 @@ function appDeleteProgressFile(string $token): string
 
 function appDeleteDebugKey(): string
 {
-    // 临时生产排障钥匙，排障完成后删除。
-    return 'deldbg_20260621_7f4b8c2a9d1e';
+    // 调试密钥只从临时环境变量读取，默认关闭。
+    return trim((string)(getenv('YUNZHURU_DELETE_DEBUG_KEY') ?: ''));
 }
 
 function appDeleteDebugLogFile(): string
@@ -1829,7 +1829,9 @@ function getDeleteProgress(PDO $pdo, array $input)
 function getDeleteDebugLog(PDO $pdo, array $input)
 {
     $key = trim((string)($input['debug_key'] ?? ''));
-    if (!hash_equals(appDeleteDebugKey(), $key)) {
+    // 未配置调试密钥时保持关闭；避免 hash_equals('', '') 将空参数误判为通过。
+    $expectedKey = appDeleteDebugKey();
+    if ($expectedKey === '' || $key === '' || !hash_equals($expectedKey, $key)) {
         throw new Exception('无权限读取删除调试日志');
     }
 

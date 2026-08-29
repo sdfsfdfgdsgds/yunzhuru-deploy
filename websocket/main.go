@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -30,8 +31,12 @@ import (
 // ======================== 配置与全局变量 ========================
 
 // 数据库配置结构体
+//
+// Port 使用字符串保存，便于直接承接 Railway 等平台注入的 DB_PORT，
+// 同时兼容旧版 config.php 中的数字端口。
 type DBConfig struct {
 	Host     string
+	Port     string
 	DBName   string
 	Username string
 	Password string
@@ -114,48 +119,269 @@ func clearOnlineTable() {
 
 // ======================== 配置与数据库 ========================
 
-// 从 PHP 配置文件读取 MySQL 配置
-func getConfigFromFile() (*DBConfig, error) {
-	exePath, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-	configFilePath := exePath + "/../config/config.php"
+const (
+	defaultDBHost    = "127.0.0.1"
+	defaultDBPort    = "3306"
+	defaultDBName    = "yunzhuru"
+	defaultDBUser    = "root"
+	defaultDBCharset = "utf8mb4"
+)
 
+var dbEnvironmentKeys = []string{
+	"DB_HOST",
+	"DB_PORT",
+	"DB_NAME",
+	"DB_USER",
+	"DB_PASS",
+	"DB_CHARSET",
+}
+
+// getConfigFromEnv 读取数据库环境变量，并返回实际出现过的键。
+//
+// 借助 presence 映射区分“变量未设置”和“变量已设置为空字符串”，
+// 这样 DB_PASS 为空时仍会按环境变量优先处理。
+func getConfigFromEnv() (*DBConfig, map[string]bool) {
+	// 与 PHP 配置模板保持一致：平台未单独注入 DB_NAME/DB_USER 时使用公开的非敏感默认值。
+	cfg := &DBConfig{Host: defaultDBHost, Port: defaultDBPort, DBName: defaultDBName, Username: defaultDBUser, Charset: defaultDBCharset}
+	presence := make(map[string]bool, len(dbEnvironmentKeys))
+	read := func(name string, target *string) {
+		if value, ok := os.LookupEnv(name); ok {
+			*target = value
+			presence[name] = true
+		}
+	}
+
+	read("DB_HOST", &cfg.Host)
+	read("DB_PORT", &cfg.Port)
+	read("DB_NAME", &cfg.DBName)
+	read("DB_USER", &cfg.Username)
+	read("DB_PASS", &cfg.Password)
+	read("DB_CHARSET", &cfg.Charset)
+	return cfg, presence
+}
+
+// readLiteralConfigValue 只读取旧版 PHP 配置中的直接字面量，
+// 仅识别字面量，不解析 getenv(...) 表达式。
+func readLiteralConfigValue(content, key string) (string, bool) {
+	re := regexp.MustCompile(fmt.Sprintf(`(?m)['"]%s['"]\s*=>\s*['"]([^'"]*)['"]`, regexp.QuoteMeta(key)))
+	match := re.FindStringSubmatch(content)
+	if len(match) < 2 {
+		return "", false
+	}
+	return match[1], true
+}
+
+// readLiteralConfigPort 读取旧版 config.php 中的数字端口，兼容
+// 'port' => 3306 和 'port' => '3306' 两种写法。
+func readLiteralConfigPort(content string) (string, bool) {
+	re := regexp.MustCompile(`(?m)['"]port['"]\s*=>\s*['"]?([0-9]+)['"]?`)
+	match := re.FindStringSubmatch(content)
+	if len(match) < 2 {
+		return "", false
+	}
+	return match[1], true
+}
+
+// readLiteralConfigFile 读取旧版字面量 config.php，作为环境变量缺失时的回退。
+func readLiteralConfigFile(configFilePath string) (*DBConfig, error) {
 	fileContent, err := ioutil.ReadFile(configFilePath)
 	if err != nil {
 		return nil, err
 	}
 
-	cfg := &DBConfig{}
-	re := regexp.MustCompile(`'host'\s*=>\s*'([^']+)'`)
-	if m := re.FindStringSubmatch(string(fileContent)); len(m) > 1 {
-		cfg.Host = m[1]
+	content := string(fileContent)
+	cfg := &DBConfig{
+		Host:     defaultDBHost,
+		Port:     defaultDBPort,
+		DBName:   defaultDBName,
+		Username: defaultDBUser,
+		Charset:  defaultDBCharset,
 	}
-	re = regexp.MustCompile(`'dbname'\s*=>\s*'([^']+)'`)
-	if m := re.FindStringSubmatch(string(fileContent)); len(m) > 1 {
-		cfg.DBName = m[1]
+	if value, ok := readLiteralConfigValue(content, "host"); ok {
+		cfg.Host = value
 	}
-	re = regexp.MustCompile(`'username'\s*=>\s*'([^']+)'`)
-	if m := re.FindStringSubmatch(string(fileContent)); len(m) > 1 {
-		cfg.Username = m[1]
+	if value, ok := readLiteralConfigPort(content); ok {
+		cfg.Port = value
 	}
-	re = regexp.MustCompile(`'password'\s*=>\s*'([^']+)'`)
-	if m := re.FindStringSubmatch(string(fileContent)); len(m) > 1 {
-		cfg.Password = m[1]
+	if value, ok := readLiteralConfigValue(content, "dbname"); ok {
+		cfg.DBName = value
 	}
-	re = regexp.MustCompile(`'charset'\s*=>\s*'([^']+)'`)
-	if m := re.FindStringSubmatch(string(fileContent)); len(m) > 1 {
-		cfg.Charset = m[1]
+	if value, ok := readLiteralConfigValue(content, "username"); ok {
+		cfg.Username = value
 	}
-
+	if value, ok := readLiteralConfigValue(content, "password"); ok {
+		cfg.Password = value
+	}
+	if value, ok := readLiteralConfigValue(content, "charset"); ok {
+		cfg.Charset = value
+	}
 	return cfg, nil
 }
 
-// 建立 MySQL 连接
+// normalizeDBConfig 补齐可选默认值，并检查建立数据库连接所需的字段。
+func normalizeDBConfig(cfg *DBConfig) error {
+	if cfg == nil {
+		return fmt.Errorf("数据库配置为空")
+	}
+
+	cfg.Host = strings.TrimSpace(cfg.Host)
+	cfg.Port = strings.TrimSpace(cfg.Port)
+	cfg.DBName = strings.TrimSpace(cfg.DBName)
+	cfg.Username = strings.TrimSpace(cfg.Username)
+	cfg.Charset = strings.TrimSpace(cfg.Charset)
+	if cfg.Port == "" {
+		cfg.Port = defaultDBPort
+	}
+	if cfg.Charset == "" {
+		cfg.Charset = defaultDBCharset
+	}
+
+	missing := make([]string, 0, 4)
+	if cfg.Host == "" {
+		missing = append(missing, "DB_HOST")
+	}
+	if cfg.DBName == "" {
+		missing = append(missing, "DB_NAME")
+	}
+	if cfg.Username == "" {
+		missing = append(missing, "DB_USER")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("数据库配置缺少: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// mergeDBConfig 将环境变量值覆盖到回退配置，确保环境变量逐项优先。
+func mergeDBConfig(dst, envCfg *DBConfig, presence map[string]bool) {
+	if presence["DB_HOST"] {
+		dst.Host = envCfg.Host
+	}
+	if presence["DB_PORT"] {
+		dst.Port = envCfg.Port
+	}
+	if presence["DB_NAME"] {
+		dst.DBName = envCfg.DBName
+	}
+	if presence["DB_USER"] {
+		dst.Username = envCfg.Username
+	}
+	if presence["DB_PASS"] {
+		dst.Password = envCfg.Password
+	}
+	if presence["DB_CHARSET"] {
+		dst.Charset = envCfg.Charset
+	}
+}
+
+// configFileCandidates 返回旧版配置文件的候选路径。
+//
+// Railway 以项目根目录作为工作目录时，配置位于 ./config/config.php；
+// 旧版 WebSocket 进程从 websocket 子目录启动时，配置位于 ../config/config.php。
+// 再补充可执行文件相邻目录，避免 supervisor、手工启动和测试启动方式不同
+// 导致同一份程序寻找不同的配置文件。
+func configFileCandidates() []string {
+	seen := make(map[string]struct{})
+	candidates := make([]string, 0, 6)
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			absolute = filepath.Clean(path)
+		}
+		absolute = filepath.Clean(absolute)
+		if _, ok := seen[absolute]; ok {
+			return
+		}
+		seen[absolute] = struct{}{}
+		candidates = append(candidates, absolute)
+	}
+
+	if workingDir, err := os.Getwd(); err == nil {
+		add(filepath.Join(workingDir, "config", "config.php"))
+		add(filepath.Join(workingDir, "..", "config", "config.php"))
+	}
+	if executable, err := os.Executable(); err == nil {
+		if resolved, resolveErr := filepath.EvalSymlinks(executable); resolveErr == nil {
+			executable = resolved
+		}
+		executableDir := filepath.Dir(executable)
+		add(filepath.Join(executableDir, "config", "config.php"))
+		add(filepath.Join(executableDir, "..", "config", "config.php"))
+		add(filepath.Join(executableDir, "..", "..", "config", "config.php"))
+	}
+	return candidates
+}
+
+// findConfigFile 查找一份可读取的旧版字面量配置文件，并保留候选路径用于诊断。
+func findConfigFile() (string, error) {
+	candidates := configFileCandidates()
+	for _, candidate := range candidates {
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("没有可用的旧版配置文件路径")
+	}
+	return "", fmt.Errorf("未找到旧版配置文件，已检查: %s", strings.Join(candidates, ", "))
+}
+
+// getConfigFromFile 保留旧入口名称：优先读取 DB_* 环境变量，
+// 只有环境变量缺项时才读取旧版字面量 config.php 进行逐项回退。
+func getConfigFromFile() (*DBConfig, error) {
+	envCfg, presence := getConfigFromEnv()
+
+	// 全部环境变量已提供时跳过配置文件，部署环境无需携带旧文件。
+	cfg := &DBConfig{
+		Host:     defaultDBHost,
+		Port:     defaultDBPort,
+		DBName:   defaultDBName,
+		Username: defaultDBUser,
+		Charset:  defaultDBCharset,
+	}
+	var fallbackErr error
+	if len(presence) != len(dbEnvironmentKeys) {
+		configFilePath, err := findConfigFile()
+		if err != nil {
+			fallbackErr = err
+		} else if fileCfg, readErr := readLiteralConfigFile(configFilePath); readErr != nil {
+			fallbackErr = readErr
+		} else {
+			cfg = fileCfg
+		}
+	}
+	mergeDBConfig(cfg, envCfg, presence)
+
+	if err := normalizeDBConfig(cfg); err != nil {
+		if fallbackErr != nil {
+			return nil, fmt.Errorf("环境变量配置不完整，旧配置文件回退失败: %v; %w", fallbackErr, err)
+		}
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// buildMySQLDSN 构建 MySQL 驱动连接字符串，端口来自 DBConfig.Port。
+func buildMySQLDSN(cfg *DBConfig) string {
+	port := strings.TrimSpace(cfg.Port)
+	if port == "" {
+		port = defaultDBPort
+	}
+	charset := strings.TrimSpace(cfg.Charset)
+	if charset == "" {
+		charset = defaultDBCharset
+	}
+	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=%s&parseTime=true",
+		cfg.Username, cfg.Password, cfg.Host, port, cfg.DBName, charset)
+}
+
+// connectToDatabase 建立 MySQL 连接，使用配置中的 DB_PORT 而非固定端口。
 func connectToDatabase(cfg *DBConfig) (*sql.DB, error) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:3306)/%s?charset=%s&parseTime=true",
-		cfg.Username, cfg.Password, cfg.Host, cfg.DBName, cfg.Charset)
+	dsn := buildMySQLDSN(cfg)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, err
@@ -284,7 +510,7 @@ func deleteOnlineRecord(appid, deviceID string) {
 func aesEncrypt(plaintext string) (string, error) {
 	block, err := aes.NewCipher([]byte(aesKey))
 	if err != nil {
-	 return "", err
+		return "", err
 	}
 
 	padding := aes.BlockSize - len(plaintext)%aes.BlockSize
@@ -375,21 +601,20 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 		isAdmin = false
 	}
 	// ================= 应用重定向检查 =================2025 12 23 新增
-    if !isAdmin {
-        var redirectApkID string
-        err := db.QueryRow(
-            "SELECT apk_id2 FROM cainiao_redirect WHERE apk_id1 = ? LIMIT 1",
-            appid,
-        ).Scan(&redirectApkID)
-    
-        if err == nil && redirectApkID != "" {
-            log.Printf("检测到应用重定向: %s -> %s\n", appid, redirectApkID)
-            appid = redirectApkID
-        } else if err != nil && err != sql.ErrNoRows {
-            log.Println("查询应用重定向失败:", err)
-        }
-    }
+	if !isAdmin {
+		var redirectApkID string
+		err := db.QueryRow(
+			"SELECT apk_id2 FROM cainiao_redirect WHERE apk_id1 = ? LIMIT 1",
+			appid,
+		).Scan(&redirectApkID)
 
+		if err == nil && redirectApkID != "" {
+			log.Printf("检测到应用重定向: %s -> %s\n", appid, redirectApkID)
+			appid = redirectApkID
+		} else if err != nil && err != sql.ErrNoRows {
+			log.Println("查询应用重定向失败:", err)
+		}
+	}
 
 	// ================= 升级 WebSocket =================
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -534,7 +759,6 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-
 // 向指定设备或所有设备推送消息
 func pushToClients(appid string, devices []interface{}, message string) int {
 	clientsMu.Lock()
@@ -595,7 +819,6 @@ func pushToClients(appid string, devices []interface{}, message string) int {
 	return pushCount
 }
 
-
 // 发送错误响应
 func sendErrorResponse(conn *websocket.Conn, appid string, errMsg string) {
 	resp := map[string]interface{}{
@@ -650,7 +873,7 @@ func main() {
 	// 读取配置并连接数据库
 	cfg, err := getConfigFromFile()
 	if err != nil {
-		log.Fatal("读取配置文件失败:", err)
+		log.Fatal("读取数据库配置失败:", err)
 	}
 	db, err = connectToDatabase(cfg)
 	if err != nil {

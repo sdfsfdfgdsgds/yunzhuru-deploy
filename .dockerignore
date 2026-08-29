@@ -1,0 +1,16 @@
+# Git 与本机元数据
+.git
+.git/**
+.DS_Store*
+.claude/
+.codex/
+
+# 环境变量、日志、PID 和可再生临时目录
+.env
+.env.*
+*.log
+*.pid
+*.report.html
+service/.inject_service.pid
+temp/**
+uploads/**

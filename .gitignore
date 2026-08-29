@@ -1,0 +1,16 @@
+# macOS 与本机编辑器痕迹
+.DS_Store*
+.claude/
+.codex/
+
+# 环境变量文件与运行日志
+.env
+.env.*
+!.env.example
+*.log
+*.pid
+service/.inject_service.pid
+
+# 容器运行时临时目录（Railway 卷提供持久数据）
+temp/
+uploads/

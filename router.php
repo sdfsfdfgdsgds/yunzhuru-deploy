@@ -70,10 +70,18 @@ function servePrecompressedStatic(string $path): bool
     return true;
 }
 
+// 轻量健康探针：只返回进程层状态，不读取数据库、Redis 或文件内容。
+if ($path === '/healthz' || $path === '/readyz') {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    echo json_encode(['status' => 'ok'], JSON_UNESCAPED_UNICODE);
+    return true;
+}
+
 // 诊断端点：确认 router.php 在运行
 if ($path === '/router-status') {
     header('Content-Type: application/json');
-    echo json_encode(['router' => true, 'version' => 'v28', 'time' => date('Y-m-d H:i:s')]);
+    echo json_encode(['router' => true, 'version' => 'v29', 'time' => date('Y-m-d H:i:s')]);
     return true;
 }
 
@@ -139,14 +147,14 @@ if (in_array($path, $allowedCardEndpoints, true)) {
     return false;
 }
 
-// 根目录合法 PHP 文件
+// 根目录合法 PHP 文件。诊断、迁移和日志端点默认不公开，避免把运行状态或维护能力暴露到公网。
 $allowedPhp = [
-    '/shell.php', '/captcha.php', '/diag.php', '/diag_worker.php',
+    '/shell.php', '/captcha.php',
     '/down.php', '/friend_links.php', '/help.php', '/icon.php',
-    '/image.php', '/logs.php', '/migrate.php', '/phpqrcode.php',
-    '/release.php', '/violation.php', '/nettest.php', '/delete_debug.php'
+    '/image.php', '/phpqrcode.php', '/release.php', '/violation.php'
 ];
-if (in_array($path, $allowedPhp)) {
+// 维护脚本不进入生产发布仓；如需排障，使用受控 SSH 与源码目录。
+if (in_array($path, $allowedPhp, true)) {
     return false;
 }
 
