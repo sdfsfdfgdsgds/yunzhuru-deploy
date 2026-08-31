@@ -584,6 +584,8 @@
     }
 
     .iframe-wrapper {
+      position: absolute;
+      inset: 0;
       display: block;
       width: 100%;
       height: 100%;
@@ -598,7 +600,7 @@
     }
 
     /* 子页统一主题加载完成后再显示，避免刷新时闪过旧样式。 */
-    .iframe-wrapper.is-ready {
+    .iframe-wrapper.is-active.is-ready {
       visibility: visible;
       opacity: 1;
       pointer-events: auto;
@@ -960,16 +962,22 @@
 
         <main class="content-stage">
           <div class="iframe-card" v-loading="iframeLoading" element-loading-text="页面加载中">
-            <iframe
-              :key="iframeLoadToken"
-              ref="contentIframe"
-              class="iframe-wrapper"
-              :class="{ 'is-ready': !iframeLoading }"
-              :data-load-token="iframeLoadToken"
-              :src="iframeSrc"
-              :title="pageTitle"
-              @load="handleIframeLoaded"
-            ></iframe>
+            <template v-for="tab in openedTabs" :key="tab.path">
+              <iframe
+                v-if="tab.mounted"
+                :key="`${tab.path}:${tab.loadToken}`"
+                class="iframe-wrapper"
+                :class="{
+                  'is-active': activeMenu === tab.path,
+                  'is-ready': !tab.loading
+                }"
+                :data-tab-path="tab.path"
+                :data-load-token="tab.loadToken"
+                :src="tab.src"
+                :title="tab.title"
+                @load="handleIframeLoaded($event, tab)"
+              ></iframe>
+            </template>
           </div>
         </main>
 
@@ -1329,21 +1337,37 @@
         const savedInitialMenu = localStorage.getItem('active_menu') || '';
         const initialMenu = savedInitialMenu || config.defaultPage;
         const activeMenu = ref(initialMenu);
-        const iframeSrc = ref(pagePrefix + initialMenu + pageSuffix);
-        const contentIframe = ref(null);
-        const iframeLoading = ref(true);
-        // 每轮导航使用独立 iframe 节点，从 DOM 层隔离已取消页面的迟到 load 事件。
-        const iframeLoadToken = ref(0);
-        let activeIframeThemeCleanup = null;
+        // 主题等待器按书签隔离，一个页面的迟到事件不会干扰另一个页面。
+        const iframeThemeCleanups = new Map();
         const isMobileViewport = ref(window.innerWidth <= 900);
         const mobileMenuVisible = ref(false);
+
+        /**
+         * 为书签创建独立的 iframe 状态。未激活的固定首页延迟挂载，
+         * 避免恢复其它书签时在后台多发一次首页请求。
+         */
+        function createWorkspaceTab(path, title, closable, mounted = false) {
+          return {
+            path,
+            title,
+            closable,
+            mounted,
+            src: pagePrefix + path + pageSuffix,
+            loading: true,
+            loadToken: 0
+          };
+        }
+
         const openedTabs = ref([
-          {
-            path: config.defaultPage,
-            title: '工作台',
-            closable: false
-          }
+          createWorkspaceTab(config.defaultPage, '工作台', false, initialMenu === config.defaultPage)
         ]);
+        if (savedInitialMenu && savedInitialMenu !== config.defaultPage) {
+          openedTabs.value.push(createWorkspaceTab(savedInitialMenu, '业务页面', true, true));
+        }
+        const activeTab = computed(() => (
+          openedTabs.value.find(tab => tab.path === activeMenu.value) || null
+        ));
+        const iframeLoading = computed(() => activeTab.value ? activeTab.value.loading : false);
         const adminInfo = ref({
             logo: '',
             name: '',
@@ -1654,13 +1678,15 @@ function ensureTab(path) {
   const existing = openedTabs.value.find(tab => tab.path === path);
   if (existing) {
     existing.title = getMenuTitle(path);
-    return;
+    return existing;
   }
-  openedTabs.value.push({
+  const tab = createWorkspaceTab(
     path,
-    title: getMenuTitle(path),
-    closable: path !== config.defaultPage
-  });
+    getMenuTitle(path),
+    path !== config.defaultPage
+  );
+  openedTabs.value.push(tab);
+  return tab;
 }
 
 function syncTabTitles() {
@@ -1673,6 +1699,42 @@ function switchTab(path) {
   handleMenuSelect(path);
 }
 
+/** 首次进入书签时才挂载 iframe，后续切换始终复用原 DOM 和页内状态。 */
+function mountTabFrame(tab) {
+  if (!tab || tab.mounted) {
+    return;
+  }
+  tab.loading = true;
+  tab.mounted = true;
+}
+
+/**
+ * 书签恢复可见后通知子页重新计算布局。该事件不会导航或重载页面，
+ * 只用于修正长时隐藏后的表格、图表和响应式宽度。
+ */
+function notifyTabFrameVisible(path) {
+  window.requestAnimationFrame(() => {
+    const frame = Array.from(document.querySelectorAll('iframe.iframe-wrapper'))
+      .find(item => item.dataset && item.dataset.tabPath === path);
+    try {
+      if (frame && frame.contentWindow) {
+        frame.contentWindow.dispatchEvent(new frame.contentWindow.Event('resize'));
+      }
+    } catch (error) {
+      console.debug('子页布局刷新通知已跳过：', error);
+    }
+  });
+}
+
+/** 清理指定书签的主题等待事件与计时器。 */
+function clearIframeThemeWait(path) {
+  const cleanup = iframeThemeCleanups.get(path);
+  if (cleanup) {
+    cleanup();
+    iframeThemeCleanups.delete(path);
+  }
+}
+
 /**
  * 关闭标签后，若关闭的是当前页，则切换到左侧最近的可用标签。
  */
@@ -1683,6 +1745,7 @@ function closeTab(path) {
   }
 
   const wasActive = activeMenu.value === path;
+  clearIframeThemeWait(path);
   openedTabs.value.splice(index, 1);
   if (wasActive) {
     const nextTab = openedTabs.value[Math.max(0, index - 1)] || openedTabs.value[0];
@@ -1693,22 +1756,28 @@ function closeTab(path) {
 }
 
 /**
- * iframe 每次完成导航后注入统一主题。注入过程严格幂等，并隔离跨域或 DOM 异常。
+ * iframe 每次完成导航后注入统一主题。注入过程严格幂等，并按书签隔离异步事件。
  */
-function handleIframeLoaded(event) {
-  const frameElement = event && event.currentTarget ? event.currentTarget : contentIframe.value;
+function handleIframeLoaded(event, tab) {
+  const frameElement = event && event.currentTarget ? event.currentTarget : null;
+  const tabPath = frameElement && frameElement.dataset ? frameElement.dataset.tabPath : '';
   const loadTokenValue = frameElement && frameElement.dataset ? frameElement.dataset.loadToken : '';
   const loadToken = Number(loadTokenValue);
+  const currentTab = openedTabs.value.find(item => item.path === tabPath);
 
-  // 旧 iframe 节点即使在被移除后才触发 load，也不得参与当前页面的显示决策。
-  if (loadTokenValue === '' || !Number.isSafeInteger(loadToken) || loadToken !== iframeLoadToken.value) {
+  // 已关闭书签或刷新前的旧节点不得改写当前 iframe 状态。
+  if (
+    !tab ||
+    !tabPath ||
+    currentTab !== tab ||
+    loadTokenValue === '' ||
+    !Number.isSafeInteger(loadToken) ||
+    loadToken !== tab.loadToken
+  ) {
     return;
   }
 
-  if (activeIframeThemeCleanup) {
-    activeIframeThemeCleanup();
-    activeIframeThemeCleanup = null;
-  }
+  clearIframeThemeWait(tab.path);
 
   let revealRequested = false;
   let fallbackTimer = null;
@@ -1726,26 +1795,28 @@ function handleIframeLoaded(event) {
       themeLink.removeEventListener('load', handleThemeLoaded);
       themeLink.removeEventListener('error', handleThemeFailed);
     }
-    if (activeIframeThemeCleanup === cleanupThemeWait) {
-      activeIframeThemeCleanup = null;
+    if (iframeThemeCleanups.get(tab.path) === cleanupThemeWait) {
+      iframeThemeCleanups.delete(tab.path);
     }
   };
-  activeIframeThemeCleanup = cleanupThemeWait;
+  iframeThemeCleanups.set(tab.path, cleanupThemeWait);
 
   /**
    * 在主题样式已解析后等待两帧再显示 iframe，
    * 确保浏览器先完成样式计算和绘制。令牌可防止上一个页面的延迟回调覆盖新导航状态。
    */
   const revealFrame = () => {
-    if (revealRequested || loadToken !== iframeLoadToken.value) {
+    const liveTab = openedTabs.value.find(item => item.path === tab.path);
+    if (revealRequested || liveTab !== tab || loadToken !== tab.loadToken) {
       return;
     }
     revealRequested = true;
     cleanupThemeWait();
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
-        if (loadToken === iframeLoadToken.value) {
-          iframeLoading.value = false;
+        const latestTab = openedTabs.value.find(item => item.path === tab.path);
+        if (latestTab === tab && loadToken === tab.loadToken) {
+          tab.loading = false;
         }
       });
     });
@@ -1829,14 +1900,14 @@ function handleIframeLoaded(event) {
   }
 }
 
-/** 标记新的 iframe 导航周期，使旧页面的异步样式回调自动失效。 */
-function beginIframeLoad() {
-  if (activeIframeThemeCleanup) {
-    activeIframeThemeCleanup();
-    activeIframeThemeCleanup = null;
+/** 仅标记指定书签的新导航周期，其它书签的 iframe 保持不变。 */
+function beginIframeLoad(tab) {
+  if (!tab) {
+    return;
   }
-  iframeLoading.value = true;
-  iframeLoadToken.value += 1;
+  clearIframeThemeWait(tab.path);
+  tab.loading = true;
+  tab.loadToken += 1;
 }
 
 
@@ -2012,14 +2083,11 @@ async function clearS3Config() {
               return;
             }
 
+            const tab = ensureTab(path);
+            mountTabFrame(tab);
             activeMenu.value = path;
-            const nextIframeSrc = pagePrefix + path + pageSuffix;
-            // 重复点击当前菜单时不会产生新 load 事件，因此保持当前就绪状态。
-            if (iframeSrc.value !== nextIframeSrc) {
-              beginIframeLoad();
-              iframeSrc.value = nextIframeSrc;
-            }
-            ensureTab(path);
+            // 切换已打开书签只改变可见性，不改 src，不重建 iframe。
+            notifyTabFrameVisible(path);
             localStorage.setItem('active_menu', path);
             mobileMenuVisible.value = false;
             if (isCollapse.value) {
@@ -2028,22 +2096,19 @@ async function clearS3Config() {
 
         }
         function refreshIframe() {
-          // 强制刷新 iframe，并保持 URL 结构干净，避免多次刷新把查询串拼乱。
-          beginIframeLoad();
-          const url = new URL(iframeSrc.value || (pagePrefix + config.defaultPage + pageSuffix), window.location.origin);
+          const tab = activeTab.value;
+          if (!tab) {
+            return;
+          }
+          mountTabFrame(tab);
+          // 显式刷新只重建当前书签，其它书签的 DOM 与页内状态保持不变。
+          beginIframeLoad(tab);
+          const url = new URL(tab.src || (pagePrefix + tab.path + pageSuffix), window.location.origin);
           url.searchParams.set('_t', Date.now());
-          iframeSrc.value = url.pathname.replace(/^\//, '') + url.search + url.hash;
+          tab.src = url.pathname.replace(/^\//, '') + url.search + url.hash;
         }
         function goHome() {
-            activeMenu.value = config.defaultPage;
-            const homeIframeSrc = pagePrefix + config.defaultPage + pageSuffix;
-            if (iframeSrc.value !== homeIframeSrc) {
-              beginIframeLoad();
-              iframeSrc.value = homeIframeSrc;
-            }
-            ensureTab(config.defaultPage);
-            mobileMenuVisible.value = false;
-            localStorage.setItem('active_menu', config.defaultPage);
+            handleMenuSelect(config.defaultPage);
         }
         function handleUserCommand(command) {
               if (command === 'profile') {
@@ -2224,9 +2289,6 @@ async function clearS3Config() {
             localStorage.setItem(noticeKey, '1');
           }*/
 
-          if (savedInitialMenu) {
-            ensureTab(savedInitialMenu);
-          }
           const ua = navigator.userAgent.toLowerCase();
             const isMobile = /iphone|ipad|android|mobile|phone/.test(ua);
 
@@ -2256,10 +2318,7 @@ async function clearS3Config() {
 
         onBeforeUnmount(() => {
           window.removeEventListener('resize', updateViewport);
-          if (activeIframeThemeCleanup) {
-            activeIframeThemeCleanup();
-            activeIframeThemeCleanup = null;
-          }
+          [...iframeThemeCleanups.keys()].forEach(clearIframeThemeWait);
           if (unreadTimer) {
             window.clearInterval(unreadTimer);
           }
@@ -2271,10 +2330,7 @@ async function clearS3Config() {
           currentYear,
           menuList,
           activeMenu,
-          iframeSrc,
-          contentIframe,
           iframeLoading,
-          iframeLoadToken,
           handleIframeLoaded,
           pageTitle,
           breadcrumbItems,
