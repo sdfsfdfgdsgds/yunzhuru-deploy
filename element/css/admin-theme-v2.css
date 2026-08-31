@@ -1051,7 +1051,8 @@ html.admin-v2-frame[data-theme="dark"] .el-loading-mask {
   }
 
   html.admin-v2-frame .el-dialog {
-    width: calc(100vw - 24px) !important;
+    /* 平板与桌面窄窗口只限制溢出，保留各业务弹窗自己的宽度。 */
+    max-width: calc(100vw - 24px);
     margin-top: 6vh !important;
   }
 
@@ -1067,7 +1068,7 @@ html.admin-v2-frame[data-theme="dark"] .el-loading-mask {
   }
 
   html.admin-v2-frame .el-message-box {
-    width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
   }
 
   html.admin-v2-frame .el-table th.el-table__cell,

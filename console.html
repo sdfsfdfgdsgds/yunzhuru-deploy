@@ -596,7 +596,6 @@
       background: #ffffff;
       border: 0;
       scrollbar-width: none;
-      transition: opacity 0.12s ease;
     }
 
     /* 子页统一主题加载完成后再显示，避免刷新时闪过旧样式。 */
@@ -1708,24 +1707,6 @@ function mountTabFrame(tab) {
   tab.mounted = true;
 }
 
-/**
- * 书签恢复可见后通知子页重新计算布局。该事件不会导航或重载页面，
- * 只用于修正长时隐藏后的表格、图表和响应式宽度。
- */
-function notifyTabFrameVisible(path) {
-  window.requestAnimationFrame(() => {
-    const frame = Array.from(document.querySelectorAll('iframe.iframe-wrapper'))
-      .find(item => item.dataset && item.dataset.tabPath === path);
-    try {
-      if (frame && frame.contentWindow) {
-        frame.contentWindow.dispatchEvent(new frame.contentWindow.Event('resize'));
-      }
-    } catch (error) {
-      console.debug('子页布局刷新通知已跳过：', error);
-    }
-  });
-}
-
 /** 清理指定书签的主题等待事件与计时器。 */
 function clearIframeThemeWait(path) {
   const cleanup = iframeThemeCleanups.get(path);
@@ -2086,8 +2067,7 @@ async function clearS3Config() {
             const tab = ensureTab(path);
             mountTabFrame(tab);
             activeMenu.value = path;
-            // 切换已打开书签只改变可见性，不改 src，不重建 iframe。
-            notifyTabFrameVisible(path);
+            // 切换已打开书签只改变可见性，不改 src、不重建 iframe，也不向子页派发刷新类事件。
             localStorage.setItem('active_menu', path);
             mobileMenuVisible.value = false;
             if (isCollapse.value) {
