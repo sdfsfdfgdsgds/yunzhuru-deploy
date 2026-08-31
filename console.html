@@ -559,6 +559,33 @@
       font-size: 12px;
     }
 
+    .close-other-tabs {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: center;
+      height: 28px;
+      margin-left: 7px;
+      padding: 0 6px;
+      color: #86909c;
+      font-size: 12px;
+      white-space: nowrap;
+      background: transparent;
+      border: 0;
+      border-radius: 8px 8px 0 0;
+      cursor: pointer;
+    }
+
+    .close-other-tabs:hover {
+      color: var(--admin-primary-dark);
+      background: #f1f6ff;
+    }
+
+    .close-other-tabs:focus-visible {
+      outline: 2px solid rgb(59 130 246 / 35%);
+      outline-offset: -2px;
+    }
+
     .content-stage {
       position: relative;
       display: flex;
@@ -746,6 +773,10 @@
       .workspace-tab {
         height: 33px;
         padding: 0 10px;
+      }
+
+      .close-other-tabs {
+        margin-left: 4px;
       }
 
       .content-stage {
@@ -968,6 +999,14 @@
               <el-icon><close></close></el-icon>
             </span>
           </button>
+          <button
+            v-if="openedTabs.length > 1"
+            class="close-other-tabs"
+            type="button"
+            aria-label="关闭其他页面标签"
+            title="保留工作台和当前页面"
+            @click="closeOtherTabs"
+          >关闭其他</button>
         </nav>
 
         <main class="content-stage">
@@ -1748,6 +1787,18 @@ function closeTab(path) {
 }
 
 /**
+ * 关闭当前书签之外的全部可关闭书签。固定工作台始终保留，当前书签对象也原样复用，
+ * 因此批量关闭不会重建当前 iframe，也不会清空尚未提交的表单和页内状态。
+ */
+function closeOtherTabs() {
+  const tabsToClose = openedTabs.value.filter(
+    tab => tab.closable && tab.path !== activeMenu.value
+  );
+  // 先固定待关闭快照，再复用单标签关闭合同，避免遍历期间数组变化造成漏项。
+  tabsToClose.forEach(tab => closeTab(tab.path));
+}
+
+/**
  * iframe 每次完成导航后注入统一主题。注入过程严格幂等，并按书签隔离异步事件。
  */
 function handleIframeLoaded(event, tab) {
@@ -2328,6 +2379,7 @@ async function clearS3Config() {
           openedTabs,
           switchTab,
           closeTab,
+          closeOtherTabs,
           isMobileViewport,
           mobileMenuVisible,
           handleMenuSelect,
