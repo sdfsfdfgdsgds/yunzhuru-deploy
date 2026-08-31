@@ -2399,6 +2399,8 @@ function selectFile() {
       confirmButtonText: '我已知晓，继续上传',
       cancelButtonText: '取消',
       type: 'warning',
+      // 保留 iframe 页面原有滚动条与内容宽度，避免自动列重排让长应用名称换行数发生变化。
+      lockScroll: false,
       dangerouslyUseHTMLString: true
     }
   ).then(() => {
