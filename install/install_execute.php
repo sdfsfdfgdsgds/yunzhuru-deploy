@@ -1736,11 +1736,6 @@ function installDatabase(PDO $pdo)
             '应用配置' => [
                 '_icon' => 'Setting',
                 '全局开关' => 'config/base',
-                '资源库' => [
-                    '_icon' => 'FolderOpened',
-                    '图片资源' => 'config/resource/image',
-                    '链接/事件参数' => 'config/resource/click_param'
-                ],
                 '弹窗配置' => [
                     '图片弹窗' => 'config/popup/image',
                     '文字弹窗' => 'config/popup/message',
@@ -1763,6 +1758,12 @@ function installDatabase(PDO $pdo)
                 '远程dex' => 'config/dex',
                 '卡密列表' => 'config/kami',
                 '包名检测' => 'config/silent'
+            ],
+            // 资源库是跨配置类型复用的全局素材入口，保持一级层级，避免埋在应用配置三级菜单中。
+            '资源库' => [
+                '_icon' => 'FolderOpened',
+                '图片资源' => 'config/resource/image',
+                '链接/事件参数' => 'config/resource/click_param'
             ],
             '应用统计' => [
                 '_icon' => 'DataAnalysis',

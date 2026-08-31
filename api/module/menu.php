@@ -28,7 +28,10 @@ function getMenu(PDO $pdo, array $input)
 }
 
 /**
- * 补齐资源库菜单，避免老库升级后左侧菜单缺少全局资源入口。
+ * 补齐资源库菜单并统一为一级入口。
+ *
+ * 老库中的资源库原本挂在“应用配置”下面。迁移时保留原菜单 ID，
+ * 只调整 parent_id，这样两个资源子页面、已保存的页面路径和权限合同都不变。
  */
 function ensureResourceLibraryMenus(PDO $pdo): void
 {
@@ -46,9 +49,71 @@ function ensureResourceLibraryMenus(PDO $pdo): void
     }
 
     $appConfigId = ensureMenuNode($pdo, $roleId, null, '应用配置', 'Setting', '');
-    $resourceId = ensureMenuNode($pdo, $roleId, $appConfigId, '资源库', 'FolderOpened', '');
+    $resourceId = ensureTopLevelMenuNode($pdo, $roleId, $appConfigId, '资源库', 'FolderOpened', '');
     ensureMenuNode($pdo, $roleId, $resourceId, '图片资源', 'Picture', 'config/resource/image');
     ensureMenuNode($pdo, $roleId, $resourceId, '链接/事件参数', 'Link', 'config/resource/click_param');
+}
+
+/**
+ * 确保指定菜单位于一级，并兼容从旧父级原地迁移。
+ *
+ * 合同：优先复用已有一级节点；其次复用旧父级下的同名节点并清空 parent_id；
+ * 只有两者都不存在时才创建新节点，避免老库出现两个“资源库”入口。
+ */
+function ensureTopLevelMenuNode(
+    PDO $pdo,
+    int $roleId,
+    int $legacyParentId,
+    string $name,
+    string $icon,
+    string $path
+): int {
+    $topLevel = $pdo->prepare("
+        SELECT id
+        FROM cainiao_menu
+        WHERE role_id = :role_id AND name = :name AND parent_id IS NULL
+        ORDER BY id ASC
+        LIMIT 1
+    ");
+    $topLevel->execute([
+        ':role_id' => $roleId,
+        ':name' => $name,
+    ]);
+
+    $topLevelId = (int)$topLevel->fetchColumn();
+    if ($topLevelId > 0) {
+        return $topLevelId;
+    }
+
+    $legacy = $pdo->prepare("
+        SELECT id
+        FROM cainiao_menu
+        WHERE role_id = :role_id AND name = :name AND parent_id = :parent_id
+        ORDER BY id ASC
+        LIMIT 1
+    ");
+    $legacy->execute([
+        ':role_id' => $roleId,
+        ':name' => $name,
+        ':parent_id' => $legacyParentId,
+    ]);
+
+    $legacyId = (int)$legacy->fetchColumn();
+    if ($legacyId > 0) {
+        $move = $pdo->prepare("
+            UPDATE cainiao_menu
+            SET parent_id = NULL
+            WHERE id = :id AND role_id = :role_id AND parent_id = :parent_id
+        ");
+        $move->execute([
+            ':id' => $legacyId,
+            ':role_id' => $roleId,
+            ':parent_id' => $legacyParentId,
+        ]);
+        return $legacyId;
+    }
+
+    return ensureMenuNode($pdo, $roleId, null, $name, $icon, $path);
 }
 
 /**
