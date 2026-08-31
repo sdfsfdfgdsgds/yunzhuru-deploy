@@ -1498,7 +1498,7 @@
         if (savedInitialMenu && !initialTabPaths.includes(savedInitialMenu)) {
           // 旧版只有 active_menu 时也必须保留当前页；超出容量时淘汰最旧的恢复项。
           if (initialTabPaths.length > MAX_PERSISTED_WORKSPACE_TABS) {
-            initialTabPaths.splice(initialTabPaths.length - 1, 1);
+            initialTabPaths.splice(1, 1);
           }
           initialTabPaths.push(savedInitialMenu);
         }
