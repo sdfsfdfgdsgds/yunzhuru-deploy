@@ -394,11 +394,139 @@ function handleInjectionTasks(PDO $pdo, $oss)
         }
     }
 
-    echo "类名混淆结果：" .  dexedit_rc($dexedit, $xmx, $dexFile, $final_package.'.App',                      $final_package. "." .$GLOBALS['App'], $dexFile) . "\n";
-    echo "类名混淆结果：" .  dexedit_rc($dexedit, $xmx, $dexFile, $final_package.'.MainActivity',             $final_package. "." .$GLOBALS['MainActivity'], $dexFile) . "\n";
-    echo "类名混淆结果：" .  dexedit_rc($dexedit, $xmx, $dexFile, $final_package.'.ShellAppComponentFactory', $final_package. "." .$GLOBALS['ShellAppComponentFactory'], $dexFile) . "\n";
-    echo "类名混淆结果：" .  dexedit_rc($dexedit, $xmx, $dexFile, $final_package.'.Config',                   $final_package. "." .$GLOBALS['Config'], $dexFile) . "\n";
-    $shellClassName = $final_package.'.'.$GLOBALS['App'];//更换入口类名为混淆后的类名
+    /*
+     * DexEdit 属于壳注入的关键写操作，只看工具输出中是否出现类名或
+     * "true" 字样会把无效改写当成成功。这里先直接解析 classes.dex 的
+     * class_defs，确认四个入口合同类确实由主 DEX 定义；每次改写同时校验
+     * 进程退出码、精确标准输出和改写后的类定义。任一合同不成立时立即
+     * 终止任务，避免把 Manifest 指向一个实际不存在的随机类。
+     */
+    $shellClassRenames = [
+        'App' => [
+            'old' => $final_package . '.App',
+            'new' => $final_package . '.' . $GLOBALS['App'],
+        ],
+        'MainActivity' => [
+            'old' => $final_package . '.MainActivity',
+            'new' => $final_package . '.' . $GLOBALS['MainActivity'],
+        ],
+        'ShellAppComponentFactory' => [
+            'old' => $final_package . '.ShellAppComponentFactory',
+            'new' => $final_package . '.' . $GLOBALS['ShellAppComponentFactory'],
+        ],
+        'Config' => [
+            'old' => $final_package . '.Config',
+            'new' => $final_package . '.' . $GLOBALS['Config'],
+        ],
+    ];
+
+    $definitionsBeforeClassRename = parseDexClassDefinitions($dexFile);
+    if (!$definitionsBeforeClassRename['ok']) {
+        failDexRewriteStage(
+            $pdo,
+            (int)$task['id'],
+            '类名改写前检查',
+            $definitionsBeforeClassRename['error'],
+            $temp_dir,
+            $oss_temp,
+            $localSavePath ?? null,
+            $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+        );
+        return;
+    }
+
+    $missingFixedClasses = [];
+    foreach ($shellClassRenames as $renameContract) {
+        if (!dexDefinitionsContainClass($definitionsBeforeClassRename['classes'], $renameContract['old'])) {
+            $missingFixedClasses[] = $renameContract['old'];
+        }
+    }
+    if (!empty($missingFixedClasses)) {
+        failDexRewriteStage(
+            $pdo,
+            (int)$task['id'],
+            '类名改写前检查',
+            'classes.dex 未定义固定壳类：' . implode(', ', $missingFixedClasses),
+            $temp_dir,
+            $oss_temp,
+            $localSavePath ?? null,
+            $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+        );
+        return;
+    }
+
+    foreach ($shellClassRenames as $role => $renameContract) {
+        $stage = '类名改写 ' . $role;
+        $renameResult = dexedit_rc(
+            $dexedit,
+            $xmx,
+            $dexFile,
+            $renameContract['old'],
+            $renameContract['new'],
+            $dexFile
+        );
+        echo "类名混淆结果：" . describeDexEditResult($renameResult) . "\n";
+
+        if (!isDexEditResultSuccessful($renameResult)) {
+            failDexRewriteStage(
+                $pdo,
+                (int)$task['id'],
+                $stage,
+                'DexEdit 进程合同未通过：' . describeDexEditResult($renameResult),
+                $temp_dir,
+                $oss_temp,
+                $localSavePath ?? null,
+                $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+            );
+            return;
+        }
+
+        $definitionsAfterClassRename = parseDexClassDefinitions($dexFile);
+        if (!$definitionsAfterClassRename['ok']) {
+            failDexRewriteStage(
+                $pdo,
+                (int)$task['id'],
+                $stage . '后检查',
+                $definitionsAfterClassRename['error'],
+                $temp_dir,
+                $oss_temp,
+                $localSavePath ?? null,
+                $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+            );
+            return;
+        }
+
+        $oldClassStillDefined = dexDefinitionsContainClass(
+            $definitionsAfterClassRename['classes'],
+            $renameContract['old']
+        );
+        $newClassDefined = dexDefinitionsContainClass(
+            $definitionsAfterClassRename['classes'],
+            $renameContract['new']
+        );
+        if ($oldClassStillDefined || !$newClassDefined) {
+            $contractDetail = sprintf(
+                '旧类定义是否仍存在=%s，新类定义是否存在=%s，改写=%s -> %s',
+                $oldClassStillDefined ? 'true' : 'false',
+                $newClassDefined ? 'true' : 'false',
+                $renameContract['old'],
+                $renameContract['new']
+            );
+            failDexRewriteStage(
+                $pdo,
+                (int)$task['id'],
+                $stage . '后检查',
+                $contractDetail,
+                $temp_dir,
+                $oss_temp,
+                $localSavePath ?? null,
+                $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+            );
+            return;
+        }
+    }
+
+    $shellClassName = $shellClassRenames['App']['new'];//更换入口类名为混淆后的类名
 
 //}
 
@@ -486,31 +614,255 @@ function handleInjectionTasks(PDO $pdo, $oss)
         // 生成新的完整类名
         $newClassName = $newPackage . '.' . $className;
 
-        //如有未开启加强去签的，才能混淆包名，否则so库会因为找不到包名方法而闪退
-        $rpk = dexedit_rpk($dexedit, $xmx, $dexFile, $shellClassName, $newPackage, $dexFile);//先修改入口所在的类
-
-        //再修改固定包名，由于该方法会自动删掉类名，所以这里传入要带类名
-        $rpk = dexedit_rpk($dexedit, $xmx, $dexFile, 'com.example.shell.App', generateRandomPackageName($charPool, $segmentCount, $segmentLength), $dexFile);
-        $rpk = dexedit_rpk($dexedit, $xmx, $dexFile, 'org.lsposed.hiddenapibypass.HiddenApiBypass', generateRandomPackageName($charPool, $segmentCount, $segmentLength), $dexFile);
-
-        echo $rpk . "\n";
-
-        if($rpk == "true\n"){
-            $shellClassName = $newClassName;
-            $final_package = $newPackage;//最终包名
-            echo "包名修改成功\n";
-        }else{
-            echo "包名修改失败\n";
-            if (strpos($shellClassName, '.') !== false) {
-                $parts = explode('.', $shellClassName);
-                array_pop($parts); // 去掉类名
-                $oldPackage = implode('.', $parts);
-            } else {
-                // 理论上不会出现，没有点就原样用
-                $oldPackage = $oldPackageWithClass;
-            }
-            $final_package = $oldPackage;
+        // 首次包改写承担壳入口合同：四个已随机化的类必须整体转移到目标应用包。
+        $definitionsBeforeShellPackageRewrite = parseDexClassDefinitions($dexFile);
+        if (!$definitionsBeforeShellPackageRewrite['ok']) {
+            failDexRewriteStage(
+                $pdo,
+                (int)$task['id'],
+                '壳入口包名改写前检查',
+                $definitionsBeforeShellPackageRewrite['error'],
+                $temp_dir,
+                $oss_temp,
+                $localSavePath ?? null,
+                $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+            );
+            return;
         }
+        $sourceShellPackage = $final_package;
+        $sourceShellPackageClassCount = countDexClassDefinitionsByPackagePrefix(
+            $definitionsBeforeShellPackageRewrite['classes'],
+            $sourceShellPackage
+        );
+        if ($sourceShellPackageClassCount <= 0) {
+            failDexRewriteStage(
+                $pdo,
+                (int)$task['id'],
+                '壳入口包名改写前检查',
+                '源包 ' . $sourceShellPackage . ' 没有 class_defs 定义',
+                $temp_dir,
+                $oss_temp,
+                $localSavePath ?? null,
+                $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+            );
+            return;
+        }
+        $shellPackageRewrite = dexedit_rpk(
+            $dexedit,
+            $xmx,
+            $dexFile,
+            $shellClassName,
+            $newPackage,
+            $dexFile
+        );
+        echo "壳入口包名混淆结果：" . describeDexEditResult($shellPackageRewrite) . "\n";
+        if (!isDexEditResultSuccessful($shellPackageRewrite)) {
+            failDexRewriteStage(
+                $pdo,
+                (int)$task['id'],
+                '壳入口包名改写',
+                'DexEdit 进程合同未通过：' . describeDexEditResult($shellPackageRewrite),
+                $temp_dir,
+                $oss_temp,
+                $localSavePath ?? null,
+                $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+            );
+            return;
+        }
+
+        $definitionsAfterShellPackageRewrite = parseDexClassDefinitions($dexFile);
+        if (!$definitionsAfterShellPackageRewrite['ok']) {
+            failDexRewriteStage(
+                $pdo,
+                (int)$task['id'],
+                '壳入口包名改写后检查',
+                $definitionsAfterShellPackageRewrite['error'],
+                $temp_dir,
+                $oss_temp,
+                $localSavePath ?? null,
+                $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+            );
+            return;
+        }
+
+        $remainingOldShellClasses = [];
+        $missingTargetShellClasses = [];
+        foreach ($shellClassRenames as $role => $renameContract) {
+            $targetClass = $newPackage . '.' . $GLOBALS[$role];
+            if (dexDefinitionsContainClass($definitionsAfterShellPackageRewrite['classes'], $renameContract['new'])) {
+                $remainingOldShellClasses[] = $renameContract['new'];
+            }
+            if (!dexDefinitionsContainClass($definitionsAfterShellPackageRewrite['classes'], $targetClass)) {
+                $missingTargetShellClasses[] = $targetClass;
+            }
+        }
+        if (!empty($remainingOldShellClasses) || !empty($missingTargetShellClasses)) {
+            failDexRewriteStage(
+                $pdo,
+                (int)$task['id'],
+                '壳入口包名改写后检查',
+                '旧包仍存在的壳类=[' . implode(', ', $remainingOldShellClasses)
+                    . ']，目标包缺失的壳类=[' . implode(', ', $missingTargetShellClasses) . ']',
+                $temp_dir,
+                $oss_temp,
+                $localSavePath ?? null,
+                $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+            );
+            return;
+        }
+
+        $remainingSourceShellPackageCount = countDexClassDefinitionsByPackagePrefix(
+            $definitionsAfterShellPackageRewrite['classes'],
+            $sourceShellPackage
+        );
+        $targetShellPackageClassCount = countDexClassDefinitionsByPackagePrefix(
+            $definitionsAfterShellPackageRewrite['classes'],
+            $newPackage
+        );
+        if (
+            $remainingSourceShellPackageCount !== 0 ||
+            $targetShellPackageClassCount !== $sourceShellPackageClassCount
+        ) {
+            failDexRewriteStage(
+                $pdo,
+                (int)$task['id'],
+                '壳入口包名改写后检查',
+                sprintf(
+                    '源包改写前定义数=%d，改写后源包定义数=%d，目标包定义数=%d',
+                    $sourceShellPackageClassCount,
+                    $remainingSourceShellPackageCount,
+                    $targetShellPackageClassCount
+                ),
+                $temp_dir,
+                $oss_temp,
+                $localSavePath ?? null,
+                $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+            );
+            return;
+        }
+
+        // 其余两个固定包也必须逐次完成进程合同，且每次改写后 DEX 仍须可被结构化解析。
+        $packageRewriteContracts = [
+            [
+                'stage' => '调试壳包名改写',
+                'old_class' => 'com.example.shell.App',
+                'old_package' => 'com.example.shell',
+                'new_package' => generateRandomPackageName($charPool, $segmentCount, $segmentLength),
+            ],
+            [
+                'stage' => 'HiddenApiBypass 包名改写',
+                'old_class' => 'org.lsposed.hiddenapibypass.HiddenApiBypass',
+                'old_package' => 'org.lsposed.hiddenapibypass',
+                'new_package' => generateRandomPackageName($charPool, $segmentCount, $segmentLength),
+            ],
+        ];
+        foreach ($packageRewriteContracts as $packageRewriteContract) {
+            $definitionsBeforePackageRewrite = parseDexClassDefinitions($dexFile);
+            if (!$definitionsBeforePackageRewrite['ok']) {
+                failDexRewriteStage(
+                    $pdo,
+                    (int)$task['id'],
+                    $packageRewriteContract['stage'] . '前检查',
+                    $definitionsBeforePackageRewrite['error'],
+                    $temp_dir,
+                    $oss_temp,
+                    $localSavePath ?? null,
+                    $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+                );
+                return;
+            }
+            $sourcePackageClassCount = countDexClassDefinitionsByPackagePrefix(
+                $definitionsBeforePackageRewrite['classes'],
+                $packageRewriteContract['old_package']
+            );
+            if ($sourcePackageClassCount <= 0) {
+                failDexRewriteStage(
+                    $pdo,
+                    (int)$task['id'],
+                    $packageRewriteContract['stage'] . '前检查',
+                    '源包 ' . $packageRewriteContract['old_package'] . ' 没有 class_defs 定义',
+                    $temp_dir,
+                    $oss_temp,
+                    $localSavePath ?? null,
+                    $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+                );
+                return;
+            }
+
+            $packageRewriteResult = dexedit_rpk(
+                $dexedit,
+                $xmx,
+                $dexFile,
+                $packageRewriteContract['old_class'],
+                $packageRewriteContract['new_package'],
+                $dexFile
+            );
+            echo $packageRewriteContract['stage'] . '结果：'
+                . describeDexEditResult($packageRewriteResult) . "\n";
+
+            if (!isDexEditResultSuccessful($packageRewriteResult)) {
+                failDexRewriteStage(
+                    $pdo,
+                    (int)$task['id'],
+                    $packageRewriteContract['stage'],
+                    'DexEdit 进程合同未通过：' . describeDexEditResult($packageRewriteResult),
+                    $temp_dir,
+                    $oss_temp,
+                    $localSavePath ?? null,
+                    $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+                );
+                return;
+            }
+
+            $definitionsAfterPackageRewrite = parseDexClassDefinitions($dexFile);
+            if (!$definitionsAfterPackageRewrite['ok']) {
+                failDexRewriteStage(
+                    $pdo,
+                    (int)$task['id'],
+                    $packageRewriteContract['stage'] . '后检查',
+                    $definitionsAfterPackageRewrite['error'],
+                    $temp_dir,
+                    $oss_temp,
+                    $localSavePath ?? null,
+                    $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+                );
+                return;
+            }
+
+            $remainingSourcePackageClassCount = countDexClassDefinitionsByPackagePrefix(
+                $definitionsAfterPackageRewrite['classes'],
+                $packageRewriteContract['old_package']
+            );
+            $targetPackageClassCount = countDexClassDefinitionsByPackagePrefix(
+                $definitionsAfterPackageRewrite['classes'],
+                $packageRewriteContract['new_package']
+            );
+            if (
+                $remainingSourcePackageClassCount !== 0 ||
+                $targetPackageClassCount !== $sourcePackageClassCount
+            ) {
+                failDexRewriteStage(
+                    $pdo,
+                    (int)$task['id'],
+                    $packageRewriteContract['stage'] . '后检查',
+                    sprintf(
+                        '源包改写前定义数=%d，改写后源包定义数=%d，目标包定义数=%d',
+                        $sourcePackageClassCount,
+                        $remainingSourcePackageClassCount,
+                        $targetPackageClassCount
+                    ),
+                    $temp_dir,
+                    $oss_temp,
+                    $localSavePath ?? null,
+                    $randomKeystoreGenerated ? ($tempSignDir ?? null) : null
+                );
+                return;
+            }
+        }
+
+        $shellClassName = $newClassName;
+        $final_package = $newPackage;//最终包名
+        echo "包名修改成功\n";
 
 
 
@@ -1378,7 +1730,7 @@ $applicationlin=[];
     print_r($zipalign);
     if(!$zipalign[0]){
         updateTaskStatus($pdo, $task['id'], '编译失败');
-        updateTaskInfo($pdo, $task['id'], $depth.'zipalign失败');
+        updateTaskInfo($pdo, $task['id'], 'zipalign失败');
         safeDeleteDirectory($temp_dir);
         return;
     }
@@ -1466,18 +1818,29 @@ $applicationlin=[];
             } else {
                 echo "优化成功，输出文件：" . $result . "\n";
                 // APK 完整性检测
-                $verifyResult = verify_apk_installable($signed_apk);
+                $verifyResult = verify_apk_installable(
+                    $signed_apk,
+                    $task['template_version'] ?? null
+                );
                 if (!$verifyResult[0]) {
                     echo "APK 完整性检测未通过：" . $verifyResult[1] . "\n";
                     updateTaskStatus($pdo, $task['id'], '编译失败');
-                    updateTaskInfo($pdo, $task['id'], $depth . 'APK完整性检测失败：' . $verifyResult[1]);
+                    updateTaskInfo($pdo, $task['id'], 'APK完整性检测失败：' . $verifyResult[1]);
                     safeDeleteFile($signed_apk);
                     safeDeleteDirectory($temp_dir);
                     return;
                 }
-                updateInjectedApkPath($pdo, $task['id'], $filename);//更新签名后的文件到数据库
+                $publishedApkFilename = updateInjectedApkPath($pdo, $task['id'], $filename);
+                if ($publishedApkFilename === false) {
+                    echo "记录最终 APK 路径失败\n";
+                    updateTaskStatus($pdo, $task['id'], '编译失败');
+                    updateTaskInfo($pdo, $task['id'], '记录最终 APK 路径失败');
+                    safeDeleteFile($signed_apk);
+                    safeDeleteDirectory($temp_dir);
+                    return;
+                }
                 updateTaskStatus($pdo, $task['id'], '编译成功');
-                updateTaskInfo($pdo, $task['id'], $depth.'编译成功');
+                updateTaskInfo($pdo, $task['id'], '编译成功');
                 // 自动上传已禁用，改为手动触发
                 // autoUploadToS3($pdo, $task['id'], $task['name']);
                 updateSignedApkSize($pdo, $task['id'], $signed_apk);
@@ -1485,7 +1848,7 @@ $applicationlin=[];
                 if (!taskExists($pdo, $task['id'])) {
                     //任务已被删除,清理已签名的文件
                     echo "任务不存在\n";
-                    safeDeleteFile($result[2]);
+                    safeDeleteFile($release_dir . DIRECTORY_SEPARATOR . $publishedApkFilename);
                     safeDeleteFile($zipalign[2]);
                 }
                 echo "=====================================================================\n";
@@ -1519,11 +1882,14 @@ $applicationlin=[];
     safeDeleteFile($result[2].".idsig");//删除V4签名的文件
 
     echo "==================================APK完整性检测\n";
-    $verifyResult = verify_apk_installable($signed_apk);
+    $verifyResult = verify_apk_installable(
+        $signed_apk,
+        $task['template_version'] ?? null
+    );
     if (!$verifyResult[0]) {
         echo "APK 完整性检测未通过：" . $verifyResult[1] . "\n";
         updateTaskStatus($pdo, $task['id'], '编译失败');
-        updateTaskInfo($pdo, $task['id'], $depth . 'APK完整性检测失败：' . $verifyResult[1]);
+        updateTaskInfo($pdo, $task['id'], 'APK完整性检测失败：' . $verifyResult[1]);
         safeDeleteFile($signed_apk);
         safeDeleteDirectory($temp_dir);
         return;
@@ -1531,10 +1897,17 @@ $applicationlin=[];
 
     echo "==================================收尾清理\n";
 
-
-    updateInjectedApkPath($pdo, $task['id'], $filename);//更新签名后的文件到数据库
+    $publishedApkFilename = updateInjectedApkPath($pdo, $task['id'], $filename);
+    if ($publishedApkFilename === false) {
+        echo "记录最终 APK 路径失败\n";
+        updateTaskStatus($pdo, $task['id'], '编译失败');
+        updateTaskInfo($pdo, $task['id'], '记录最终 APK 路径失败');
+        safeDeleteFile($signed_apk);
+        safeDeleteDirectory($temp_dir);
+        return;
+    }
     updateTaskStatus($pdo, $task['id'], '编译成功');
-    updateTaskInfo($pdo, $task['id'], $depth.'编译成功');
+    updateTaskInfo($pdo, $task['id'], '编译成功');
     // 自动上传已禁用，改为手动触发
     // autoUploadToS3($pdo, $task['id'], $task['name']);
     updateSignedApkSize($pdo, $task['id'], $signed_apk);
@@ -1542,7 +1915,7 @@ $applicationlin=[];
     if (!taskExists($pdo, $task['id'])) {
         //任务已被删除,清理已签名的文件
         echo "任务不存在\n";
-        safeDeleteFile($result[2]);
+        safeDeleteFile($release_dir . DIRECTORY_SEPARATOR . $publishedApkFilename);
         safeDeleteFile($zipalign[2]);
     }
     echo "=====================================================================\n";
@@ -2408,27 +2781,431 @@ function generateRandomPackageName($charPool, $segmentCount = 5, $segmentLength 
 
 
 
-//DEX中类名修改
-function dexedit_rc($dexedit, $xmx, $dexpath, $oldClass, $newClass, $outputdex){
-    $cmd = "nice -n 19 java -Xmx{$xmx} -jar "
-            . escapeshellarg($dexedit)
-            . " -rc "
-            . escapeshellarg($dexpath) . " "
-            . escapeshellarg($oldClass) . " "
-            . escapeshellarg($newClass) . " "
-            . escapeshellarg($outputdex)
-            . " 2>&1";
-
-    echo "执行命令：{$cmd}\n";
-    $output = shell_exec($cmd);
-    echo "dex包名重写结果{$output}\n";
-
-    return $output;
+/**
+ * 构造 DEX 类描述符。
+ *
+ * DexEdit 使用 Java 点分类名，DEX class_defs 通过 type_ids 指向
+ * `Lpkg/name/Class;` 描述符。后续所有“类是否真实定义”的判断都以该
+ * 描述符为唯一合同，不把只存在于字符串池或方法引用里的同名文本
+ * 误判成类定义。
+ */
+function dexClassDescriptor($className)
+{
+    return 'L' . str_replace('.', '/', (string)$className) . ';';
 }
 
-//DEX中包名修改
-function dexedit_rpk($dexedit, $xmx, $dexpath, $oldPackageWithClass, $newPackage, $outputdex){
+/**
+ * 按 DEX 小端序读取一个 uint32。
+ *
+ * @return int|null 越界或解码失败时返回 null
+ */
+function readDexUInt32Le($data, $offset, $limit)
+{
+    if ($offset < 0 || $offset > $limit - 4) {
+        return null;
+    }
 
+    $decoded = unpack('Vvalue', substr($data, $offset, 4));
+    if (!is_array($decoded) || !isset($decoded['value'])) {
+        return null;
+    }
+
+    return (int)$decoded['value'];
+}
+
+/**
+ * 检查 DEX 定长表是否完整落在文件声明边界内。
+ *
+ * 使用 intdiv 避免直接计算 count * itemSize 对恶意或损坏头部产生
+ * 整数溢出。DEX 规范要求空表的 offset 为 0，非空表按 4 字节对齐。
+ */
+function isDexTableRangeValid($offset, $count, $itemSize, $limit)
+{
+    if ($offset < 0 || $count < 0 || $itemSize <= 0 || $limit < 0) {
+        return false;
+    }
+    if ($count === 0) {
+        return $offset === 0;
+    }
+    if ($offset <= 0 || ($offset % 4) !== 0 || $offset > $limit) {
+        return false;
+    }
+
+    return $count <= intdiv($limit - $offset, $itemSize);
+}
+
+/**
+ * 跳过 string_data_item 开头的 utf16_size ULEB128。
+ *
+ * DEX 的 ULEB128 最多五字节，第五字节只允许低四位有效。
+ *
+ * @return int|null 成功时返回字符串数据起始偏移
+ */
+function skipDexUleb128($data, $offset, $limit)
+{
+    for ($index = 0; $index < 5; $index++) {
+        if ($offset >= $limit) {
+            return null;
+        }
+
+        $byte = ord($data[$offset]);
+        $offset++;
+        if (($byte & 0x80) === 0) {
+            if ($index === 4 && ($byte & 0xF0) !== 0) {
+                return null;
+            }
+            return $offset;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * 构造统一的 DEX 解析失败结果。
+ */
+function dexClassDefinitionParseFailure($message)
+{
+    return [
+        'ok' => false,
+        'classes' => [],
+        'error' => (string)$message,
+    ];
+}
+
+/**
+ * 精确解析单个 DEX 的 class_defs 类定义集合。
+ *
+ * 合同链路为 class_defs.class_idx -> type_ids.descriptor_idx ->
+ * string_ids.string_data_off -> string_data_item。函数会校验 magic、声明文件
+ * 长度、header_size、endian_tag、关键表边界、索引上界、ULEB128 和类
+ * 描述符形式。这与搜索 DEX 字符串池有本质区别：只有 class_defs 真正
+ * 引用的描述符才会进入返回集合。
+ *
+ * @return array{ok:bool,classes:array,error:string,version?:string}
+ */
+function parseDexClassDefinitions($dexPath)
+{
+    clearstatcache(true, $dexPath);
+    if (!is_file($dexPath) || !is_readable($dexPath)) {
+        return dexClassDefinitionParseFailure('DEX 文件不存在或不可读：' . $dexPath);
+    }
+
+    $data = @file_get_contents($dexPath);
+    if ($data === false) {
+        return dexClassDefinitionParseFailure('DEX 文件读取失败：' . $dexPath);
+    }
+
+    $actualSize = strlen($data);
+    if ($actualSize < 0x70) {
+        return dexClassDefinitionParseFailure('DEX 文件小于标准头长度');
+    }
+
+    $magic = substr($data, 0, 8);
+    if (preg_match('/\Adex\n[0-9]{3}\x00\z/D', $magic) !== 1) {
+        return dexClassDefinitionParseFailure('DEX magic 或版本字段无效');
+    }
+
+    $fileSize = readDexUInt32Le($data, 0x20, $actualSize);
+    $headerSize = readDexUInt32Le($data, 0x24, $actualSize);
+    $endianTag = readDexUInt32Le($data, 0x28, $actualSize);
+    $stringIdsSize = readDexUInt32Le($data, 0x38, $actualSize);
+    $stringIdsOffset = readDexUInt32Le($data, 0x3C, $actualSize);
+    $typeIdsSize = readDexUInt32Le($data, 0x40, $actualSize);
+    $typeIdsOffset = readDexUInt32Le($data, 0x44, $actualSize);
+    $classDefsSize = readDexUInt32Le($data, 0x60, $actualSize);
+    $classDefsOffset = readDexUInt32Le($data, 0x64, $actualSize);
+    $dataSize = readDexUInt32Le($data, 0x68, $actualSize);
+    $dataOffset = readDexUInt32Le($data, 0x6C, $actualSize);
+
+    $headerValues = [
+        $fileSize,
+        $headerSize,
+        $endianTag,
+        $stringIdsSize,
+        $stringIdsOffset,
+        $typeIdsSize,
+        $typeIdsOffset,
+        $classDefsSize,
+        $classDefsOffset,
+        $dataSize,
+        $dataOffset,
+    ];
+    if (in_array(null, $headerValues, true)) {
+        return dexClassDefinitionParseFailure('DEX 头部字段读取不完整');
+    }
+    if ($fileSize !== $actualSize) {
+        return dexClassDefinitionParseFailure(
+            "DEX file_size={$fileSize} 与实际长度={$actualSize} 不一致"
+        );
+    }
+    if ($headerSize !== 0x70) {
+        return dexClassDefinitionParseFailure('DEX header_size 不是标准 112 字节：' . $headerSize);
+    }
+    if ($endianTag !== 0x12345678) {
+        return dexClassDefinitionParseFailure('DEX endian_tag 不是标准小端序');
+    }
+    if (!isDexTableRangeValid($stringIdsOffset, $stringIdsSize, 4, $fileSize)) {
+        return dexClassDefinitionParseFailure('DEX string_ids 表越界或未对齐');
+    }
+    if (!isDexTableRangeValid($typeIdsOffset, $typeIdsSize, 4, $fileSize)) {
+        return dexClassDefinitionParseFailure('DEX type_ids 表越界或未对齐');
+    }
+    if (!isDexTableRangeValid($classDefsOffset, $classDefsSize, 32, $fileSize)) {
+        return dexClassDefinitionParseFailure('DEX class_defs 表越界或未对齐');
+    }
+    if ($dataSize <= 0 || $dataOffset < $headerSize || ($dataOffset % 4) !== 0) {
+        return dexClassDefinitionParseFailure('DEX data 区参数无效');
+    }
+    if ($dataOffset > $fileSize || $dataSize > $fileSize - $dataOffset) {
+        return dexClassDefinitionParseFailure('DEX data 区越界');
+    }
+    $dataEnd = $dataOffset + $dataSize;
+
+    $classes = [];
+    for ($classIndex = 0; $classIndex < $classDefsSize; $classIndex++) {
+        $classDefOffset = $classDefsOffset + ($classIndex * 32);
+        $typeIndex = readDexUInt32Le($data, $classDefOffset, $fileSize);
+        if ($typeIndex === null || $typeIndex >= $typeIdsSize) {
+            return dexClassDefinitionParseFailure(
+                "DEX class_defs[{$classIndex}].class_idx 越界"
+            );
+        }
+
+        $descriptorIndex = readDexUInt32Le(
+            $data,
+            $typeIdsOffset + ($typeIndex * 4),
+            $fileSize
+        );
+        if ($descriptorIndex === null || $descriptorIndex >= $stringIdsSize) {
+            return dexClassDefinitionParseFailure(
+                "DEX type_ids[{$typeIndex}].descriptor_idx 越界"
+            );
+        }
+
+        $stringDataOffset = readDexUInt32Le(
+            $data,
+            $stringIdsOffset + ($descriptorIndex * 4),
+            $fileSize
+        );
+        if (
+            $stringDataOffset === null ||
+            $stringDataOffset < $dataOffset ||
+            $stringDataOffset >= $dataEnd
+        ) {
+            return dexClassDefinitionParseFailure(
+                "DEX string_ids[{$descriptorIndex}].string_data_off 越界"
+            );
+        }
+
+        $descriptorStart = skipDexUleb128($data, $stringDataOffset, $dataEnd);
+        if ($descriptorStart === null) {
+            return dexClassDefinitionParseFailure(
+                "DEX 类描述符 {$descriptorIndex} 的 ULEB128 无效"
+            );
+        }
+        $descriptorEnd = strpos($data, "\0", $descriptorStart);
+        if ($descriptorEnd === false || $descriptorEnd >= $dataEnd) {
+            return dexClassDefinitionParseFailure(
+                "DEX 类描述符 {$descriptorIndex} 没有合法终止符"
+            );
+        }
+
+        $descriptor = substr($data, $descriptorStart, $descriptorEnd - $descriptorStart);
+        if (
+            strlen($descriptor) < 3 ||
+            $descriptor[0] !== 'L' ||
+            substr($descriptor, -1) !== ';'
+        ) {
+            return dexClassDefinitionParseFailure(
+                "DEX class_defs[{$classIndex}] 指向非类型描述符"
+            );
+        }
+        if (isset($classes[$descriptor])) {
+            return dexClassDefinitionParseFailure('DEX 存在重复类定义：' . $descriptor);
+        }
+        $classes[$descriptor] = true;
+    }
+
+    return [
+        'ok' => true,
+        'classes' => $classes,
+        'error' => '',
+        'version' => substr($magic, 4, 3),
+    ];
+}
+
+/**
+ * 判断 Java 点分类名是否由已解析 DEX 的 class_defs 定义。
+ */
+function dexDefinitionsContainClass(array $definitions, $className)
+{
+    return isset($definitions[dexClassDescriptor($className)]);
+}
+
+/**
+ * 统计由指定 Java 包前缀定义的类数量。
+ *
+ * 前缀以 `/` 结尾，因此 `com.demo` 不会误命中 `com.demo2`；子包属于
+ * DexEdit -rpk 的整体改写范围，也会纳入数量守恒校验。
+ */
+function countDexClassDefinitionsByPackagePrefix(array $definitions, $packageName)
+{
+    $descriptorPrefix = 'L' . str_replace('.', '/', (string)$packageName) . '/';
+    $count = 0;
+    foreach ($definitions as $descriptor => $defined) {
+        if ($defined && strpos($descriptor, $descriptorPrefix) === 0) {
+            $count++;
+        }
+    }
+
+    return $count;
+}
+
+/**
+ * 执行 DexEdit 并分离收集 stdout、stderr 与真实进程退出码。
+ *
+ * 旧实现使用 shell_exec("2>&1")，只能看到混合文本，丢失了退出码。
+ * 这里把两个输出流写入独立的系统临时文件，既避免管道缓冲区满时
+ * 互相等待，也能对 stdout 执行精确合同校验。临时输出文件在返回前
+ * 始终删除。
+ */
+function executeDexEditProcess($command)
+{
+    echo "执行命令：{$command}\n";
+    $stdoutPath = tempnam(sys_get_temp_dir(), 'dexedit_stdout_');
+    $stderrPath = tempnam(sys_get_temp_dir(), 'dexedit_stderr_');
+    if ($stdoutPath === false || $stderrPath === false) {
+        if (is_string($stdoutPath) && is_file($stdoutPath)) {
+            @unlink($stdoutPath);
+        }
+        if (is_string($stderrPath) && is_file($stderrPath)) {
+            @unlink($stderrPath);
+        }
+        return [
+            'exit_code' => -1,
+            'stdout' => '',
+            'stderr' => '',
+            'launch_error' => '无法创建 DexEdit 输出临时文件',
+        ];
+    }
+
+    $exitCode = -1;
+    $ignoredOutput = [];
+    $wrappedCommand = $command
+        . ' >' . escapeshellarg($stdoutPath)
+        . ' 2>' . escapeshellarg($stderrPath);
+    exec($wrappedCommand, $ignoredOutput, $exitCode);
+
+    $stdout = @file_get_contents($stdoutPath);
+    $stderr = @file_get_contents($stderrPath);
+    @unlink($stdoutPath);
+    @unlink($stderrPath);
+
+    return [
+        'exit_code' => (int)$exitCode,
+        'stdout' => $stdout === false ? '' : $stdout,
+        'stderr' => $stderr === false ? '' : $stderr,
+        'launch_error' => '',
+    ];
+}
+
+/**
+ * DexEdit 成功 stdout 的精确合同。
+ *
+ * Java println 会根据运行系统输出 LF 或 CRLF，因此仅接受 `true`、
+ * `true\n` 和 `true\r\n` 三种等价形态。任何前后空格、额外日志、false 或
+ * 空输出都按失败处理。
+ */
+function isExactDexEditTrueOutput($stdout)
+{
+    return $stdout === 'true' || $stdout === "true\n" || $stdout === "true\r\n";
+}
+
+/**
+ * DexEdit 进程成功同时要求启动无错、退出码为 0 且 stdout 精确为 true。
+ */
+function isDexEditResultSuccessful(array $result)
+{
+    return
+        ($result['launch_error'] ?? '') === '' &&
+        isset($result['exit_code']) &&
+        (int)$result['exit_code'] === 0 &&
+        isExactDexEditTrueOutput($result['stdout'] ?? '');
+}
+
+/**
+ * 将 DexEdit 结果压缩成适合 worker 日志和任务进度的单行文本。
+ */
+function describeDexEditResult(array $result)
+{
+    $stdout = str_replace(["\r", "\n"], ['\\r', '\\n'], (string)($result['stdout'] ?? ''));
+    $stderr = str_replace(["\r", "\n"], ['\\r', '\\n'], (string)($result['stderr'] ?? ''));
+    $launchError = str_replace(["\r", "\n"], ['\\r', '\\n'], (string)($result['launch_error'] ?? ''));
+
+    return sprintf(
+        'exit_code=%d, stdout="%s", stderr="%s", launch_error="%s"',
+        (int)($result['exit_code'] ?? -1),
+        substr($stdout, 0, 500),
+        substr($stderr, 0, 500),
+        substr($launchError, 0, 500)
+    );
+}
+
+/**
+ * 终结 DexEdit 改写合同失败的注入任务并回收本轮临时资源。
+ *
+ * 调用方在本函数返回后必须立即 return，以保证失败 DEX 不会继续反编译、
+ * 合并或签名。任务信息保留精确阶段和证据；本轮壳/目标解包目录、
+ * 随机签名目录以及 OSS 拉取的本地缓存会同步清理。
+ */
+function failDexRewriteStage(
+    PDO $pdo,
+    $taskId,
+    $stage,
+    $detail,
+    $tempDir,
+    $ossTemp,
+    $localSavePath,
+    $randomSignTempDir = null
+) {
+    $message = 'DEX改写合同失败[' . $stage . ']：' . $detail;
+    echo $message . "\n";
+    updateTaskStatus($pdo, (int)$taskId, '注入失败');
+    updateTaskInfo($pdo, (int)$taskId, $message);
+
+    if (is_string($tempDir) && is_dir($tempDir)) {
+        safeDeleteDirectory($tempDir);
+    }
+    if (
+        is_string($randomSignTempDir) &&
+        is_dir($randomSignTempDir) &&
+        $randomSignTempDir !== $tempDir
+    ) {
+        safeDeleteDirectory($randomSignTempDir);
+    }
+    del_osstemp((bool)$ossTemp, $localSavePath);
+}
+
+//DEX中类名修改，返回包含退出码和独立输出流的进程结果。
+function dexedit_rc($dexedit, $xmx, $dexpath, $oldClass, $newClass, $outputdex)
+{
+    $cmd = 'nice -n 19 java '
+        . escapeshellarg('-Xmx' . $xmx)
+        . ' -jar '
+        . escapeshellarg($dexedit)
+        . ' -rc '
+        . escapeshellarg($dexpath) . ' '
+        . escapeshellarg($oldClass) . ' '
+        . escapeshellarg($newClass) . ' '
+        . escapeshellarg($outputdex);
+
+    return executeDexEditProcess($cmd);
+}
+
+//DEX中包名修改，返回包含退出码和独立输出流的进程结果。
+function dexedit_rpk($dexedit, $xmx, $dexpath, $oldPackageWithClass, $newPackage, $outputdex)
+{
     // 从旧包名中去掉类名，只保留包名
     // 例如：com.example.shell.App → com.example.shell
     if (strpos($oldPackageWithClass, '.') !== false) {
@@ -2440,20 +3217,17 @@ function dexedit_rpk($dexedit, $xmx, $dexpath, $oldPackageWithClass, $newPackage
         $oldPackage = $oldPackageWithClass;
     }
 
-    $cmd = "nice -n 19 java -Xmx{$xmx} -jar "
-            . escapeshellarg($dexedit)
-            . " -rpk "
-            . escapeshellarg($dexpath) . " "
-            . escapeshellarg($oldPackage) . " "
-            . escapeshellarg($newPackage) . " "
-            . escapeshellarg($outputdex)
-            . " 2>&1";
+    $cmd = 'nice -n 19 java '
+        . escapeshellarg('-Xmx' . $xmx)
+        . ' -jar '
+        . escapeshellarg($dexedit)
+        . ' -rpk '
+        . escapeshellarg($dexpath) . ' '
+        . escapeshellarg($oldPackage) . ' '
+        . escapeshellarg($newPackage) . ' '
+        . escapeshellarg($outputdex);
 
-    echo "执行命令：{$cmd}\n";
-    $output = shell_exec($cmd);
-    echo "dex包名重写结果{$output}哦\n";
-
-    return $output;
+    return executeDexEditProcess($cmd);
 }
 
 
@@ -5748,7 +6522,7 @@ function safeDeleteFile(?string $filePath): bool
  * @param PDO $pdo 数据库句柄
  * @param int $taskId 注入任务ID
  * @param string $apkPath 编译后APK的相对路径或完整路径
- * @return bool
+ * @return string|false 成功时返回已持久化的标准文件名，失败时返回 false
  */
 /*function updateInjectedApkPath($pdo, $taskId, $apkPath)
 {
@@ -5772,19 +6546,33 @@ function safeDeleteFile(?string $filePath): bool
 
     return $success;
 }*/
+/**
+ * 将本轮签名 APK 按可回滚合同收口为用户 + MD5 标准制品并回写任务。
+ *
+ * @param PDO $pdo 数据库句柄
+ * @param int $taskId 注入任务 ID
+ * @param string $apkPath release 目录下本轮临时文件名
+ * @return string|false 成功时返回已持久化的标准文件名，失败时返回 false
+ */
 function updateInjectedApkPath($pdo, $taskId, $apkPath)
 {
     $dir = __DIR__ . '/../release/';
 
     // 查询 user_id 和原 injected_apk
-    $stmt = $pdo->prepare("
-        SELECT user_id, injected_apk
-        FROM cainiao_inject_task
-        WHERE id = :id
-        LIMIT 1
-    ");
-    $stmt->execute([':id' => $taskId]);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    try {
+        $stmt = $pdo->prepare("
+            SELECT user_id, injected_apk
+            FROM cainiao_inject_task
+            WHERE id = :id
+            LIMIT 1
+        ");
+        $stmt->execute([':id' => $taskId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    } catch (\Throwable $lookupError) {
+        echo "[" . date('Y-m-d H:i:s') . "] ❌ 读取任务制品状态异常："
+            . $lookupError->getMessage() . "\n";
+        return false;
+    }
 
     if (!$row) {
         echo "[" . date('Y-m-d H:i:s') . "] ❌ 未找到任务记录：{$taskId}\n";
@@ -5812,49 +6600,103 @@ function updateInjectedApkPath($pdo, $taskId, $apkPath)
     $newFileName = $userId . '_' . $md5 . '.build.signed.apk';
     $newFilePath = $dir . $newFileName;
 
-    // 重命名文件
-    if (!rename($oldFilePath, $newFilePath)) {
-        echo "[" . date('Y-m-d H:i:s') . "] ❌ APK 重命名失败\n";
-        return false;
+    /*
+     * 先准备可回滚的文件状态，数据库更新成功后再删除旧制品。
+     * 这保证调用方只有在“标准文件已就位 + injected_apk/size 已持久化”
+     * 两个条件同时成立时才收到 true。如果同 MD5 的标准文件已存在，
+     * 复用它并在数据库成功后清理本轮重复文件，避免覆盖其他任务的同内容制品。
+     */
+    $renamedToCanonicalPath = false;
+    $reusedCanonicalPath = false;
+    if ($oldFilePath !== $newFilePath && is_file($newFilePath)) {
+        $existingMd5 = md5_file($newFilePath);
+        if ($existingMd5 === false || !hash_equals($md5, $existingMd5)) {
+            echo "[" . date('Y-m-d H:i:s') . "] ❌ 标准 APK 路径已存在不同内容：{$newFilePath}\n";
+            return false;
+        }
+        $reusedCanonicalPath = true;
+        echo "[" . date('Y-m-d H:i:s') . "] 复用已存在的同 MD5 APK：{$newFileName}\n";
+    } elseif ($oldFilePath !== $newFilePath) {
+        if (!@rename($oldFilePath, $newFilePath)) {
+            echo "[" . date('Y-m-d H:i:s') . "] ❌ APK 重命名失败\n";
+            return false;
+        }
+        $renamedToCanonicalPath = true;
     }
 
     // 获取新文件大小（字节）
     $fileSize = filesize($newFilePath);
     if ($fileSize === false) {
         echo "[" . date('Y-m-d H:i:s') . "] ❌ 获取 APK 文件大小失败\n";
+        if ($renamedToCanonicalPath && !@rename($newFilePath, $oldFilePath)) {
+            echo "[" . date('Y-m-d H:i:s') . "] ❌ APK 回滚到临时文件名失败\n";
+        }
         return false;
     }
 
-    // 如果旧 injected_apk 文件存在，先删除
-    if (!empty($oldInjectedApk)) {
-        $oldInjectedPath = $dir . $oldInjectedApk;
-        if (is_file($oldInjectedPath)) {
-            unlink($oldInjectedPath);
-            echo "[" . date('Y-m-d H:i:s') . "] 已删除旧注入 APK：{$oldInjectedApk}\n";
-        }
-    }
-
     // 更新数据库：文件名 + 大小
-    $stmt = $pdo->prepare("
-        UPDATE cainiao_inject_task
-        SET injected_apk = :apk,
-            size = :size
-        WHERE id = :id
-    ");
+    try {
+        $stmt = $pdo->prepare("
+            UPDATE cainiao_inject_task
+            SET injected_apk = :apk,
+                size = :size
+            WHERE id = :id
+        ");
 
-    $success = $stmt->execute([
-        ':apk'  => $newFileName,
-        ':size' => $fileSize,
-        ':id'   => $taskId
-    ]);
+        $writeExecuted = $stmt->execute([
+            ':apk'  => $newFileName,
+            ':size' => $fileSize,
+            ':id'   => $taskId
+        ]);
+        $success = false;
+        if ($writeExecuted) {
+            // execute=true 仅代表 SQL 已执行；任务并发删除时也可能匹配 0 行。
+            // 回读最终值同时兼容“内容未变导致 rowCount=0”的 MySQL 语义。
+            $verifyStmt = $pdo->prepare("
+                SELECT injected_apk, size
+                FROM cainiao_inject_task
+                WHERE id = :id
+                LIMIT 1
+            ");
+            $verifyStmt->execute([':id' => $taskId]);
+            $persistedResult = $verifyStmt->fetch(PDO::FETCH_ASSOC);
+            $success = is_array($persistedResult)
+                && (string)$persistedResult['injected_apk'] === (string)$newFileName
+                && (int)$persistedResult['size'] === (int)$fileSize;
+        }
+    } catch (\Throwable $updateError) {
+        $success = false;
+        echo "[" . date('Y-m-d H:i:s') . "] ❌ 更新 injected_apk / size 异常："
+            . $updateError->getMessage() . "\n";
+    }
 
     if ($success) {
         echo "[" . date('Y-m-d H:i:s') . "] 注入结果已更新：任务 #{$taskId} => {$newFileName}（{$fileSize} 字节）\n";
     } else {
         echo "[" . date('Y-m-d H:i:s') . "] ❌ 更新 injected_apk / size 失败：任务 #{$taskId}\n";
+        if ($renamedToCanonicalPath && !@rename($newFilePath, $oldFilePath)) {
+            echo "[" . date('Y-m-d H:i:s') . "] ❌ APK 回滚到临时文件名失败\n";
+        }
+        return false;
     }
 
-    return $success;
+    if ($reusedCanonicalPath && is_file($oldFilePath) && !@unlink($oldFilePath)) {
+        echo "[" . date('Y-m-d H:i:s') . "] 警告：本轮重复 APK 清理失败：{$oldFilePath}\n";
+    }
+
+    // 只在新路径已持久化后清理上一份制品，且不删除本轮复用的同名制品。
+    if (!empty($oldInjectedApk) && $oldInjectedApk !== $newFileName) {
+        $oldInjectedPath = $dir . $oldInjectedApk;
+        if (is_file($oldInjectedPath)) {
+            if (@unlink($oldInjectedPath)) {
+                echo "[" . date('Y-m-d H:i:s') . "] 已删除旧注入 APK：{$oldInjectedApk}\n";
+            } else {
+                echo "[" . date('Y-m-d H:i:s') . "] 警告：旧注入 APK 删除失败：{$oldInjectedApk}\n";
+            }
+        }
+    }
+
+    return $newFileName;
 }
 
 

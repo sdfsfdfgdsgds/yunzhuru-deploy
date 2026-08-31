@@ -2126,7 +2126,7 @@ if (!function_exists('apiDomainAutomationProbeCloudResource')) {
             'appkey' => (string)$userId,
             'did' => 'cloudfront_probe_' . $appId,
             'system_dns_ip' => '',
-            'shell_version' => '153',
+            'shell_version' => '154',
             'brand' => 'yunzhuru-worker',
             'model' => 'cloudfront-probe',
             'android_version' => '0',

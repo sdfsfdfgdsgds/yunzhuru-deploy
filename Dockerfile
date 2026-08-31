@@ -7,7 +7,7 @@ RUN apt-get -o Acquire::Retries=5 update \
     libfreetype6-dev libjpeg62-turbo-dev libpng-dev libwebp-dev libzip-dev \
     supervisor \
     aapt zipalign default-jre-headless \
-    curl \
+    curl python3 python3-pip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -27,6 +27,13 @@ RUN echo "upload_max_filesize = 4096M\npost_max_size = 4096M\nmemory_limit = 409
 RUN mkdir -p /var/log/supervisor /var/www/html/temp && chmod 777 /var/www/html/temp
 
 WORKDIR /var/www/html
+
+# 注入成品发布门禁固定使用已验证版本。依赖安装失败会直接阻断镜像构建，
+# 避免生产 worker 在缺少 DEX 扫描能力时继续把任务标记为成功。
+COPY bin/requirements-dex-gate.txt /tmp/requirements-dex-gate.txt
+RUN python3 -m pip install --no-cache-dir --disable-pip-version-check \
+    -r /tmp/requirements-dex-gate.txt
+
 COPY . /var/www/html/
 RUN chmod 777 /var/www/html/temp
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf

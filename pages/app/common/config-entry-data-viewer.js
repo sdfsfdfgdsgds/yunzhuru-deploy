@@ -229,7 +229,7 @@
         destroy-on-close
         @closed="resetApi">
         <el-alert
-          title="这是当前控制面的即时诊断请求，与历史 task / attempt 制品证据分开；服务端固定模拟 shell_version=153，并使用应用当前资料。这里展示该次响应，不代表某台手机的本地缓存、DNS 或运营商链路。"
+          title="这是当前控制面的即时诊断请求，与历史 task / attempt 制品证据分开；服务端固定模拟 shell_version=154，并使用应用当前资料。这里展示该次响应，不代表某台手机的本地缓存、DNS 或运营商链路。"
           type="info"
           show-icon
           :closable="false"

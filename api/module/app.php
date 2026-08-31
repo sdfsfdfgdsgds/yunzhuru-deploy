@@ -1004,7 +1004,7 @@ function getAppApiConfigPayload(PDO $pdo, array $input)
         // key 刻意省略：shell.php 将其标记为“未提交key参数”且保持 disable=false。
         'did' => 'console_api_probe_' . $appId,
         'system_dns_ip' => '',
-        'shell_version' => '153',
+        'shell_version' => '154',
         'brand' => 'yunzhuru-console',
         'model' => 'api-config-probe',
         'android_version' => '0',

@@ -674,9 +674,10 @@ function sign_apk($keystore, $alias, $storepass, $keypass, $unsigned_apk, $signe
  * 验证签名后的 APK 是否完整可安装
  * 检测项：aapt dump badging 解析 Manifest + DEX 文件存在性
  * @param string $apkPath 签名后的 APK 路径
+ * @param string|int $expectedShellVersion 任务实际选择的壳模板版本
  * @return array [bool 是否通过, string 信息, array 详情]
  */
-function verify_apk_installable($apkPath) {
+function verify_apk_installable($apkPath, $expectedShellVersion = null) {
     $errors = [];
 
     // 1. 文件存在性和大小检查
@@ -721,15 +722,129 @@ function verify_apk_installable($apkPath) {
         echo "APK 验证：包含 {$dexCount} 个 DEX 文件\n";
     }
 
+    // 4. 对签名后的真实注入成品执行已知高危 DEX 合同门禁。
+    // 这一步位于 DexEdit、加固、Manifest 处理、数据复用和签名之后，
+    // 可阻断模板检查之后才引入的 Object/Enum 类型破坏，并验证成品内
+    // 的壳协议 marker 与任务选择的模板版本一致。
+    $dexGateDetails = [];
+    if (empty($errors)) {
+        $dexGateResult = verify_injected_dex_contract($apkPath, $expectedShellVersion);
+        $dexGateDetails = $dexGateResult[2] ?? [];
+        if (!$dexGateResult[0]) {
+            $errors[] = $dexGateResult[1];
+        }
+    }
+
     if (!empty($errors)) {
         $msg = "APK 完整性检测失败：" . implode('；', $errors);
         echo $msg . "\n";
-        return [false, $msg, ['errors' => $errors, 'package' => $packageName, 'size' => $fileSize]];
+        return [false, $msg, [
+            'errors' => $errors,
+            'package' => $packageName,
+            'size' => $fileSize,
+            'dex_gate' => $dexGateDetails,
+        ]];
     }
 
     $msg = "APK 完整性检测通过（{$packageName} v{$versionName}，{$dexCount}个DEX，" . round($fileSize / 1024 / 1024, 2) . "MB）";
     echo $msg . "\n";
-    return [true, $msg, ['package' => $packageName, 'version' => $versionName, 'dex_count' => $dexCount, 'size' => $fileSize]];
+    return [true, $msg, [
+        'package' => $packageName,
+        'version' => $versionName,
+        'dex_count' => $dexCount,
+        'size' => $fileSize,
+        'dex_gate' => $dexGateDetails,
+    ]];
+}
+
+/**
+ * 扫描签名后的注入成品，并验证其壳协议 marker。
+ *
+ * 任何脚本、Python 依赖、版本参数、超时或扫描错误都按发布失败处理；
+ * 绝不因门禁执行环境异常而把成品标记为“编译成功”。
+ *
+ * @param string $apkPath 签名后的真实注入成品
+ * @param string|int $expectedShellVersion 任务所选模板版本
+ * @return array [bool 是否通过, string 信息, array 详情]
+ */
+function verify_injected_dex_contract($apkPath, $expectedShellVersion) {
+    $version = trim((string)$expectedShellVersion);
+    if ($version === '' || !ctype_digit($version) || (int)$version < 1) {
+        return [false, '最终 DEX 门禁缺少有效壳版本', [
+            'exit_code' => 2,
+            'expected_shell_version' => $version,
+        ]];
+    }
+
+    $configuredScript = trim((string)(getenv('DEX_GATE_SCRIPT') ?: ''));
+    $scriptPath = $configuredScript !== ''
+        ? $configuredScript
+        : (__DIR__ . '/../bin/verify_release_dex.py');
+    if (!is_file($scriptPath) || !is_readable($scriptPath)) {
+        return [false, '最终 DEX 门禁脚本缺失或不可读', [
+            'exit_code' => 2,
+            'expected_shell_version' => $version,
+        ]];
+    }
+
+    $python = trim((string)(getenv('DEX_GATE_PYTHON') ?: 'python3'));
+    if ($python === '') {
+        return [false, '最终 DEX 门禁 Python 命令为空', [
+            'exit_code' => 2,
+            'expected_shell_version' => $version,
+        ]];
+    }
+
+    // Debian 生产镜像使用 coreutils timeout 限制单次扫描；macOS 本地开发机
+    // 默认没有该命令，此时仍执行门禁，由外层任务生命周期负责终止。
+    $timeoutBinary = '';
+    foreach (['/usr/bin/timeout', '/bin/timeout'] as $candidate) {
+        if (is_executable($candidate)) {
+            $timeoutBinary = $candidate;
+            break;
+        }
+    }
+    $timeoutPrefix = $timeoutBinary !== ''
+        ? (escapeshellarg($timeoutBinary) . ' --signal=KILL 300 ')
+        : '';
+    $command = $timeoutPrefix
+        . escapeshellarg($python) . ' '
+        . escapeshellarg($scriptPath) . ' '
+        . escapeshellarg($apkPath)
+        . ' --artifact-kind injected'
+        . ' --expected-shell-version ' . escapeshellarg($version)
+        . ' --max-findings 20 2>&1';
+    $outputLines = [];
+    $exitCode = 2;
+    exec($command, $outputLines, $exitCode);
+    $output = trim(implode("\n", $outputLines));
+    if ($output !== '') {
+        echo "最终 DEX 门禁输出：\n{$output}\n";
+    }
+
+    // 生产镜像的 mbstring 扩展属于可选能力；门禁本身不应因日志截断函数
+    // 缺失而中断。优先按 UTF-8 字符截断，旧环境退回按字节截断。
+    $truncateOutput = static function ($text, $maximumLength) {
+        if (function_exists('mb_substr')) {
+            return mb_substr($text, 0, $maximumLength, 'UTF-8');
+        }
+        return substr($text, 0, $maximumLength);
+    };
+
+    $details = [
+        'exit_code' => $exitCode,
+        'expected_shell_version' => $version,
+        'timeout_seconds' => $timeoutBinary !== '' ? 300 : null,
+        'output' => $truncateOutput($output, 4000),
+    ];
+    if ($exitCode !== 0) {
+        $summary = $output !== ''
+            ? $truncateOutput($output, 1200)
+            : '门禁进程无输出';
+        return [false, "最终 DEX 门禁未通过（退出码 {$exitCode}）：{$summary}", $details];
+    }
+
+    return [true, "最终 DEX 门禁通过（壳版本 {$version}）", $details];
 }
 
 //回编译
