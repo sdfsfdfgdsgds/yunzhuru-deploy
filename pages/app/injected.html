@@ -30,7 +30,8 @@
       white-space: nowrap;
     }
     .static-bucket-dialog {
-      width: min(1360px, 96vw) !important;
+      /* 综合详情内容较多，但桌面与平板仍保留明显的两侧留白。 */
+      width: min(1120px, 90vw) !important;
     }
     .static-bucket-dialog .el-dialog__body {
       max-height: 72vh;
@@ -95,7 +96,7 @@
     }
     @media (max-width: 640px) {
       body { margin: 0; padding: 12px; }
-      .static-bucket-dialog { width: 96vw !important; margin-top: 3vh !important; }
+      .static-bucket-dialog { margin-top: 3vh !important; }
       .static-bucket-dialog .el-dialog__body { padding: 12px; }
       .static-api-toolbar { flex-direction: column; }
     }

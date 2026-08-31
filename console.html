@@ -656,8 +656,13 @@
 
     /* 对旧弹窗只做外观与响应式收口，字段和请求合同继续沿用原实现。 */
     .el-dialog {
-      max-width: calc(100vw - 28px);
+      max-width: min(900px, 90vw);
       border-radius: 13px;
+    }
+
+    /* Element Plus 确认框也遵循同一留白合同。 */
+    .el-message-box {
+      max-width: min(420px, 90vw);
     }
 
     .el-dialog__header {
@@ -763,9 +768,15 @@
       }
     }
 
-    @media (max-width: 420px) {
+    @media (max-width: 480px) {
       .breadcrumb-wrap {
         display: none;
+      }
+
+      /* 真手机只设置可操作下限与防溢出上限，不统一覆盖业务弹窗宽度。 */
+      .el-dialog:not(.is-fullscreen) {
+        min-width: min(320px, 90vw);
+        max-width: 90vw;
       }
     }
 

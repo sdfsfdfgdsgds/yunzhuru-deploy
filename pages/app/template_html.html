@@ -78,7 +78,8 @@
       :title="editMode ? '编辑模板' : '添加模板'"
       width="800px"
       :fullscreen="dialogFullscreen"
-      :class="['custom-dialog', dialogFullscreen ? 'dialog-fullscreen' : '']">
+      :class="['custom-dialog', dialogFullscreen ? 'dialog-fullscreen' : '']"
+      @closed="resetDialogLayout">
       <template #header>
         <div style="display: flex; justify-content: space-between; align-items: center;">
           <span>{{ editMode ? '编辑模板' : '添加模板' }}</span>
@@ -169,6 +170,11 @@
 
         let editor = null;
 
+        /** 每次关闭编辑器后恢复普通弹窗，防止上次最大化状态粘滞到下次打开。 */
+        function resetDialogLayout() {
+          dialogFullscreen.value = false;
+        }
+
         async function loadData() {
           const res = await fetch('/api/index.php?module=template_html&method=getTemplateHtmlList', {
             method: 'POST',
@@ -194,16 +200,12 @@
 
         function openAddDialog() {
           Object.assign(form, { id: null, title: '', remark: '', html: '', imageUrl: '', enable: false });
+          resetDialogLayout();
           dialogVisible.value = true;
           editMode.value = false;
           nextTick(() => { if (editor) editor.setValue('', -1); });
         }
 
-        /*function editRow(row) {
-          Object.assign(form, { ...row, enable: row.enable == 1 });
-          dialogVisible.value = true;
-          editMode.value = true;
-        }*/
         function editRow(row) {
           // 先完整赋值 form
           Object.assign(form, {
@@ -216,6 +218,7 @@
           });
         
           editMode.value = true;
+          resetDialogLayout();
           dialogVisible.value = true;
         
           // ⭐ 关键：如果 editor 已存在，立刻同步
@@ -304,7 +307,7 @@
 
         return {
           list, page, limit, total, search,
-          dialogVisible, dialogFullscreen, editMode, form,
+          dialogVisible, dialogFullscreen, editMode, form, resetDialogLayout,
           previewDialogVisible, previewContent,
           loadData, resetSearch, pageChange, openAddDialog, editRow,
           previewHtml, handlePreview, submitForm, deleteRow

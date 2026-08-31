@@ -236,8 +236,8 @@
 	    </el-dialog>
 
 
-	    <!-- 添加弹窗对话框 -->
-	    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="1100px" top="4vh">
+	    <!-- 图片配置字段较多，桌面宽度收口为 960px，更窄视口由公共主题防溢出。 -->
+	    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="960px" top="4vh">
       <el-form :model="form" label-width="100px">
         <el-form-item label="类型">
           <el-select v-model="form.popup_type">
@@ -397,7 +397,7 @@
       </el-table>
     </el-dialog>
 
-    <el-dialog v-model="batchDialogVisible" title="批量修改弹窗" width="1100px" top="4vh">
+    <el-dialog v-model="batchDialogVisible" title="批量修改弹窗" width="960px" top="4vh">
         
 
       <el-form :model="batchForm" label-width="100px">
