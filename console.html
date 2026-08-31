@@ -1371,7 +1371,7 @@
 
 
   <script>
-    const { createApp, ref, reactive, onMounted, onBeforeUnmount, computed } = Vue;
+    const { createApp, ref, reactive, onMounted, onBeforeUnmount, computed, watch } = Vue;
 
     const app = createApp({
       setup() {
@@ -1382,8 +1382,16 @@
         const currentYear = new Date().getFullYear();
 
         const menuList = ref([]);
+        const openedTabsStorageKey = 'admin_opened_tabs_v2';
+        const activeMenuStorageKey = 'admin_active_menu_v2';
         // 首屏直接恢复上次菜单，避免先请求默认页、挂载后再请求目标页造成双重闪切。
-        const savedInitialMenu = localStorage.getItem('active_menu') || '';
+        let sessionInitialMenu = '';
+        try {
+          sessionInitialMenu = normalizeWorkspaceTabPath(sessionStorage.getItem(activeMenuStorageKey) || '');
+        } catch (error) {
+          // 浏览器禁用会话存储时继续使用旧版活动菜单兼容值。
+        }
+        const savedInitialMenu = sessionInitialMenu || normalizeWorkspaceTabPath(localStorage.getItem('active_menu') || '');
         const initialMenu = savedInitialMenu || config.defaultPage;
         const activeMenu = ref(initialMenu);
         // 主题等待器按书签隔离，一个页面的迟到事件不会干扰另一个页面。
@@ -1407,11 +1415,133 @@
           };
         }
 
-        const openedTabs = ref([
-          createWorkspaceTab(config.defaultPage, '工作台', false, initialMenu === config.defaultPage)
-        ]);
-        if (savedInitialMenu && savedInitialMenu !== config.defaultPage) {
-          openedTabs.value.push(createWorkspaceTab(savedInitialMenu, '业务页面', true, true));
+        /**
+         * 规范化可恢复的书签路径。持久层只接受同源业务相对路径，阻止损坏数据、
+         * 绝对地址和目录穿越值在刷新时被还原成 iframe 地址。
+         */
+        const MAX_PERSISTED_WORKSPACE_TABS = 50;
+
+        function normalizeWorkspaceTabPath(value) {
+          if (typeof value !== 'string') {
+            return '';
+          }
+          const path = value.trim();
+          let decodedPath = path;
+          try {
+            decodedPath = decodeURIComponent(path);
+          } catch (error) {
+            return '';
+          }
+          if (
+            !path ||
+            path.length > 255 ||
+            path.startsWith('/') ||
+            path.includes('://') ||
+            path.includes('\\') ||
+            path.includes('?') ||
+            path.includes('#') ||
+            path.split('/').includes('..') ||
+            decodedPath.startsWith('/') ||
+            decodedPath.includes('://') ||
+            decodedPath.includes('\\') ||
+            decodedPath.includes('?') ||
+            decodedPath.includes('#') ||
+            decodedPath.split(/[\\/]/).includes('..') ||
+            /[\u0000-\u001f\u007f]/.test(path) ||
+            /[\u0000-\u001f\u007f]/.test(decodedPath)
+          ) {
+            return '';
+          }
+          return path;
+        }
+
+        /**
+         * 从本地恢复有序书签路径。固定工作台由运行时创建，不写入存储；
+         * 损坏、重复或超量数据会被丢弃，最多恢复 50 个业务书签。
+         */
+        function readPersistedTabPaths() {
+          try {
+            const rawValue = sessionStorage.getItem(openedTabsStorageKey);
+            if (!rawValue) {
+              return [];
+            }
+            const parsedValue = JSON.parse(rawValue);
+            if (!Array.isArray(parsedValue)) {
+              sessionStorage.removeItem(openedTabsStorageKey);
+              return [];
+            }
+            const seenPaths = new Set([config.defaultPage]);
+            const restoredPaths = [];
+            for (const value of parsedValue) {
+              const path = normalizeWorkspaceTabPath(value);
+              if (!path || seenPaths.has(path)) {
+                continue;
+              }
+              seenPaths.add(path);
+              restoredPaths.push(path);
+              if (restoredPaths.length >= MAX_PERSISTED_WORKSPACE_TABS) {
+                break;
+              }
+            }
+            return restoredPaths;
+          } catch (error) {
+            try {
+              sessionStorage.removeItem(openedTabsStorageKey);
+            } catch (storageError) {
+              // 浏览器禁用本地存储时保持内存书签可用，不让持久化影响后台导航。
+            }
+            return [];
+          }
+        }
+
+        const initialTabPaths = [config.defaultPage, ...readPersistedTabPaths()];
+        if (savedInitialMenu && !initialTabPaths.includes(savedInitialMenu)) {
+          // 旧版只有 active_menu 时也必须保留当前页；超出容量时淘汰最旧的恢复项。
+          if (initialTabPaths.length > MAX_PERSISTED_WORKSPACE_TABS) {
+            initialTabPaths.splice(initialTabPaths.length - 1, 1);
+          }
+          initialTabPaths.push(savedInitialMenu);
+        }
+        const openedTabs = ref(initialTabPaths.map(path => createWorkspaceTab(
+          path,
+          path === config.defaultPage ? '工作台' : '业务页面',
+          path !== config.defaultPage,
+          path === initialMenu
+        )));
+
+        /** 仅持久化书签路径与顺序；iframe、标题、加载态和业务页面数据每次运行重新建立。 */
+        function persistOpenedTabPaths(paths) {
+          try {
+            const persistedPaths = [];
+            const seenPaths = new Set([config.defaultPage]);
+            for (const value of paths) {
+              const path = normalizeWorkspaceTabPath(value);
+              if (!path || seenPaths.has(path)) {
+                continue;
+              }
+              seenPaths.add(path);
+              persistedPaths.push(path);
+              if (persistedPaths.length >= MAX_PERSISTED_WORKSPACE_TABS) {
+                break;
+              }
+            }
+            sessionStorage.setItem(openedTabsStorageKey, JSON.stringify(persistedPaths));
+          } catch (error) {
+            // 配额、隐私模式等存储异常只影响下次恢复，不影响本次内存中的书签。
+          }
+        }
+
+        // 只观察路径结构；标题同步、iframe 加载状态和显式刷新不会产生无意义写入。
+        watch(
+          () => openedTabs.value.map(tab => tab.path),
+          paths => persistOpenedTabPaths(paths),
+          { flush: 'sync', immediate: true }
+        );
+        // 当前页也按浏览器 TAB 隔离保存；旧 localStorage 值继续作为升级兼容回退。
+        try {
+          sessionStorage.setItem(activeMenuStorageKey, initialMenu);
+        } catch (error) {
+          // 存储不可用时保留内存导航状态。
         }
         const activeTab = computed(() => (
           openedTabs.value.find(tab => tab.path === activeMenu.value) || null
@@ -1742,6 +1872,42 @@ function syncTabTitles() {
   openedTabs.value.forEach(tab => {
     tab.title = getMenuTitle(tab.path);
   });
+}
+
+/** 递归收集当前账号可见菜单路径，作为刷新恢复书签的权限与有效性事实源。 */
+function collectMenuPaths(items, paths = new Set()) {
+  if (!Array.isArray(items)) {
+    return paths;
+  }
+  items.forEach(item => {
+    const path = normalizeWorkspaceTabPath(item && item.path);
+    if (path) {
+      paths.add(path);
+    }
+    if (item && Array.isArray(item.menu)) {
+      collectMenuPaths(item.menu, paths);
+    }
+  });
+  return paths;
+}
+
+/**
+ * 菜单成功加载后剔除已删除、隐藏或当前账号不可见的恢复书签。
+ * 有效书签对象保持原引用，已挂载 iframe 不因菜单同步而重建。
+ */
+function reconcileOpenedTabsWithMenu(items) {
+  const allowedPaths = collectMenuPaths(items);
+  allowedPaths.add(config.defaultPage);
+  const invalidPaths = openedTabs.value
+    .filter(tab => !allowedPaths.has(tab.path))
+    .map(tab => tab.path);
+  if (!invalidPaths.length) {
+    return;
+  }
+  if (!allowedPaths.has(activeMenu.value)) {
+    handleMenuSelect(config.defaultPage);
+  }
+  invalidPaths.forEach(path => closeTab(path));
 }
 
 function switchTab(path) {
@@ -2116,6 +2282,13 @@ async function clearS3Config() {
         function handleMenuSelect(path) {
             if (!validateToken()) {
                 ElementPlus.ElMessage.warning('登录状态已失效，即将跳转到登录页...');
+                localStorage.removeItem('active_menu');
+                try {
+                  sessionStorage.removeItem(activeMenuStorageKey);
+                  sessionStorage.removeItem(openedTabsStorageKey);
+                } catch (error) {
+                  // 会话存储不可用时继续执行既有登录页跳转。
+                }
                 setTimeout(() => {
                 window.location.href = config.pagePath + "/" + config.loginPage + config.pageSuffix;
                 }, 3000);
@@ -2131,6 +2304,11 @@ async function clearS3Config() {
             activeMenu.value = path;
             // 切换已打开书签只改变可见性，不改 src、不重建 iframe，也不向子页派发刷新类事件。
             localStorage.setItem('active_menu', path);
+            try {
+              sessionStorage.setItem(activeMenuStorageKey, path);
+            } catch (error) {
+              // 浏览器禁用会话存储时仍保留旧版 localStorage 活动页兼容行为。
+            }
             mobileMenuVisible.value = false;
             if (isCollapse.value) {
                 defaultOpeneds.value = [];
@@ -2166,6 +2344,9 @@ async function clearS3Config() {
                   document.cookie = config.tokenKey + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
                   localStorage.removeItem(config.tokenKey);
                   localStorage.removeItem('adminInfo');
+                  localStorage.removeItem('active_menu');
+                  sessionStorage.removeItem(activeMenuStorageKey);
+                  sessionStorage.removeItem(openedTabsStorageKey);
 
                   // 跳转到登录页（自动拼接配置路径）
                   window.location.href = '/' + config.pagePath + config.loginPage + config.pageSuffix;
@@ -2280,6 +2461,7 @@ async function clearS3Config() {
             const json = await res.json();
             if (json.code === 200) {
               menuList.value = filterVisibleMenu(json.data);
+              reconcileOpenedTabsWithMenu(menuList.value);
               syncTabTitles();
               // 可选：加载第一个页面
               const firstPath = findFirstPath(menuList.value);

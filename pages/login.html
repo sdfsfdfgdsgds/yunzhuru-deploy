@@ -912,6 +912,14 @@
                 const token = json.data.admin_token;
                 localStorage.setItem(config.tokenKey, token);
                 localStorage.setItem('adminInfo', JSON.stringify(json.data));
+                // 登录主体可能已经切换，先清除上一账号的会话书签，避免恢复旧工作区。
+                localStorage.removeItem('active_menu');
+                try {
+                  sessionStorage.removeItem('admin_active_menu_v2');
+                  sessionStorage.removeItem('admin_opened_tabs_v2');
+                } catch (storageError) {
+                  // 浏览器禁用会话存储时仍可继续进入后台。
+                }
                 // 登录后进入唯一正式后台入口；历史 /console-v2.html 仅保留兼容跳转。
                 window.location.href = "/console.html";
               } else {
