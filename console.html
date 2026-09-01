@@ -911,7 +911,7 @@
                 class="shell-icon-button top-action-button refresh-btn"
                 type="button"
                 aria-label="刷新当前页面"
-                @click="refreshIframe"
+                @click.stop.prevent="refreshIframe"
                 @mouseenter="animateRefresh"
                 @mouseleave="animateRefresh"
               >
@@ -1342,6 +1342,86 @@
   </div>
   <script>
     const tokenKey = config.tokenKey;
+    const consoleWorkspaceOwnerStorageKey = 'admin_workspace_owner_v2';
+    let consoleWorkspaceOwnerFingerprint = '';
+    let consoleUnboundWorkspaceSnapshot = null;
+
+    /**
+     * 清理仅属于当前浏览器 TAB 的后台工作区快照。
+     * 登录主体变化时不得继续显示上一主体的菜单、书签或活动页。
+     */
+    function clearConsoleSessionWorkspace() {
+      try {
+        [
+          'admin_opened_tabs_v2',
+          'admin_active_menu_v2',
+          'admin_menu_snapshot_v2',
+          consoleWorkspaceOwnerStorageKey
+        ].forEach(key => sessionStorage.removeItem(key));
+      } catch (error) {
+        // 浏览器禁用会话存储时，鉴权跳转仍按原流程继续。
+      }
+      try {
+        // 旧版兼容值同样属于上一登录主体，避免清理后又被启动回退逻辑挂载。
+        localStorage.removeItem('active_menu');
+      } catch (error) {
+        // 本地存储异常不阻断鉴权跳转或新主体工作区初始化。
+      }
+    }
+
+    /**
+     * 生成仅用于相等判断的 64 位令牌指纹。会话存储不复制原始 token，
+     * 但可识别同源其它浏览器 TAB 中发生的账号或令牌切换。
+     */
+    function fingerprintConsoleWorkspaceOwner(token) {
+      const value = String(token || '');
+      let hashA = 0x811c9dc5;
+      let hashB = 0x9e3779b9;
+      for (let index = 0; index < value.length; index += 1) {
+        const code = value.charCodeAt(index);
+        hashA = Math.imul(hashA ^ code, 0x01000193) >>> 0;
+        hashB = Math.imul(hashB ^ (code + index), 0x85ebca6b) >>> 0;
+      }
+      return `v1:${value.length}:${hashA.toString(16).padStart(8, '0')}${hashB.toString(16).padStart(8, '0')}`;
+    }
+
+    /**
+     * 捕获升级前尚未绑定主体的书签元数据。数据只在当前页面内存中短暂保留，
+     * 必须等权威菜单返回并完成路径白名单校验后才可恢复和挂载。
+     */
+    function captureUnboundConsoleWorkspace() {
+      try {
+        const snapshot = {
+          openedTabs: sessionStorage.getItem('admin_opened_tabs_v2'),
+          activeMenu: sessionStorage.getItem('admin_active_menu_v2'),
+          legacyActiveMenu: localStorage.getItem('active_menu')
+        };
+        return Object.values(snapshot).some(value => value !== null && value !== '')
+          ? snapshot
+          : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /** 在读取任何菜单或书签快照前，将当前会话工作区绑定到登录主体。 */
+    function bindConsoleSessionWorkspaceOwner(token) {
+      consoleWorkspaceOwnerFingerprint = fingerprintConsoleWorkspaceOwner(token);
+      try {
+        const previousFingerprint = sessionStorage.getItem(consoleWorkspaceOwnerStorageKey) || '';
+        if (!previousFingerprint) {
+          consoleUnboundWorkspaceSnapshot = captureUnboundConsoleWorkspace();
+          if (consoleUnboundWorkspaceSnapshot) {
+            clearConsoleSessionWorkspace();
+          }
+        } else if (previousFingerprint !== consoleWorkspaceOwnerFingerprint) {
+          clearConsoleSessionWorkspace();
+        }
+        sessionStorage.setItem(consoleWorkspaceOwnerStorageKey, consoleWorkspaceOwnerFingerprint);
+      } catch (error) {
+        // 存储不可用时本轮仍使用权威接口，刷新恢复能力自然降级。
+      }
+    }
 
     // 获取 cookie 中的 token
     const cookieToken = document.cookie
@@ -1361,11 +1441,16 @@
 
     if (!cookieToken || !localToken) {
       // 缺任何一个直接跳登录
+      clearConsoleSessionWorkspace();
       const loginUrl = config.pagePath + config.loginPage + config.pageSuffix;
       window.location.href = loginUrl;
     } else if (cookieToken !== localToken) {
-      // 值不一致，更新 localStorage
+      // 登录主体或令牌发生变化时，先清理旧工作区，再同步新的令牌。
+      clearConsoleSessionWorkspace();
       localStorage.setItem(tokenKey, cookieToken);
+      bindConsoleSessionWorkspaceOwner(cookieToken);
+    } else {
+      bindConsoleSessionWorkspaceOwner(cookieToken);
     }
   </script>
 
@@ -1381,7 +1466,135 @@
         const appVersion = config.version || '2.0.0';
         const currentYear = new Date().getFullYear();
 
-        const menuList = ref([]);
+        const menuSnapshotStorageKey = 'admin_menu_snapshot_v2';
+        const MENU_SNAPSHOT_VERSION = 2;
+
+        /**
+         * 规范化权威菜单用于本轮运行。这里不施加快照容量上限，避免存储策略
+         * 裁剪数据库中的真实菜单；数量和深度限制只作用于 sessionStorage 副本。
+         */
+        function normalizeRuntimeMenu(items) {
+          if (!Array.isArray(items)) {
+            return [];
+          }
+          const normalizedItems = [];
+          for (const item of items) {
+            if (!item || typeof item !== 'object' || item.hidden === true) {
+              continue;
+            }
+            const id = String(item.id ?? '').trim();
+            const name = typeof item.name === 'string' ? item.name.trim() : '';
+            const rawPath = typeof item.path === 'string' ? item.path.trim() : '';
+            const path = rawPath ? normalizeWorkspaceTabPath(rawPath) : '';
+            const children = normalizeRuntimeMenu(item.menu);
+            if (!id || !name || (!path && !children.length)) {
+              continue;
+            }
+            normalizedItems.push({
+              id,
+              name,
+              icon: typeof item.icon === 'string' ? item.icon.trim() : '',
+              path,
+              hidden: false,
+              menu: children
+            });
+          }
+          return normalizedItems;
+        }
+
+        /**
+         * 将菜单接口或会话快照规范化为后台壳实际使用的最小字段。
+         * 快照不保存令牌、用户资料、业务查询参数或任何 iframe 页面状态。
+         */
+        function normalizeMenuSnapshot(items, depth = 0) {
+          if (!Array.isArray(items) || depth > 8) {
+            return [];
+          }
+          const normalizedItems = [];
+          for (const item of items.slice(0, 200)) {
+            if (!item || typeof item !== 'object' || item.hidden === true) {
+              continue;
+            }
+            const id = String(item.id ?? '').trim().slice(0, 80);
+            const name = typeof item.name === 'string' ? item.name.trim().slice(0, 120) : '';
+            const rawPath = typeof item.path === 'string' ? item.path.trim().slice(0, 255) : '';
+            const path = rawPath ? normalizeWorkspaceTabPath(rawPath) : '';
+            const children = normalizeMenuSnapshot(item.menu, depth + 1);
+            if (!id || !name || (!path && !children.length)) {
+              continue;
+            }
+            normalizedItems.push({
+              id,
+              name,
+              icon: typeof item.icon === 'string' ? item.icon.trim().slice(0, 80) : '',
+              path,
+              hidden: false,
+              menu: children
+            });
+          }
+          return normalizedItems;
+        }
+
+        /** 同步读取已校验菜单快照，使浏览器整页刷新首帧不再经历空侧栏。 */
+        function readMenuSnapshot() {
+          try {
+            const rawValue = sessionStorage.getItem(menuSnapshotStorageKey);
+            if (!rawValue) {
+              return [];
+            }
+            const parsedValue = JSON.parse(rawValue);
+            if (
+              !parsedValue ||
+              typeof parsedValue !== 'object' ||
+              parsedValue.version !== MENU_SNAPSHOT_VERSION ||
+              parsedValue.appVersion !== appVersion ||
+              parsedValue.ownerFingerprint !== consoleWorkspaceOwnerFingerprint ||
+              !Array.isArray(parsedValue.menu)
+            ) {
+              sessionStorage.removeItem(menuSnapshotStorageKey);
+              return [];
+            }
+            const normalizedMenu = normalizeMenuSnapshot(parsedValue.menu);
+            if (!normalizedMenu.length) {
+              sessionStorage.removeItem(menuSnapshotStorageKey);
+            }
+            return normalizedMenu;
+          } catch (error) {
+            try {
+              sessionStorage.removeItem(menuSnapshotStorageKey);
+            } catch (storageError) {
+              // 存储不可用时回退动态菜单接口，保持导航功能可用。
+            }
+            return [];
+          }
+        }
+
+        /** 将当前账号已通过菜单接口校验的可见菜单写入当前浏览器 TAB。 */
+        function persistMenuSnapshot(items) {
+          try {
+            const normalizedMenu = normalizeMenuSnapshot(items);
+            if (!normalizedMenu.length) {
+              sessionStorage.removeItem(menuSnapshotStorageKey);
+              return;
+            }
+            sessionStorage.setItem(menuSnapshotStorageKey, JSON.stringify({
+              version: MENU_SNAPSHOT_VERSION,
+              appVersion,
+              ownerFingerprint: consoleWorkspaceOwnerFingerprint,
+              menu: normalizedMenu
+            }));
+          } catch (error) {
+            // 配额、隐私模式等异常只影响刷新首帧，不影响本次菜单使用。
+          }
+        }
+
+        /** 菜单内容一致时保持原数组引用，避免后台校验造成侧栏二次替换。 */
+        function sameMenuSnapshot(currentItems, nextItems) {
+          return JSON.stringify(normalizeRuntimeMenu(currentItems))
+            === JSON.stringify(normalizeRuntimeMenu(nextItems));
+        }
+
+        const menuList = ref(readMenuSnapshot());
         const openedTabsStorageKey = 'admin_opened_tabs_v2';
         const activeMenuStorageKey = 'admin_active_menu_v2';
         // 首屏直接恢复上次菜单，避免先请求默认页、挂载后再请求目标页造成双重闪切。
@@ -1506,8 +1719,10 @@
           path,
           path === config.defaultPage ? '工作台' : '业务页面',
           path !== config.defaultPage,
-          path === initialMenu
+          !consoleUnboundWorkspaceSnapshot && path === initialMenu
         )));
+        // 菜单快照存在时首帧直接使用真实标题，不等待后台菜单校验完成。
+        syncTabTitles();
 
         /** 仅持久化书签路径与顺序；iframe、标题、加载态和业务页面数据每次运行重新建立。 */
         function persistOpenedTabPaths(paths) {
@@ -1892,6 +2107,81 @@ function collectMenuPaths(items, paths = new Set()) {
 }
 
 /**
+ * 将升级前未绑定主体的书签延迟到权威菜单返回后恢复。
+ * 只有当前账号仍可见的路径会进入运行时；校验前不挂载任何旧业务 iframe。
+ */
+function restoreUnboundWorkspaceWithMenu(items) {
+  const snapshot = consoleUnboundWorkspaceSnapshot;
+  if (!snapshot) {
+    return false;
+  }
+  consoleUnboundWorkspaceSnapshot = null;
+
+  const allowedPaths = collectMenuPaths(items);
+  allowedPaths.add(config.defaultPage);
+  const restoredPaths = [config.defaultPage];
+  const seenPaths = new Set(restoredPaths);
+  const appendAllowedPath = value => {
+    const path = normalizeWorkspaceTabPath(value);
+    if (
+      !path ||
+      seenPaths.has(path) ||
+      !allowedPaths.has(path) ||
+      restoredPaths.length > MAX_PERSISTED_WORKSPACE_TABS
+    ) {
+      return;
+    }
+    seenPaths.add(path);
+    restoredPaths.push(path);
+  };
+
+  try {
+    const parsedPaths = JSON.parse(snapshot.openedTabs || '[]');
+    if (Array.isArray(parsedPaths)) {
+      parsedPaths.forEach(appendAllowedPath);
+    }
+  } catch (error) {
+    // 损坏的旧书签集合不参与迁移，活动页仍会单独经过白名单校验。
+  }
+
+  const savedActivePath = normalizeWorkspaceTabPath(
+    snapshot.activeMenu || snapshot.legacyActiveMenu || ''
+  );
+  if (savedActivePath && allowedPaths.has(savedActivePath)) {
+    if (!seenPaths.has(savedActivePath) && restoredPaths.length > MAX_PERSISTED_WORKSPACE_TABS) {
+      const removedPath = restoredPaths.splice(1, 1)[0];
+      seenPaths.delete(removedPath);
+    }
+    appendAllowedPath(savedActivePath);
+  }
+  const nextActivePath = savedActivePath && seenPaths.has(savedActivePath)
+    ? savedActivePath
+    : config.defaultPage;
+
+  const existingTabs = new Map(openedTabs.value.map(tab => [tab.path, tab]));
+  openedTabs.value = restoredPaths.map(path => {
+    const existingTab = existingTabs.get(path);
+    if (existingTab) {
+      existingTab.title = getMenuTitle(path);
+      existingTab.closable = path !== config.defaultPage;
+      return existingTab;
+    }
+    return createWorkspaceTab(path, getMenuTitle(path), path !== config.defaultPage);
+  });
+  activeMenu.value = nextActivePath;
+  const nextActiveTab = openedTabs.value.find(tab => tab.path === nextActivePath);
+  mountTabFrame(nextActiveTab);
+
+  localStorage.setItem('active_menu', nextActivePath);
+  try {
+    sessionStorage.setItem(activeMenuStorageKey, nextActivePath);
+  } catch (error) {
+    // 会话存储不可用时，本轮已校验的内存工作区仍可继续使用。
+  }
+  return true;
+}
+
+/**
  * 菜单成功加载后剔除已删除、隐藏或当前账号不可见的恢复书签。
  * 有效书签对象保持原引用，已挂载 iframe 不因菜单同步而重建。
  */
@@ -2074,6 +2364,11 @@ function handleIframeLoaded(event, tab) {
     if (!frameDocument || !frameDocument.documentElement) {
       revealFrame();
       return;
+    }
+
+    // 焦点位于同源业务页时，普通刷新快捷键仍交给父壳刷新当前书签。
+    if (frameElement.contentWindow) {
+      frameElement.contentWindow.addEventListener('keydown', handleRefreshShortcut, true);
     }
 
     // 从当前文档 load 开始计时；主题失败时也会在有界时间内恢复页面操作。
@@ -2283,12 +2578,7 @@ async function clearS3Config() {
             if (!validateToken()) {
                 ElementPlus.ElMessage.warning('登录状态已失效，即将跳转到登录页...');
                 localStorage.removeItem('active_menu');
-                try {
-                  sessionStorage.removeItem(activeMenuStorageKey);
-                  sessionStorage.removeItem(openedTabsStorageKey);
-                } catch (error) {
-                  // 会话存储不可用时继续执行既有登录页跳转。
-                }
+                clearConsoleSessionWorkspace();
                 setTimeout(() => {
                 window.location.href = config.pagePath + "/" + config.loginPage + config.pageSuffix;
                 }, 3000);
@@ -2327,6 +2617,33 @@ async function clearS3Config() {
           url.searchParams.set('_t', Date.now());
           tab.src = url.pathname.replace(/^\//, '') + url.search + url.hash;
         }
+
+        /**
+         * 将普通刷新快捷键映射到当前书签。带 Shift 的硬刷新继续交给浏览器，
+         * 便于需要时完整重建后台外壳并重新校验所有启动资源。
+         */
+        function handleRefreshShortcut(event) {
+          if (!event || event.defaultPrevented || event.repeat) {
+            return;
+          }
+          const key = String(event.key || '').toLowerCase();
+          const plainF5 = key === 'f5'
+            && !event.metaKey
+            && !event.ctrlKey
+            && !event.altKey
+            && !event.shiftKey;
+          const commandRefresh = key === 'r'
+            && (event.metaKey || event.ctrlKey)
+            && !event.altKey
+            && !event.shiftKey;
+          if (!plainF5 && !commandRefresh) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          refreshIframe();
+        }
+
         function goHome() {
             handleMenuSelect(config.defaultPage);
         }
@@ -2345,8 +2662,7 @@ async function clearS3Config() {
                   localStorage.removeItem(config.tokenKey);
                   localStorage.removeItem('adminInfo');
                   localStorage.removeItem('active_menu');
-                  sessionStorage.removeItem(activeMenuStorageKey);
-                  sessionStorage.removeItem(openedTabsStorageKey);
+                  clearConsoleSessionWorkspace();
 
                   // 跳转到登录页（自动拼接配置路径）
                   window.location.href = '/' + config.pagePath + config.loginPage + config.pageSuffix;
@@ -2370,19 +2686,62 @@ async function clearS3Config() {
                 ?.split('=')[1] || '';
 
             if (!cookieToken || !localToken) {
+                clearConsoleSessionWorkspace();
                 return false;
             }
 
             if (cookieToken !== localToken) {
+                clearConsoleSessionWorkspace();
                 localStorage.setItem(tokenKey, cookieToken);
+                bindConsoleSessionWorkspaceOwner(cookieToken);
+                window.location.reload();
+                return false;
             }
 
             return true;
         }
+
+        /**
+         * 同源其它浏览器 TAB 切换账号或退出时，当前页立即丢弃旧工作区并重启鉴权。
+         * 账号切换属于外壳边界变化，不沿用普通业务书签刷新合同。
+         */
+        function handleAuthenticationStorageChange(event) {
+          if (!event || event.storageArea !== localStorage || event.key !== config.tokenKey) {
+            return;
+          }
+          const nextFingerprint = fingerprintConsoleWorkspaceOwner(event.newValue || '');
+          if (nextFingerprint === consoleWorkspaceOwnerFingerprint) {
+            return;
+          }
+          clearConsoleSessionWorkspace();
+          const currentCookieToken = document.cookie
+            .split('; ')
+            .find(row => row.startsWith(config.tokenKey + '='))
+            ?.split('=')[1] || '';
+          if (event.newValue && currentCookieToken === event.newValue) {
+            window.location.reload();
+          } else {
+            window.location.replace(config.pagePath + config.loginPage + config.pageSuffix);
+          }
+        }
+
+        /** 菜单权威接口确认鉴权失效后，清理所有旧主体状态并进入登录页。 */
+        function handleMenuAuthenticationFailure() {
+          menuList.value = [];
+          clearConsoleSessionWorkspace();
+          document.cookie = config.tokenKey + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
+          localStorage.removeItem(config.tokenKey);
+          localStorage.removeItem('adminInfo');
+          window.location.replace(config.pagePath + config.loginPage + config.pageSuffix);
+        }
+
         // 过滤 hidden 菜单
         function filterVisibleMenu(menu) {
+          if (!Array.isArray(menu)) {
+            return [];
+          }
           return menu
-            .filter(item => item.hidden !== true)
+            .filter(item => item && typeof item === 'object' && item.hidden !== true)
             .map(item => ({
               ...item,
               menu: item.menu ? filterVisibleMenu(item.menu) : []
@@ -2457,10 +2816,56 @@ async function clearS3Config() {
 
         async function loadMenu() {
           try {
+            const requestOwnerFingerprint = consoleWorkspaceOwnerFingerprint;
             const res = await fetch('/api/?module=menu&method=getMenu');
             const json = await res.json();
-            if (json.code === 200) {
-              menuList.value = filterVisibleMenu(json.data);
+            const currentCookieToken = document.cookie
+              .split('; ')
+              .find(row => row.startsWith(config.tokenKey + '='))
+              ?.split('=')[1] || '';
+            const currentLocalToken = localStorage.getItem(config.tokenKey) || '';
+            const responseCode = Number(json && json.code);
+            const authenticationFailed = res.status === 401
+              || res.status === 403
+              || responseCode === 401
+              || responseCode === 403;
+            const localOwnerFingerprint = fingerprintConsoleWorkspaceOwner(currentLocalToken);
+            const cookieOwnerFingerprint = fingerprintConsoleWorkspaceOwner(currentCookieToken);
+            const responseOwnerStateMatches = requestOwnerFingerprint
+              && requestOwnerFingerprint === consoleWorkspaceOwnerFingerprint
+              && localOwnerFingerprint === requestOwnerFingerprint;
+            const responseCookieStateMatches = cookieOwnerFingerprint === requestOwnerFingerprint
+              || (authenticationFailed && !currentCookieToken);
+            if (!responseOwnerStateMatches || !responseCookieStateMatches) {
+              // 旧主体的 401 可能已通过 Set-Cookie 清空新主体 Cookie；此时用当前
+              // localStorage token 恢复 Cookie 并重启，以免迟到响应把新登录一起带下线。
+              if (
+                authenticationFailed
+                && currentLocalToken
+                && localOwnerFingerprint !== requestOwnerFingerprint
+                && !currentCookieToken
+              ) {
+                clearConsoleSessionWorkspace();
+                document.cookie = `${config.tokenKey}=${currentLocalToken}; max-age=2592000; path=/; SameSite=Lax`;
+                window.location.reload();
+              }
+              return;
+            }
+            if (authenticationFailed) {
+              handleMenuAuthenticationFailure();
+              return;
+            }
+            if (!res.ok) {
+              throw new Error(`菜单接口响应异常：HTTP ${res.status}`);
+            }
+            if (responseCode === 200) {
+              const nextMenu = normalizeRuntimeMenu(filterVisibleMenu(json.data));
+              // 刷新后的后台校验若内容一致，保留菜单数组与节点，不制造侧栏二次加载。
+              if (!sameMenuSnapshot(menuList.value, nextMenu)) {
+                menuList.value = nextMenu;
+              }
+              restoreUnboundWorkspaceWithMenu(menuList.value);
+              persistMenuSnapshot(nextMenu);
               reconcileOpenedTabsWithMenu(menuList.value);
               syncTabTitles();
               // 可选：加载第一个页面
@@ -2470,9 +2875,13 @@ async function clearS3Config() {
               } */
 
               updateViewport();
+              return;
             }
+            throw new Error(`菜单接口业务异常：code=${responseCode || 'unknown'}`);
           } catch (e) {
             console.error('菜单加载失败：', e);
+            // 升级迁移遇到网络异常时只启用固定工作台，不挂载未经校验的旧业务页。
+            restoreUnboundWorkspaceWithMenu([]);
           }
         }
 
@@ -2494,6 +2903,8 @@ async function clearS3Config() {
         onMounted(() => {
           updateViewport();
           window.addEventListener('resize', updateViewport);
+          window.addEventListener('keydown', handleRefreshShortcut, true);
+          window.addEventListener('storage', handleAuthenticationStorageChange);
           loadMenu();
           loadAdminInfo();
           loadUnreadCount();
@@ -2542,6 +2953,8 @@ async function clearS3Config() {
 
         onBeforeUnmount(() => {
           window.removeEventListener('resize', updateViewport);
+          window.removeEventListener('keydown', handleRefreshShortcut, true);
+          window.removeEventListener('storage', handleAuthenticationStorageChange);
           [...iframeThemeCleanups.keys()].forEach(clearIframeThemeWait);
           if (unreadTimer) {
             window.clearInterval(unreadTimer);
