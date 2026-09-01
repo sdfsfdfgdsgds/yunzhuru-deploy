@@ -5748,7 +5748,12 @@ function getInjectTaskList(PDO $pdo, array $input)
             t.*, 
             a.name AS apk_name, a.version AS apk_version, a.package AS apk_package,
             tpl.name AS template_name, tpl.version AS template_version,
-            s.name AS sign_name, s.alias AS sign_alias
+            CASE
+                WHEN COALESCE(t.sign_id, 0) = 0 THEN '随机签名'
+                WHEN s.id IS NULL THEN '证书已删除'
+                ELSE s.name
+            END AS sign_name,
+            s.alias AS sign_alias
         FROM cainiao_inject_task t
         LEFT JOIN cainiao_apk a ON t.apk_id = a.id
         LEFT JOIN cainiao_template tpl ON t.template_id = tpl.id

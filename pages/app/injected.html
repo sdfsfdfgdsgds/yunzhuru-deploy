@@ -190,7 +190,14 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="签名" prop="sign_name"></el-table-column>
+      <el-table-column label="签名" min-width="110">
+        <template #default="scope">
+          <el-tag v-if="Number(scope.row.sign_id) === 0" size="small" effect="plain" type="info">
+            {{ signatureLabel(scope.row) }}
+          </el-tag>
+          <span v-else>{{ signatureLabel(scope.row) }}</span>
+        </template>
+      </el-table-column>
       <el-table-column label="大小" prop="size" :formatter="formatSize" width="90"></el-table-column>
       <el-table-column label="时间"  width="230">
         <template #default="scope">
@@ -1239,6 +1246,17 @@
           const sizeInMB = row.size / 1024 / 1024;
           return sizeInMB.toFixed(2) + ' MB';
         }
+        /**
+         * 注入任务的随机签名使用任务级临时证书，数据库以 sign_id=0 表示，
+         * 因此没有可关联的证书名称；列表统一显示明确标签而不是空单元格。
+         */
+        function signatureLabel(row) {
+          const signName = String((row && row.sign_name) || '').trim();
+          if (signName) {
+            return signName;
+          }
+          return Number(row && row.sign_id) === 0 ? '随机签名' : '证书已删除';
+        }
         async function loadData() {
           const res = await fetch('/api/index.php?module=app&method=getInjectTaskList', {
             method: 'POST',
@@ -1656,6 +1674,7 @@ async function confirmLanzouUpload() {
           infoText,
           showStatusInfo,
           formatSize,
+          signatureLabel,
           // 新增上传蓝奏相关
           debugrunTask,
           lanzouDialogVisible,

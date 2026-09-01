@@ -560,30 +560,37 @@
     }
 
     .close-other-tabs {
+      --el-button-text-color: #334155;
+      --el-button-outline-color: #a6c8fb;
+      --el-fill-color-light: #f8fafc;
       display: inline-flex;
       flex: 0 0 auto;
       align-items: center;
       justify-content: center;
-      height: 28px;
-      margin-left: 7px;
-      padding: 0 6px;
-      color: #86909c;
-      font-size: 12px;
+      min-width: 86px;
+      height: 32px;
+      margin-left: 6px;
+      padding: 8px 15px;
+      color: #334155;
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1;
       white-space: nowrap;
       background: transparent;
       border: 0;
-      border-radius: 8px 8px 0 0;
+      border-radius: 8px;
       cursor: pointer;
+      transition: all 0.1s;
     }
 
     .close-other-tabs:hover {
-      color: var(--admin-primary-dark);
-      background: #f1f6ff;
+      color: #334155;
+      background: #f8fafc;
     }
 
     .close-other-tabs:focus-visible {
-      outline: 2px solid rgb(59 130 246 / 35%);
-      outline-offset: -2px;
+      outline: 2px solid #a6c8fb;
+      outline-offset: 1px;
     }
 
     .content-stage {
@@ -999,14 +1006,15 @@
               <el-icon><close></close></el-icon>
             </span>
           </button>
-          <button
+          <el-button
             v-if="openedTabs.length > 1"
             class="close-other-tabs"
-            type="button"
+            text
+            native-type="button"
             aria-label="关闭其他页面标签"
             title="保留工作台和当前页面"
             @click="closeOtherTabs"
-          >关闭其他</button>
+          >关闭其他</el-button>
         </nav>
 
         <main class="content-stage">
@@ -1773,7 +1781,11 @@
           new_password: '',
           confirm_password: ''
         });
-        const defaultOpeneds = ref([]);
+        // 菜单快照和当前书签都在 setup 首帧同步恢复。直接把活动页祖先交给
+        // Element Plus，避免组件先按全关闭状态挂载，再自动展开活动子项父级。
+        const defaultOpeneds = ref(
+          findMenuAncestorIds(menuList.value, activeMenu.value) || []
+        );
         const showMenuTip = ref(false);
 
 
@@ -2023,6 +2035,29 @@ function updateViewport() {
   if (!isMobileViewport.value) {
     mobileMenuVisible.value = false;
   }
+}
+
+/**
+ * 返回目标页面的全部父菜单 ID，用于首帧初始化 Element Plus 子菜单。
+ * `null` 表示菜单中不存在目标路径；顶层页面命中时返回空数组。
+ */
+function findMenuAncestorIds(menu, path, ancestors = []) {
+  for (const item of menu) {
+    if (item.path === path) {
+      return ancestors;
+    }
+    const children = Array.isArray(item.menu) ? item.menu : [];
+    if (!children.length) {
+      continue;
+    }
+    const itemId = String(item.id ?? '').trim();
+    const nextAncestors = itemId ? [...ancestors, itemId] : ancestors;
+    const matchedAncestors = findMenuAncestorIds(children, path, nextAncestors);
+    if (matchedAncestors !== null) {
+      return matchedAncestors;
+    }
+  }
+  return null;
 }
 
 /**
