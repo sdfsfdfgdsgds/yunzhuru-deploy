@@ -144,10 +144,7 @@
     .static-api-evidence {
       margin-top: 12px;
     }
-    /*
-     * 表格宽度由这一层统一管理。Element Plus 弹层锁定 body 时，脚本会临时写入
-     * 打开弹层前的像素宽度，从列表侧阻断自动列重排；弹层关闭后恢复响应式宽度。
-     */
+    /* 表格与分页共用同一响应式布局边界；弹层期根宽度统一由公共稳定器管理。 */
     .app-list-layout-frame {
       box-sizing: border-box;
       width: 100%;
@@ -240,10 +237,7 @@
     </div>
     
     <!-- 表格 -->
-    <div
-      ref="appListLayoutRef"
-      class="app-list-layout-frame"
-      :style="appListLockedWidth ? { width: appListLockedWidth } : null">
+    <div class="app-list-layout-frame">
     <el-table :data="tableData" border>
       <el-table-column label="ID" prop="id" width="60"></el-table-column>
       <el-table-column label="UID" prop="user_id" width="60"></el-table-column>
@@ -1038,7 +1032,7 @@
   </div>
 
   <script>
-    const { createApp, ref, reactive, watch, onMounted, onBeforeUnmount, nextTick } = Vue;
+    const { createApp, ref, reactive, watch, onMounted, nextTick } = Vue;
 
     createApp({
       components: {
@@ -1061,144 +1055,6 @@
         const tableData = ref([]);
         const total = ref(0);
         const fileInput = ref(null);
-        const appListLayoutRef = ref(null);
-        const appListLockedWidth = ref('');
-        let appListLastUnlockedWidth = 0;
-        let appListBodyObserver = null;
-        let appListResizeObserver = null;
-        let appListUnlockTimer = 0;
-        let appListUnlockFrame = 0;
-        let appListMeasureFrame = 0;
-        let appListStabilizerDisposed = false;
-        const APP_LIST_UNLOCK_SETTLE_MS = 120;
-
-        /** 判断 Element Plus 的对话框、确认框或全屏加载是否正在锁定 body。 */
-        function isAppListPopupLocked() {
-          const classList = document.body.classList;
-          return classList.contains('el-popup-parent--hidden')
-            || classList.contains('el-loading-parent--hidden')
-            || classList.contains('el-tour-parent--hidden');
-        }
-
-        /**
-         * 记录无弹层时列表容器的真实宽度，作为下一次弹层期间的稳定几何基线。
-         * 只记录正数，避免书签隐藏或初次布局尚未完成时覆盖有效值。
-         */
-        function rememberAppListUnlockedWidth() {
-          if (appListStabilizerDisposed || isAppListPopupLocked() || appListLockedWidth.value) return;
-          const frame = appListLayoutRef.value;
-          if (!frame) return;
-          const width = frame.getBoundingClientRect().width;
-          if (Number.isFinite(width) && width > 0) appListLastUnlockedWidth = width;
-        }
-
-        /** 取消待执行的宽度释放，连续弹层开启时继续使用同一基准。 */
-        function cancelAppListPendingUnlock() {
-          if (appListUnlockTimer) {
-            window.clearTimeout(appListUnlockTimer);
-            appListUnlockTimer = 0;
-          }
-          if (appListUnlockFrame) {
-            window.cancelAnimationFrame(appListUnlockFrame);
-            appListUnlockFrame = 0;
-          }
-        }
-
-        /** 以最近一次未锁屏宽度锁定应用列表外层。 */
-        function lockAppListLayoutWidth() {
-          cancelAppListPendingUnlock();
-          const frame = appListLayoutRef.value;
-          if (!frame) return;
-          if (!(appListLastUnlockedWidth > 0)) {
-            const fallbackWidth = frame.getBoundingClientRect().width;
-            if (Number.isFinite(fallbackWidth) && fallbackWidth > 0) {
-              appListLastUnlockedWidth = fallbackWidth;
-            }
-          }
-          if (appListLastUnlockedWidth > 0) {
-            appListLockedWidth.value = `${appListLastUnlockedWidth}px`;
-          }
-        }
-
-        /**
-         * 延迟释放宽度，覆盖删除流程中第一层关闭、80ms 后打开第二层的空档。
-         * 只有 body 持续解锁后才恢复响应式宽度并重新记录基准。
-         */
-        function scheduleAppListLayoutRelease() {
-          cancelAppListPendingUnlock();
-          appListUnlockTimer = window.setTimeout(() => {
-            appListUnlockTimer = 0;
-            appListUnlockFrame = window.requestAnimationFrame(async () => {
-              appListUnlockFrame = 0;
-              if (appListStabilizerDisposed || isAppListPopupLocked()) return;
-              appListLockedWidth.value = '';
-              await nextTick();
-              if (appListMeasureFrame) window.cancelAnimationFrame(appListMeasureFrame);
-              appListMeasureFrame = window.requestAnimationFrame(() => {
-                appListMeasureFrame = 0;
-                rememberAppListUnlockedWidth();
-              });
-            });
-          }, APP_LIST_UNLOCK_SETTLE_MS);
-        }
-
-        /**
-         * 任意确认框或普通弹窗打开时锁住列表宽度；全部关闭后释放像素宽度，
-         * 由正常响应式布局重新接管。这样所有按钮共享同一列表侧合同。
-         */
-        function syncAppListPopupLayout() {
-          if (isAppListPopupLocked()) {
-            lockAppListLayoutWidth();
-            return;
-          }
-          scheduleAppListLayoutRelease();
-        }
-
-        /** 视口变化只在未锁屏时更新自然宽度，弹层期间保持打开前几何状态。 */
-        function handleAppListViewportResize() {
-          if (appListStabilizerDisposed || isAppListPopupLocked()) return;
-          if (appListMeasureFrame) window.cancelAnimationFrame(appListMeasureFrame);
-          appListMeasureFrame = window.requestAnimationFrame(() => {
-            appListMeasureFrame = 0;
-            rememberAppListUnlockedWidth();
-          });
-        }
-
-        /** 建立列表宽度基线、body 弹层状态和正常窗口缩放三条同步链路。 */
-        async function startAppListLayoutStabilizer() {
-          await nextTick();
-          const frame = appListLayoutRef.value;
-          if (!frame || appListStabilizerDisposed) return;
-          rememberAppListUnlockedWidth();
-          appListBodyObserver = new MutationObserver(syncAppListPopupLayout);
-          appListBodyObserver.observe(document.body, {
-            attributes: true,
-            attributeFilter: ['class'],
-          });
-          if (typeof ResizeObserver === 'function') {
-            appListResizeObserver = new ResizeObserver(rememberAppListUnlockedWidth);
-            appListResizeObserver.observe(frame);
-          }
-          window.addEventListener('resize', handleAppListViewportResize, { passive: true });
-          syncAppListPopupLayout();
-        }
-
-        /** 页面销毁时清理观察器与监听，避免保活书签关闭后残留引用。 */
-        function stopAppListLayoutStabilizer() {
-          appListStabilizerDisposed = true;
-          cancelAppListPendingUnlock();
-          if (appListMeasureFrame) {
-            window.cancelAnimationFrame(appListMeasureFrame);
-            appListMeasureFrame = 0;
-          }
-          if (appListBodyObserver) appListBodyObserver.disconnect();
-          if (appListResizeObserver) appListResizeObserver.disconnect();
-          appListBodyObserver = null;
-          appListResizeObserver = null;
-          window.removeEventListener('resize', handleAppListViewportResize);
-          appListLockedWidth.value = '';
-        }
-
         // 固定桶快照只消费后端明确返回的公开字段，避免用当前桶配置改写历史制品事实。
         const STATIC_BUCKET_STATE = Object.freeze({
           verified: { label: '已核验', type: 'success', alert: 'success' },
@@ -2708,21 +2564,17 @@ async function handleFileChange(event) {
 }
 
 onMounted(() => {
-  startAppListLayoutStabilizer();
   loadData();
   checkAdmin().then(() => {
     if (isAdmin.value) loadUrlInjectData();
   });
 });
-onBeforeUnmount(stopAppListLayoutStabilizer);
 
         return {
           query,
           tableData,
           total,
           fileInput,
-          appListLayoutRef,
-          appListLockedWidth,
           loadData,
           resetForm,
           handlePageChange,

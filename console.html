@@ -1617,6 +1617,10 @@
         const activeMenu = ref(initialMenu);
         // 主题等待器按书签隔离，一个页面的迟到事件不会干扰另一个页面。
         const iframeThemeCleanups = new Map();
+        // 两个公共资源使用同一版本标识，确保旧书签刷新后同步拿到稳定宽度合同。
+        const ADMIN_FRAME_ASSET_VERSION = '20260902-1';
+        const adminThemeUrl = `/element/css/admin-theme-v2.css?v=${ADMIN_FRAME_ASSET_VERSION}`;
+        const adminScrollLockUrl = `/element/js/admin-scroll-lock-stabilizer.js?v=${ADMIN_FRAME_ASSET_VERSION}`;
         const isMobileViewport = ref(window.innerWidth <= 900);
         const mobileMenuVisible = ref(false);
 
@@ -2316,8 +2320,13 @@ function handleIframeLoaded(event, tab) {
   let revealRequested = false;
   let fallbackTimer = null;
   let themeLink = null;
+  let stabilizerScript = null;
   let handleThemeLoaded = null;
   let handleThemeFailed = null;
+  let handleStabilizerLoaded = null;
+  let handleStabilizerFailed = null;
+  let themeReady = false;
+  let stabilizerReady = false;
 
   /** 清理当前主题等待器，避免旧文档的事件与计时器残留。 */
   const cleanupThemeWait = () => {
@@ -2329,8 +2338,19 @@ function handleIframeLoaded(event, tab) {
       themeLink.removeEventListener('load', handleThemeLoaded);
       themeLink.removeEventListener('error', handleThemeFailed);
     }
+    if (stabilizerScript && handleStabilizerLoaded && handleStabilizerFailed) {
+      stabilizerScript.removeEventListener('load', handleStabilizerLoaded);
+      stabilizerScript.removeEventListener('error', handleStabilizerFailed);
+    }
     if (iframeThemeCleanups.get(tab.path) === cleanupThemeWait) {
       iframeThemeCleanups.delete(tab.path);
+    }
+  };
+
+  /** 主题和滚动锁稳定器均就绪后再显示子页，避免首次弹层落在资源加载空档。 */
+  const revealWhenFrameAssetsReady = () => {
+    if (themeReady && stabilizerReady) {
+      revealFrame();
     }
   };
   iframeThemeCleanups.set(tab.path, cleanupThemeWait);
@@ -2367,14 +2387,57 @@ function handleIframeLoaded(event, tab) {
     }
   };
 
+  /**
+   * 资源总等待超时时，已成功解析的主题继续保留；
+   * 只有主题本身尚未就绪才移除 link，避免稳定器单独延迟导致页面退回旧视觉。
+   */
+  const revealAfterAssetTimeout = () => {
+    if (themeReady) {
+      revealFrame();
+      return;
+    }
+    revealWithoutTheme();
+  };
+
   /** load 事件是动态 link 完成的权威信号，同时留下可复用的已就绪标记。 */
   handleThemeLoaded = () => {
     if (themeLink) {
       themeLink.dataset.adminThemeLoaded = 'true';
     }
-    revealFrame();
+    themeReady = true;
+    const frameWindow = frameElement && frameElement.contentWindow;
+    if (
+      frameWindow
+      && frameWindow.AdminScrollLockStabilizer
+      && frameWindow.AdminScrollLockStabilizer.assetVersion === ADMIN_FRAME_ASSET_VERSION
+    ) {
+      frameWindow.AdminScrollLockStabilizer.refresh();
+    }
+    revealWhenFrameAssetsReady();
   };
   handleThemeFailed = revealWithoutTheme;
+
+  /** 稳定器加载后主动重测根滚动条，此时公共主题可能已经改变其厚度。 */
+  handleStabilizerLoaded = () => {
+    if (stabilizerScript) {
+      stabilizerScript.dataset.adminScrollLockLoaded = 'true';
+    }
+    stabilizerReady = true;
+    const frameWindow = frameElement && frameElement.contentWindow;
+    if (
+      frameWindow
+      && frameWindow.AdminScrollLockStabilizer
+      && frameWindow.AdminScrollLockStabilizer.assetVersion === ADMIN_FRAME_ASSET_VERSION
+    ) {
+      frameWindow.AdminScrollLockStabilizer.refresh();
+    }
+    revealWhenFrameAssetsReady();
+  };
+  // 资源异常时仅降级本轮宽度稳定，不阻断业务页操作。
+  handleStabilizerFailed = () => {
+    stabilizerReady = true;
+    revealWhenFrameAssetsReady();
+  };
 
   /**
    * link.sheet 在某些 Chromium 状态下会在请求完成前存在，
@@ -2407,7 +2470,7 @@ function handleIframeLoaded(event, tab) {
     }
 
     // 从当前文档 load 开始计时；主题失败时也会在有界时间内恢复页面操作。
-    fallbackTimer = window.setTimeout(revealWithoutTheme, 3000);
+    fallbackTimer = window.setTimeout(revealAfterAssetTimeout, 3000);
 
     frameDocument.documentElement.classList.add('admin-v2-frame');
     frameDocument.documentElement.dataset.theme = 'light';
@@ -2416,18 +2479,45 @@ function handleIframeLoaded(event, tab) {
       frameDocument.body.dataset.theme = 'light';
     }
 
+    const frameWindow = frameElement.contentWindow;
+    const existingStabilizer = frameWindow && frameWindow.AdminScrollLockStabilizer;
+    if (existingStabilizer && existingStabilizer.assetVersion === ADMIN_FRAME_ASSET_VERSION) {
+      existingStabilizer.refresh();
+      stabilizerReady = true;
+    } else {
+      if (existingStabilizer && typeof existingStabilizer.destroy === 'function') {
+        existingStabilizer.destroy();
+      }
+      stabilizerScript = frameDocument.querySelector('script[data-admin-scroll-lock-stabilizer="true"]');
+      // 进入该分支即表示子页没有当前版本 API，旧标签不可作为就绪依据。
+      if (stabilizerScript) {
+        stabilizerScript.remove();
+        stabilizerScript = null;
+      }
+      if (!stabilizerScript) {
+        stabilizerScript = frameDocument.createElement('script');
+        stabilizerScript.src = adminScrollLockUrl;
+        stabilizerScript.dataset.adminScrollLockStabilizer = 'true';
+        stabilizerScript.dataset.adminScrollLockVersion = ADMIN_FRAME_ASSET_VERSION;
+        stabilizerScript.addEventListener('load', handleStabilizerLoaded, { once: true });
+        stabilizerScript.addEventListener('error', handleStabilizerFailed, { once: true });
+        (frameDocument.head || frameDocument.documentElement).appendChild(stabilizerScript);
+      }
+    }
+
     themeLink = frameDocument.querySelector('link[data-admin-theme-v2="true"]');
     if (!themeLink) {
       themeLink = frameDocument.createElement('link');
       themeLink.rel = 'stylesheet';
-      themeLink.href = '/element/css/admin-theme-v2.css';
+      themeLink.href = adminThemeUrl;
       themeLink.dataset.adminThemeV2 = 'true';
       themeLink.addEventListener('load', handleThemeLoaded, { once: true });
       themeLink.addEventListener('error', handleThemeFailed, { once: true });
       (frameDocument.head || frameDocument.documentElement).appendChild(themeLink);
     } else if (isThemeLinkLoaded(themeLink)) {
       themeLink.dataset.adminThemeLoaded = 'true';
-      revealFrame();
+      themeReady = true;
+      revealWhenFrameAssetsReady();
     } else {
       themeLink.addEventListener('load', handleThemeLoaded, { once: true });
       themeLink.addEventListener('error', handleThemeFailed, { once: true });

@@ -144,21 +144,29 @@ html.admin-v2-frame ::selection {
   color: #172033;
 }
 
-/* 统一窄滚动条，同时保留滚轮和触控滚动行为。 */
+/*
+ * 统一根视口与内部容器的滚动条厚度。Element Plus 使用内部探针
+ * 测量宽度补偿 Dialog；根滚动条必须共用同一规格，避免经典滚动条环境
+ * 出现差值。实际锁定期宽度由 admin-scroll-lock-stabilizer.js 按环境实测。
+ */
+html.admin-v2-frame,
 html.admin-v2-frame * {
   scrollbar-color: #cbd5e1 transparent;
   scrollbar-width: thin;
 }
 
+html.admin-v2-frame::-webkit-scrollbar,
 html.admin-v2-frame *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
+html.admin-v2-frame::-webkit-scrollbar-track,
 html.admin-v2-frame *::-webkit-scrollbar-track {
   background: transparent;
 }
 
+html.admin-v2-frame::-webkit-scrollbar-thumb,
 html.admin-v2-frame *::-webkit-scrollbar-thumb {
   background: #cbd5e1;
   border: 2px solid transparent;
@@ -166,6 +174,7 @@ html.admin-v2-frame *::-webkit-scrollbar-thumb {
   background-clip: padding-box;
 }
 
+html.admin-v2-frame::-webkit-scrollbar-thumb:hover,
 html.admin-v2-frame *::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
   border: 2px solid transparent;
@@ -915,12 +924,16 @@ html.admin-v2-frame[data-theme="dark"] ::selection {
   color: #ffffff;
 }
 
+html.admin-v2-frame.dark,
 html.admin-v2-frame.dark *,
+html.admin-v2-frame[data-theme="dark"],
 html.admin-v2-frame[data-theme="dark"] * {
   scrollbar-color: #475569 transparent;
 }
 
+html.admin-v2-frame.dark::-webkit-scrollbar-thumb,
 html.admin-v2-frame.dark *::-webkit-scrollbar-thumb,
+html.admin-v2-frame[data-theme="dark"]::-webkit-scrollbar-thumb,
 html.admin-v2-frame[data-theme="dark"] *::-webkit-scrollbar-thumb {
   background: #475569;
   border: 2px solid transparent;
