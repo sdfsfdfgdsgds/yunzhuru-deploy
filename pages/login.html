@@ -8,9 +8,9 @@
   <meta name="description" content="菜鸟云注入提供强大的安卓应用注入服务,各种各样的功能应有尽有。">
   <link rel="stylesheet" href="/element/css/index.css" />
   <link rel="icon" href="data:image/x-icon;," type="image/x-icon">
-  <script src="/element/js/vue.global.js"></script>
-  <script src="/element/js/index.full.js"></script>
-  <script src="/config.js"></script>
+  <script defer src="/element/js/vue.global.js"></script>
+  <script defer src="/element/js/index.full.js"></script>
+  <script defer src="/config.js"></script>
   <style>
     :root {
       --admin-primary: #3b82f6;
@@ -57,6 +57,98 @@
 
     [v-cloak] {
       display: none;
+    }
+
+    .login-boot-loader {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 8% 12%, rgb(59 130 246 / 12%), transparent 30%),
+        radial-gradient(circle at 92% 88%, rgb(37 99 235 / 10%), transparent 32%),
+        linear-gradient(135deg, #f8fbff 0%, #f4f7fb 52%, #eef4ff 100%);
+    }
+
+    .login-loader,
+    .login-loader::before,
+    .login-loader::after {
+      width: 2.5em;
+      height: 2.5em;
+      border-radius: 50%;
+      animation: login-load-animation 1.8s infinite ease-in-out;
+      animation-fill-mode: both;
+    }
+
+    .login-loader {
+      position: relative;
+      margin-top: -2.5em;
+      color: #406eeb;
+      font-size: 10px;
+      text-indent: -9999em;
+      transform: translateX(-50%);
+      animation-delay: -0.16s;
+    }
+
+    .login-loader::before,
+    .login-loader::after {
+      position: absolute;
+      top: 0;
+      content: "";
+    }
+
+    .login-loader::before {
+      left: -3.5em;
+      animation-delay: -0.32s;
+    }
+
+    .login-loader::after {
+      left: 3.5em;
+    }
+
+    @keyframes login-load-animation {
+      0%,
+      80%,
+      100% {
+        box-shadow: 0 2.5em 0 -1.3em;
+      }
+
+      40% {
+        box-shadow: 0 2.5em 0 0;
+      }
+    }
+
+    .login-motion {
+      opacity: 0;
+      transform: translate3d(0, 100px, 0);
+      animation: login-form-enter 460ms both cubic-bezier(0.22, 1, 0.36, 1);
+      animation-delay: var(--motion-delay, 50ms);
+      will-change: opacity, transform;
+    }
+
+    @keyframes login-form-enter {
+      0% {
+        opacity: 0;
+        transform: translate3d(0, 100px, 0);
+      }
+
+      68% {
+        opacity: 1;
+        transform: translate3d(0, -3px, 0);
+      }
+
+      84% {
+        opacity: 1;
+        transform: translate3d(0, 1px, 0);
+      }
+
+      100% {
+        opacity: 1;
+        transform: translate3d(0, 0, 0);
+      }
     }
 
     .login-page {
@@ -339,6 +431,14 @@
       margin-bottom: 19px;
     }
 
+    .login-motion-field {
+      width: 100%;
+    }
+
+    .login-motion-submit {
+      width: 100%;
+    }
+
     .auth-form .el-input__wrapper {
       min-height: 47px;
       border-radius: 11px;
@@ -542,6 +642,21 @@
       text-align: right;
     }
 
+    @media (prefers-reduced-motion: reduce) {
+      .login-motion {
+        opacity: 1;
+        transform: none;
+        animation: none;
+      }
+
+      .login-loader,
+      .login-loader::before,
+      .login-loader::after {
+        animation: none;
+        box-shadow: 0 2.5em 0 0;
+      }
+    }
+
     @media (max-width: 900px) {
       .login-page {
         align-items: start;
@@ -694,6 +809,11 @@
   </style>
 </head>
 <body>
+  <!-- 独立于 Vue 容器，保证整页刷新且运行时脚本尚在加载时也有可见反馈。 -->
+  <div id="login-boot-loader" class="login-boot-loader" role="status" aria-label="正在加载登录页">
+    <div class="login-loader">正在加载登录页</div>
+  </div>
+
   <div id="app" v-cloak>
     <main class="login-page">
       <section class="login-shell" aria-label="后台登录">
@@ -743,25 +863,31 @@
             <p class="login-subtitle">登录 {{ siteTitle }}，继续管理应用与配置分发。</p>
 
             <el-form class="auth-form" :model="form" :rules="rules" ref="formRef" label-width="0" @keyup.enter="handleLogin">
-              <div class="field-label">账号</div>
-              <el-form-item prop="username">
-                <el-input v-model="form.username" placeholder="请输入账号" autocomplete="username" autofocus></el-input>
-              </el-form-item>
+              <div class="login-motion login-motion-field" style="--motion-delay: 100ms">
+                <div class="field-label">账号</div>
+                <el-form-item prop="username">
+                  <el-input v-model="form.username" placeholder="请输入账号" autocomplete="username" autofocus></el-input>
+                </el-form-item>
+              </div>
 
-              <div class="field-label">密码</div>
-              <el-form-item prop="password">
-                <el-input v-model="form.password" type="password" placeholder="请输入密码" autocomplete="current-password" show-password></el-input>
-              </el-form-item>
+              <div class="login-motion login-motion-field" style="--motion-delay: 150ms">
+                <div class="field-label">密码</div>
+                <el-form-item prop="password">
+                  <el-input v-model="form.password" type="password" placeholder="请输入密码" autocomplete="current-password" show-password></el-input>
+                </el-form-item>
+              </div>
 
-              <div class="field-label">验证码</div>
-              <el-form-item prop="captcha">
-                <div class="captcha-box">
-                  <el-input v-model="form.captcha" placeholder="请输入验证码" autocomplete="off"></el-input>
-                  <img class="captcha-image" :src="captchaUrl" @click="refreshCaptcha" alt="验证码" title="点击刷新验证码" />
-                </div>
-              </el-form-item>
+              <div class="login-motion login-motion-field" style="--motion-delay: 200ms">
+                <div class="field-label">验证码</div>
+                <el-form-item prop="captcha">
+                  <div class="captcha-box">
+                    <el-input v-model="form.captcha" placeholder="请输入验证码" autocomplete="off"></el-input>
+                    <img class="captcha-image" :src="captchaUrl" @click="refreshCaptcha" alt="验证码" title="点击刷新验证码" />
+                  </div>
+                </el-form-item>
+              </div>
 
-              <div class="form-options">
+              <div class="form-options login-motion" style="--motion-delay: 230ms">
                 <el-checkbox class="law-checkbox" v-model="form.agreeLaw">
                   我已阅读并同意
                   <a href="https://fgw.sh.gov.cn/cmsres/9e/9eb64bfe42fe43aca3c423e5426beccd/313075d4f6b30301a4f18f84db8dab71.pdf" target="_blank" rel="noopener noreferrer" class="user-agreement">《计算机软件保护条例》</a>
@@ -769,7 +895,9 @@
                 <button type="button" class="forget-password text-action" @click="handleForgotPassword">忘记密码？</button>
               </div>
 
-              <el-button class="login-button" type="primary" :loading="loginLoading" @click="handleLogin">登录后台</el-button>
+              <div class="login-motion login-motion-submit" style="--motion-delay: 260ms">
+                <el-button class="login-button" type="primary" :loading="loginLoading" @click="handleLogin">登录后台</el-button>
+              </div>
             </el-form>
 
             <div class="register-line">
@@ -851,177 +979,182 @@
   </div>
 
   <script>
-    const { createApp, ref, reactive } = Vue;
+    window.addEventListener('DOMContentLoaded', () => {
+      const { createApp, ref, reactive } = Vue;
 
-    const app = createApp({
-      setup() {
-        const siteTitle = config.siteTitle;
-        const currentYear = new Date().getFullYear();
-        const formRef = ref(null);
-        const loginLoading = ref(false);
-        const form = reactive({
-          username: '',
-          password: '',
-          captcha: '',
-          agreeLaw: false
-        });
+      const app = createApp({
+        setup() {
+          const siteTitle = config.siteTitle;
+          const currentYear = new Date().getFullYear();
+          const formRef = ref(null);
+          const loginLoading = ref(false);
+          const form = reactive({
+            username: '',
+            password: '',
+            captcha: '',
+            agreeLaw: false
+          });
 
-        const rules = {
-          username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
-          password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
-          captcha: [{ required: true, message: '请输入验证码', trigger: 'blur' }]
-        };
+          const rules = {
+            username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
+            password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+            captcha: [{ required: true, message: '请输入验证码', trigger: 'blur' }]
+          };
 
-        const captchaUrl = ref(getCaptchaUrl());
-        function getCaptchaUrl() {
-          return `/captcha.php?time=${Date.now()}`;
-        }
-        const handleForgotPassword = () => {
-          ElementPlus.ElMessageBox.alert(
-            '密码不能找回,只能重置(因为管理员也不知道你的密码)，如需重置请联系管理员QQ:2380494437。',
-            '忘记密码提示',
-            {
-              confirmButtonText: '我知道了',
-              type: 'warning',
+          const captchaUrl = ref(getCaptchaUrl());
+          function getCaptchaUrl() {
+            return `/captcha.php?time=${Date.now()}`;
+          }
+          const handleForgotPassword = () => {
+            ElementPlus.ElMessageBox.alert(
+              '密码不能找回,只能重置(因为管理员也不知道你的密码)，如需重置请联系管理员QQ:2380494437。',
+              '忘记密码提示',
+              {
+                confirmButtonText: '我知道了',
+                type: 'warning',
+              }
+            );
+          };
+          function refreshCaptcha() {
+            captchaUrl.value = getCaptchaUrl();
+          }
+
+          function handleLogin() {
+            if (loginLoading.value || !formRef.value) return;
+            formRef.value.validate(async valid => {
+              if (!valid) return;
+
+              if (!form.agreeLaw) {
+                ElementPlus.ElMessage.warning('请先阅读并勾选《计算机软件保护条例》');
+                return;
+              }
+
+              loginLoading.value = true;
+              try {
+                const res = await fetch(`/api/?module=login&method=login`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(form)
+                });
+                const json = await res.json();
+                if (json.code === 200) {
+                  const token = json.data.admin_token;
+                  localStorage.setItem(config.tokenKey, token);
+                  localStorage.setItem('adminInfo', JSON.stringify(json.data));
+                  // 登录主体可能已经切换，先清除上一账号的会话书签，避免恢复旧工作区。
+                  localStorage.removeItem('active_menu');
+                  try {
+                    sessionStorage.removeItem('admin_active_menu_v2');
+                    sessionStorage.removeItem('admin_opened_tabs_v2');
+                  } catch (storageError) {
+                    // 浏览器禁用会话存储时仍可继续进入后台。
+                  }
+                  // 登录后进入唯一正式后台入口；历史 /console-v2.html 仅保留兼容跳转。
+                  window.location.href = "/console.html";
+                } else {
+                  ElementPlus.ElMessage.error(json.message || '登录失败');
+                  refreshCaptcha();
+                }
+              } catch (err) {
+                console.error('登录异常：', err);
+                ElementPlus.ElMessage.error('请求失败，请稍后再试');
+                refreshCaptcha();
+              } finally {
+                loginLoading.value = false;
+              }
+            });
+          }
+
+          const showRegister = ref(false);
+          const showAgreement = ref(false);
+          const registerFormRef = ref(null);
+          const registerLoading = ref(false);
+          const registerForm = reactive({
+            nickname: '',
+            username: '',
+            password: '',
+            confirmPassword: '',
+            agreed: false
+          });
+
+          async function submitRegister() {
+            if (registerLoading.value) return;
+            // 表单完整性校验
+            if (!registerForm.nickname || !registerForm.username || !registerForm.password || !registerForm.confirmPassword) {
+              ElementPlus.ElMessage.warning('请填写完整信息');
+              return;
             }
-          );
-        };
-        function refreshCaptcha() {
-          captchaUrl.value = getCaptchaUrl();
-        }
 
-        function handleLogin() {
-          if (loginLoading.value || !formRef.value) return;
-          formRef.value.validate(async valid => {
-            if (!valid) return;
-        
-            if (!form.agreeLaw) {
-              ElementPlus.ElMessage.warning('请先阅读并勾选《计算机软件保护条例》');
+            // 密码一致性校验
+            if (registerForm.password !== registerForm.confirmPassword) {
+              ElementPlus.ElMessage.warning('两次输入的密码不一致');
               return;
             }
         
-            loginLoading.value = true;
+            // 用户协议勾选校验
+            if (!registerForm.agreed) {
+              ElementPlus.ElMessage.warning('请先同意用户协议');
+              return;
+            }
+        
+            // 发起注册请求；按钮 loading 阻止重复提交，接口字段保持原有合同。
+            registerLoading.value = true;
             try {
-              const res = await fetch(`/api/?module=login&method=login`, {
+              const res = await fetch(`/api/?module=register&method=register`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(form)
+                headers: {
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  nickname: registerForm.nickname,
+                  account: registerForm.username,
+                  password: registerForm.password,
+                  confirm_password: registerForm.confirmPassword
+                })
               });
               const json = await res.json();
               if (json.code === 200) {
-                const token = json.data.admin_token;
-                localStorage.setItem(config.tokenKey, token);
-                localStorage.setItem('adminInfo', JSON.stringify(json.data));
-                // 登录主体可能已经切换，先清除上一账号的会话书签，避免恢复旧工作区。
-                localStorage.removeItem('active_menu');
-                try {
-                  sessionStorage.removeItem('admin_active_menu_v2');
-                  sessionStorage.removeItem('admin_opened_tabs_v2');
-                } catch (storageError) {
-                  // 浏览器禁用会话存储时仍可继续进入后台。
-                }
-                // 登录后进入唯一正式后台入口；历史 /console-v2.html 仅保留兼容跳转。
-                window.location.href = "/console.html";
+                ElementPlus.ElMessage.success('注册成功，请前往登录');
+                showRegister.value = false;
               } else {
-                ElementPlus.ElMessage.error(json.message || '登录失败');
-                refreshCaptcha();
+                ElementPlus.ElMessage.error(json.message || '注册失败');
               }
             } catch (err) {
-              console.error('登录异常：', err);
+              console.error('注册请求异常：', err);
               ElementPlus.ElMessage.error('请求失败，请稍后再试');
-              refreshCaptcha();
             } finally {
-              loginLoading.value = false;
+              registerLoading.value = false;
             }
-          });
+          }
+
+
+          return {
+            siteTitle,
+            currentYear,
+            form,
+            formRef,
+            loginLoading,
+            rules,
+            captchaUrl,
+            refreshCaptcha,
+            handleLogin,
+            showRegister,
+            registerForm,
+            registerFormRef,
+            registerLoading,
+            submitRegister,
+            showAgreement,
+            handleForgotPassword
+          };
         }
+      });
 
-        const showRegister = ref(false);
-        const showAgreement = ref(false);
-        const registerFormRef = ref(null);
-        const registerLoading = ref(false);
-        const registerForm = reactive({
-          nickname: '',
-          username: '',
-          password: '',
-          confirmPassword: '',
-          agreed: false
-        });
+      app.use(ElementPlus);
+      app.mount('#app');
 
-        async function submitRegister() {
-          if (registerLoading.value) return;
-          // 表单完整性校验
-          if (!registerForm.nickname || !registerForm.username || !registerForm.password || !registerForm.confirmPassword) {
-            ElementPlus.ElMessage.warning('请填写完整信息');
-            return;
-          }
-        
-          // 密码一致性校验
-          if (registerForm.password !== registerForm.confirmPassword) {
-            ElementPlus.ElMessage.warning('两次输入的密码不一致');
-            return;
-          }
-        
-          // 用户协议勾选校验
-          if (!registerForm.agreed) {
-            ElementPlus.ElMessage.warning('请先同意用户协议');
-            return;
-          }
-        
-          // 发起注册请求；按钮 loading 阻止重复提交，接口字段保持原有合同。
-          registerLoading.value = true;
-          try {
-            const res = await fetch(`/api/?module=register&method=register`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                nickname: registerForm.nickname,
-                account: registerForm.username,
-                password: registerForm.password,
-                confirm_password: registerForm.confirmPassword
-              })
-            });
-            const json = await res.json();
-            if (json.code === 200) {
-              ElementPlus.ElMessage.success('注册成功，请前往登录');
-              showRegister.value = false;
-            } else {
-              ElementPlus.ElMessage.error(json.message || '注册失败');
-            }
-          } catch (err) {
-            console.error('注册请求异常：', err);
-            ElementPlus.ElMessage.error('请求失败，请稍后再试');
-          } finally {
-            registerLoading.value = false;
-          }
-        }
-
-
-        return {
-          siteTitle,
-          currentYear,
-          form,
-          formRef,
-          loginLoading,
-          rules,
-          captchaUrl,
-          refreshCaptcha,
-          handleLogin,
-          showRegister,
-          registerForm,
-          registerFormRef,
-          registerLoading,
-          submitRegister,
-          showAgreement,
-          handleForgotPassword
-        };
-      }
-    });
-
-    app.use(ElementPlus);
-    app.mount('#app');
+      // Vue 接管页面后立即移除启动层，让表单的分段入场动画从完整首帧开始。
+      document.getElementById('login-boot-loader')?.remove();
+    }, { once: true });
   </script>
 </body>
 </html>
