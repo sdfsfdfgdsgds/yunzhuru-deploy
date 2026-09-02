@@ -245,12 +245,15 @@
     const lastActionType = Vue.ref(null);
     const sortSavingId = Vue.ref(0);
     let loadSequence = 0;
+    // 编辑基线只用于判断用户是否真实改动排序，不作为表单字段传给后端。
+    let formSortBaseline = 0;
     const form = Vue.reactive({
       id: null,
       name: '',
       action_type: 1,
       param_text: '',
       enabled: true,
+      sort: 0,
       remark: ''
     });
 
@@ -476,6 +479,7 @@
 
     function openEdit(row = null, actionType = 1) {
       if (row) {
+        const currentSort = normalizeSort(row.sort);
         editMode.value = true;
         Object.assign(form, {
           id: row.id,
@@ -483,8 +487,10 @@
           action_type: Number(row.action_type || 1),
           param_text: row.param_text || '',
           enabled: Number(row.enabled ?? 1) === 1,
+          sort: currentSort,
           remark: row.remark || ''
         });
+        formSortBaseline = currentSort;
       } else {
         editMode.value = false;
         Object.assign(form, {
@@ -493,18 +499,29 @@
           action_type: hasParam(actionType) ? toAction(actionType) : 1,
           param_text: '',
           enabled: true,
+          sort: 0,
           remark: ''
         });
+        formSortBaseline = 0;
       }
       editVisible.value = true;
     }
 
     async function submit() {
       const method = editMode.value ? 'editAsset' : 'addAsset';
+      const payload = {
+        ...form,
+        sort: normalizeSort(form.sort)
+      };
+      form.sort = payload.sort;
+      // 未改排序时不传旧副本，保留弹窗打开后可能由列表行内或其他窗口更新的值。
+      if (editMode.value && payload.sort === formSortBaseline) {
+        delete payload.sort;
+      }
       const res = await fetch(`/api/index.php?module=click_param_asset&method=${method}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form })
+        body: JSON.stringify(payload)
       });
       const json = await res.json();
       if (json.code === 200) {

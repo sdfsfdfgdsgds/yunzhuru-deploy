@@ -126,6 +126,9 @@ function editAsset(PDO $pdo, array $input)
     $name = trim((string)($input['name'] ?? ''));
     $remark = trim((string)($input['remark'] ?? ''));
     $enabled = isset($input['enabled']) ? (!empty($input['enabled']) ? 1 : 0) : 1;
+    // 编辑请求缺少 sort 表示保留数据库当前值，显式传入 0 才表示归零。
+    $hasSort = array_key_exists('sort', $input);
+    $sort = $hasSort ? clickParamAssetNormalizeSort($input['sort']) : null;
     if ($name === '') {
         $labels = clickParamAssetActionLabels();
         $name = ($labels[$actionType] ?? '事件参数') . '资源';
@@ -147,19 +150,38 @@ function editAsset(PDO $pdo, array $input)
     if (!empty($affectedAppIds) && (int)$current['action_type'] !== $actionType) {
         throw new Exception('该事件参数资源已被关联，不能修改事件分类');
     }
-    $stmt = $pdo->prepare("
-        UPDATE cainiao_click_param_asset
-        SET name = :name, action_type = :action_type, param_text = :param_text, enabled = :enabled, remark = :remark, updated_at = NOW()
-        WHERE id = :id
-    ");
-    $stmt->execute([
+    $setParts = [
+        'name = :name',
+        'action_type = :action_type',
+        'param_text = :param_text',
+        'enabled = :enabled',
+        'remark = :remark',
+    ];
+    $updateParams = [
         ':name' => $name,
         ':action_type' => $actionType,
         ':param_text' => $paramText,
         ':enabled' => $enabled,
         ':remark' => $remark,
         ':id' => $id,
-    ]);
+    ];
+    if ($hasSort) {
+        $setParts[] = '`sort` = :sort';
+        $updateParams[':sort'] = $sort;
+    }
+    $setParts[] = 'updated_at = NOW()';
+
+    if ($isAdmin) {
+        $whereSql = 'id = :id';
+    } else {
+        // 最终写入再次带上所有者条件，避免权限预检与更新之间的竞态窗口。
+        $whereSql = 'id = :id AND user_id = :uid';
+        $updateParams[':uid'] = $userId;
+    }
+    $stmt = $pdo->prepare(
+        'UPDATE cainiao_click_param_asset SET ' . implode(', ', $setParts) . ' WHERE ' . $whereSql
+    );
+    $stmt->execute($updateParams);
 
     foreach ($affectedAppIds as $appId) {
         Auth::afterConfigChange($pdo, $appId);

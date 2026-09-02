@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/element/css/index.css">
   <script src="/element/js/vue.global.js"></script>
   <script src="/element/js/index.full.js"></script>
-  <script src="/pages/config/common/click_param_asset.js"></script>
+  <script src="/pages/config/common/click_param_asset.js?v=202609022033"></script>
   <style>
     body {
       margin: 0;
@@ -23,6 +23,38 @@
       gap: 10px;
       margin-bottom: 14px;
       flex-wrap: wrap;
+    }
+    /*
+     * 管理主题会把小尺寸输入框拉高到 34px，Element Plus 仍使用
+     * 11px 的小尺寸调整按钮，从而在两个按钮中间留出空隙。
+     * 本页的排序控件统一为 34px，上下按钮各占 16px，保持连续的中线边框。
+     */
+    .sort-number-input.el-input-number {
+      height: 34px;
+      line-height: 32px;
+    }
+    .sort-number-input.el-input-number .el-input {
+      --el-input-height: 34px;
+      --el-input-inner-height: 32px;
+      height: 34px;
+    }
+    .sort-number-input.el-input-number .el-input__wrapper {
+      min-height: 34px;
+    }
+    .sort-number-input.el-input-number.is-controls-right .el-input-number__decrease,
+    .sort-number-input.el-input-number.is-controls-right .el-input-number__increase {
+      --el-input-number-controls-height: 16px;
+    }
+    .sort-form-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .sort-form-hint {
+      color: #909399;
+      font-size: 12px;
+      line-height: 1.4;
     }
   </style>
 </head>
@@ -55,6 +87,7 @@
       <el-table-column label="排序" width="150" align="center">
         <template #default="scope">
           <el-input-number
+            class="sort-number-input"
             :model-value="scope.row.sort"
             :min="-10000"
             :max="10000"
@@ -103,6 +136,19 @@
           <el-select v-model="form.action_type" style="width: 100%">
             <el-option v-for="item in clickActionOptions" :key="item.value" :label="item.label" :value="item.value"></el-option>
           </el-select>
+        </el-form-item>
+        <el-form-item label="排序">
+          <div class="sort-form-row">
+            <el-input-number
+              v-model="form.sort"
+              class="sort-number-input"
+              :min="-10000"
+              :max="10000"
+              :step="1"
+              controls-position="right"
+              style="width: 180px"></el-input-number>
+            <span class="sort-form-hint">数值越大越靠前，默认 0</span>
+          </div>
         </el-form-item>
         <el-form-item :label="clickParamLabel(form.action_type)">
           <el-input
