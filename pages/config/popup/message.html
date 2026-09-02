@@ -228,7 +228,7 @@
       </el-table>
     </el-dialog>
     
-    <el-dialog v-model="addButtonDialogVisible" :title="buttonEditMode ? '编辑按钮' : '添加按钮'" width="760px" top="4vh">
+    <el-dialog v-model="addButtonDialogVisible" :title="buttonEditMode ? '编辑按钮' : '添加按钮'" width="760px" top="4vh" @close="onButtonDialogClosed">
   <el-form :model="buttonForm" label-width="100px">
     <el-form-item label="标题">
       <el-input v-model="buttonForm.title"></el-input>
@@ -500,6 +500,7 @@
 	          clickTextTip.value = clickParamPlaceholder(val);
 	        }
 	        function onButtonClickActionChange(val) {
+	          clickParam.clearSelection(buttonForm);
 	          buttonForm.clickParamAssetId = null;
 	          buttonForm.clickParamAssetIds = [];
 	          buttonForm.clickText = '';
@@ -508,10 +509,13 @@
 	            clickParam.load(val, 1);
 	          }
 	        }
-			        function applyButtonClickParamAsset(assetId) {
-			          clickParam.applySelection(buttonForm, 'click', 'clickText', 'clickParamAssetId', assetId, 'clickParamAssetIds');
-			          updateClickTextTip(buttonForm.click);
-			        }
+		        function applyButtonClickParamAsset(assetId) {
+		          clickParam.applySelection(buttonForm, 'click', 'clickText', 'clickParamAssetId', assetId, 'clickParamAssetIds');
+		          updateClickTextTip(buttonForm.click);
+		        }
+		        function onButtonDialogClosed() {
+		          clickParam.clearSelection(buttonForm);
+		        }
 
 	        function createEmptyStats() {
 	          return {
@@ -617,6 +621,7 @@
         }
 
 function openAddButtonDialog() {
+  clickParam.clearSelection(buttonForm);
   buttonEditMode.value = false; // 设置为添加模式
   Object.assign(buttonForm, {
     title: '',
@@ -677,7 +682,8 @@ async function openEditButtonDialog(button) {
 		    dismiss: buttonForm.dismiss ? 1 : 0
 		  };
 		  if (!hasClickParam(buttonForm.click)) {
-		    payload.clickText = '';
+	    clickParam.clearSelection(buttonForm);
+	    payload.clickText = '';
 		    payload.clickParamAssetId = 0;
 		    payload.clickParamAssetIds = [];
 	  } else if (buttonClickParamAssetIds.value.length === 0 && !String(buttonForm.clickText || '').trim()) {
@@ -881,6 +887,7 @@ buttonEditMode,
 	updateClickTextTip,
 		onButtonClickActionChange,
 		applyButtonClickParamAsset,
+		onButtonDialogClosed,
 		buttonClickParamAssetIds,
 		selectedButtonClickParamAssets,
 			openEditButtonDialog,

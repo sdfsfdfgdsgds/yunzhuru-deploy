@@ -37,10 +37,10 @@ function getList(PDO $pdo, array $input)
     $total = (int)$countStmt->fetchColumn();
 
     $stmt = $pdo->prepare("
-        SELECT id, user_id, name, action_type, param_text, enabled, remark, created_at, updated_at
+        SELECT id, user_id, name, action_type, param_text, enabled, `sort`, remark, created_at, updated_at
         FROM cainiao_click_param_asset
         WHERE $whereSql
-        ORDER BY id DESC
+        ORDER BY `sort` DESC, id DESC
         LIMIT $offset, $limit
     ");
     $stmt->execute($params);
@@ -51,6 +51,7 @@ function getList(PDO $pdo, array $input)
         $row['user_id'] = (int)$row['user_id'];
         $row['action_type'] = (int)$row['action_type'];
         $row['enabled'] = (int)$row['enabled'];
+        $row['sort'] = (int)$row['sort'];
         $row['action_label'] = $labels[$row['action_type']] ?? '未知事件';
     }
     unset($row);
@@ -79,14 +80,15 @@ function addAsset(PDO $pdo, array $input)
     $name = trim((string)($input['name'] ?? ''));
     $remark = trim((string)($input['remark'] ?? ''));
     $enabled = isset($input['enabled']) ? (!empty($input['enabled']) ? 1 : 0) : 1;
+    $sort = clickParamAssetNormalizeSort($input['sort'] ?? 0);
     if ($name === '') {
         $labels = clickParamAssetActionLabels();
         $name = ($labels[$actionType] ?? '事件参数') . '资源';
     }
 
     $stmt = $pdo->prepare("
-        INSERT INTO cainiao_click_param_asset (user_id, name, action_type, param_text, enabled, remark, created_at, updated_at)
-        VALUES (:uid, :name, :action_type, :param_text, :enabled, :remark, NOW(), NOW())
+        INSERT INTO cainiao_click_param_asset (user_id, name, action_type, param_text, enabled, `sort`, remark, created_at, updated_at)
+        VALUES (:uid, :name, :action_type, :param_text, :enabled, :sort, :remark, NOW(), NOW())
     ");
     $stmt->execute([
         ':uid' => $userId,
@@ -94,6 +96,7 @@ function addAsset(PDO $pdo, array $input)
         ':action_type' => $actionType,
         ':param_text' => $paramText,
         ':enabled' => $enabled,
+        ':sort' => $sort,
         ':remark' => $remark,
     ]);
 
@@ -201,6 +204,53 @@ function setEnabled(PDO $pdo, array $input)
     }
 
     return ['message' => $enabled === 1 ? '已启用' : '已停用'];
+}
+
+/**
+ * 更新事件参数资源的列表排序值。
+ *
+ * 排序只改变后台列表和资源选择器的展示顺序，不改变已下发的事件参数。
+ */
+function setSort(PDO $pdo, array $input)
+{
+    clickParamAssetEnsureTables($pdo);
+    $user = Auth::check($pdo);
+    $userId = (int)$user['id'];
+    $isAdmin = ($user['role'] ?? '') === 'admin';
+
+    $id = (int)($input['id'] ?? 0);
+    if ($id <= 0) {
+        throw new Exception('缺少资源ID');
+    }
+    if (!array_key_exists('sort', $input)) {
+        throw new Exception('缺少排序值');
+    }
+    $sort = clickParamAssetNormalizeSort($input['sort']);
+
+    if ($isAdmin) {
+        $check = $pdo->prepare("SELECT id FROM cainiao_click_param_asset WHERE id = :id");
+        $check->execute([':id' => $id]);
+    } else {
+        $check = $pdo->prepare("SELECT id FROM cainiao_click_param_asset WHERE id = :id AND user_id = :uid");
+        $check->execute([':id' => $id, ':uid' => $userId]);
+    }
+    if (!$check->fetch()) {
+        throw new Exception('事件参数资源不存在或无权操作');
+    }
+
+    if ($isAdmin) {
+        $stmt = $pdo->prepare("UPDATE cainiao_click_param_asset SET `sort` = :sort, updated_at = NOW() WHERE id = :id");
+        $stmt->execute([':sort' => $sort, ':id' => $id]);
+    } else {
+        // 写入语句再次带上所有者条件，避免权限预检与更新之间的竞态窗口。
+        $stmt = $pdo->prepare("UPDATE cainiao_click_param_asset SET `sort` = :sort, updated_at = NOW() WHERE id = :id AND user_id = :uid");
+        $stmt->execute([':sort' => $sort, ':id' => $id, ':uid' => $userId]);
+    }
+
+    return [
+        'message' => '排序已更新',
+        'sort' => $sort,
+    ];
 }
 
 /**

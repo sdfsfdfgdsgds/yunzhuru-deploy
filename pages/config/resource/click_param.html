@@ -52,6 +52,20 @@
       <el-table-column label="事件分类" width="130">
         <template #default="scope">{{ clickActionLabel(scope.row.action_type) }}</template>
       </el-table-column>
+      <el-table-column label="排序" width="150" align="center">
+        <template #default="scope">
+          <el-input-number
+            :model-value="scope.row.sort"
+            :min="-10000"
+            :max="10000"
+            size="small"
+            controls-position="right"
+            title="数值越大越靠前"
+            style="width: 110px"
+            :disabled="sortSavingId !== 0"
+            @change="value => updateParamSort(scope.row, value)"></el-input-number>
+        </template>
+      </el-table-column>
       <el-table-column label="状态" width="100" align="center">
         <template #default="scope">
           <el-switch
@@ -126,6 +140,7 @@
         const loading = clickParamStore.loading;
         const editVisible = clickParamStore.editVisible;
         const editMode = clickParamStore.editMode;
+        const sortSavingId = clickParamStore.sortSavingId;
         const form = clickParamStore.form;
         const clickActionOptions = ClickParamAsset.ACTION_OPTIONS;
         const clickActionLabel = ClickParamAsset.actionLabel;
@@ -157,6 +172,10 @@
           return clickParamStore.toggleEnabled(row);
         }
 
+        function updateParamSort(row, value) {
+          return clickParamStore.setSort(row, value);
+        }
+
         onMounted(() => {
           editVisible.value = false;
           loadParams(null, 1);
@@ -172,6 +191,7 @@
           loading,
           editVisible,
           editMode,
+          sortSavingId,
           form,
           clickActionOptions,
           clickActionLabel,
@@ -182,7 +202,8 @@
           openEditDialog,
           submitParam,
           removeParam,
-          toggleParamStatus
+          toggleParamStatus,
+          updateParamSort
         };
       }
     }).use(ElementPlus).mount('#app');

@@ -203,6 +203,25 @@
     return toAction(actionType) === 1 ? 0 : 1;
   }
 
+  function normalizeSort(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+      return 0;
+    }
+    return Math.max(-10000, Math.min(10000, Math.trunc(number)));
+  }
+
+  /**
+   * 资源选择器与管理列表共用同一排序合同：数值越大越靠前，ID 作稳定兜底。
+   */
+  function compareBySort(left, right) {
+    const sortDiff = normalizeSort(right && right.sort) - normalizeSort(left && left.sort);
+    if (sortDiff !== 0) {
+      return sortDiff;
+    }
+    return Number((right && right.id) || 0) - Number((left && left.id) || 0);
+  }
+
   function createStore(Vue, ElementPlus) {
     ensureStyles();
 
@@ -213,10 +232,19 @@
     const keyword = Vue.ref('');
     const loading = Vue.ref(false);
     const knownList = Vue.ref([]);
+    // 服务端已关联资源在当前页面生命周期内长期保留，供多个弹窗目标共同回显。
+    const mergeRetainedIds = new Set();
+    // 表单当前选择按目标分别计数，取消或改选时可以精确释放旧资源缓存。
+    const selectedIdsByTarget = new WeakMap();
+    const selectedRetainCounts = new Map();
+    // 恢复历史文本可能发起异步查询，代次用于拦截对话框关闭后的迟到回显。
+    const selectionSequences = new WeakMap();
     const dialogVisible = Vue.ref(false);
     const editVisible = Vue.ref(false);
     const editMode = Vue.ref(false);
     const lastActionType = Vue.ref(null);
+    const sortSavingId = Vue.ref(0);
+    let loadSequence = 0;
     const form = Vue.reactive({
       id: null,
       name: '',
@@ -241,6 +269,70 @@
       }
     }
 
+    function retainMergedIds(values) {
+      toIdList(values).forEach(id => mergeRetainedIds.add(id));
+    }
+
+    /**
+     * 更新单个表单目标正在使用的资源集合，并维护跨目标引用计数。
+     */
+    function trackSelection(target, values) {
+      if (!target || (typeof target !== 'object' && typeof target !== 'function')) {
+        return;
+      }
+
+      const previousIds = selectedIdsByTarget.get(target) || new Set();
+      const nextIds = new Set(toIdList(values));
+      previousIds.forEach(id => {
+        if (nextIds.has(id)) {
+          return;
+        }
+        const nextCount = Number(selectedRetainCounts.get(id) || 0) - 1;
+        if (nextCount > 0) {
+          selectedRetainCounts.set(id, nextCount);
+        } else {
+          selectedRetainCounts.delete(id);
+        }
+      });
+      nextIds.forEach(id => {
+        if (!previousIds.has(id)) {
+          selectedRetainCounts.set(id, Number(selectedRetainCounts.get(id) || 0) + 1);
+        }
+      });
+      selectedIdsByTarget.set(target, nextIds);
+    }
+
+    function isRetained(id) {
+      return mergeRetainedIds.has(id) || Number(selectedRetainCounts.get(id) || 0) > 0;
+    }
+
+    function nextSelectionSequence(target) {
+      const nextSequence = Number(selectionSequences.get(target) || 0) + 1;
+      selectionSequences.set(target, nextSequence);
+      return nextSequence;
+    }
+
+    function isCurrentSelectionSequence(target, sequence) {
+      return Number(selectionSequences.get(target) || 0) === sequence;
+    }
+
+    /**
+     * 释放指定表单目标的当前选择；字段清空由页面自己的表单合同负责。
+     */
+    function clearSelection(target) {
+      nextSelectionSequence(target);
+      trackSelection(target, []);
+    }
+
+    /**
+     * 保留服务端返回的已关联资源，确保分页刷新不会丢失标签和预览。
+     */
+    function retainRows(assets) {
+      const rows = Array.isArray(assets) ? assets : [assets];
+      retainMergedIds(rows.map(item => Number(item && item.id)));
+      cacheRows(rows);
+    }
+
     function allKnownRows() {
       const existed = new Map();
       knownList.value.forEach(item => {
@@ -256,14 +348,31 @@
       return Array.from(existed.values());
     }
 
+    /**
+     * 分页刷新时丢弃同分类的旧页缓存，仅保留已关联资源，避免旧排序值污染选项顺序。
+     */
+    function pruneLoadedCache(actionType) {
+      const hasActionFilter = actionType !== null && actionType !== undefined && actionType !== '';
+      const type = hasActionFilter ? toAction(actionType) : null;
+      knownList.value = knownList.value.filter(item => {
+        const id = Number(item && item.id);
+        if (isRetained(id)) {
+          return true;
+        }
+        return hasActionFilter && Number(item && item.action_type) !== type;
+      });
+    }
+
     function options(actionType) {
       const type = toAction(actionType);
-      return allKnownRows().filter(item => Number(item.action_type) === type);
+      return allKnownRows()
+        .filter(item => Number(item.action_type) === type)
+        .sort(compareBySort);
     }
 
     function merge(assets) {
       const rows = Array.isArray(assets) ? assets : [assets];
-      cacheRows(rows);
+      retainRows(rows);
       const existed = new Set(list.value.map(item => Number(item.id)));
       rows.forEach(item => {
         if (item && item.id && !existed.has(Number(item.id))) {
@@ -310,20 +419,23 @@
     }
 
     async function load(actionType = null, p = page.value) {
-      if (typeof p !== 'number') {
-        p = page.value || 1;
-      }
-      page.value = p || 1;
-      lastActionType.value = actionType === null || actionType === undefined || actionType === '' ? null : toAction(actionType);
+      const targetPage = typeof p === 'number' ? (p || 1) : (page.value || 1);
+      const requestActionType = actionType === null || actionType === undefined || actionType === ''
+        ? null
+        : toAction(actionType);
+      const requestKeyword = keyword.value;
+      const requestSequence = ++loadSequence;
+      page.value = targetPage;
+      lastActionType.value = requestActionType;
       loading.value = true;
       try {
         const payload = {
-          page: page.value,
+          page: targetPage,
           limit: limit.value,
-          keyword: keyword.value
+          keyword: requestKeyword
         };
-        if (lastActionType.value !== null) {
-          payload.action_type = lastActionType.value;
+        if (requestActionType !== null) {
+          payload.action_type = requestActionType;
         }
         const res = await fetch('/api/index.php?module=click_param_asset&method=getList', {
           method: 'POST',
@@ -331,15 +443,23 @@
           body: JSON.stringify(payload)
         });
         const json = await res.json();
+        if (requestSequence !== loadSequence) {
+          return false;
+        }
         if (json.code === 200) {
-          list.value = json.data.list || [];
+          const loadedRows = json.data.list || [];
+          pruneLoadedCache(requestActionType);
+          list.value = loadedRows;
           cacheRows(list.value);
           total.value = json.data.total || 0;
         } else {
           ElementPlus.ElMessage.error(json.message || '事件参数资源加载失败');
         }
+        return json.code === 200;
       } finally {
-        loading.value = false;
+        if (requestSequence === loadSequence) {
+          loading.value = false;
+        }
       }
     }
 
@@ -417,6 +537,55 @@
       return false;
     }
 
+    /**
+     * 保存单条资源的行内排序值，成功后重读当前分页以反映全局顺序。
+     */
+    async function setSort(row, value) {
+      const id = Number(row && row.id);
+      if (!Number.isInteger(id) || id <= 0 || sortSavingId.value !== 0) {
+        return false;
+      }
+
+      const oldSort = normalizeSort(row.sort);
+      const nextSort = normalizeSort(value);
+      row.sort = nextSort;
+      if (oldSort === nextSort) {
+        return true;
+      }
+
+      sortSavingId.value = id;
+      try {
+        const res = await fetch('/api/index.php?module=click_param_asset&method=setSort', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, sort: nextSort })
+        });
+        const json = await res.json();
+        if (json.code !== 200) {
+          row.sort = oldSort;
+          ElementPlus.ElMessage.error(json.message || '排序更新失败');
+          return false;
+        }
+
+        row.sort = normalizeSort(json.data && json.data.sort !== undefined ? json.data.sort : nextSort);
+        cacheRows(row);
+        try {
+          await load(lastActionType.value, page.value);
+        } catch (error) {
+          ElementPlus.ElMessage.warning('排序已保存，列表刷新失败，请手动刷新');
+          return true;
+        }
+        ElementPlus.ElMessage.success(json.message || '排序已更新');
+        return true;
+      } catch (error) {
+        row.sort = oldSort;
+        ElementPlus.ElMessage.error('排序更新失败');
+        return false;
+      } finally {
+        sortSavingId.value = 0;
+      }
+    }
+
     async function remove(row) {
       await ElementPlus.ElMessageBox.confirm(`确认删除事件参数资源：${row.name}?`, '警告', { type: 'warning' });
       const res = await fetch('/api/index.php?module=click_param_asset&method=deleteAsset', {
@@ -449,6 +618,9 @@
     function applySelection(target, actionField, textField, assetIdField, assetIds, assetIdsField) {
       const ids = toIdList(assetIds);
       const assets = selected(ids);
+      nextSelectionSequence(target);
+      trackSelection(target, ids);
+      cacheRows(assets);
       const id = firstId(ids);
       target[assetIdField] = id || null;
       if (assetIdsField) {
@@ -464,14 +636,17 @@
     }
 
     async function restoreSelectionFromText(target, actionField, textField, assetIdField, assetIdsField) {
+      const restoreSequence = nextSelectionSequence(target);
       const currentIds = idsOrFallback(target[assetIdsField], target[assetIdField]);
       const actionType = toAction(target[actionField]);
       const text = target[textField];
       if (currentIds.length > 0) {
+        trackSelection(target, currentIds);
         target[textField] = '';
         return currentIds;
       }
       if (!hasParam(actionType) || !normalizeParamText(text)) {
+        clearSelection(target);
         return [];
       }
 
@@ -479,6 +654,7 @@
       if (cachedIds.length > 0) {
         target[assetIdField] = cachedIds[0];
         target[assetIdsField] = multipleLimit(actionType) === 1 ? [cachedIds[0]] : cachedIds;
+        trackSelection(target, target[assetIdsField]);
         target[textField] = '';
         return target[assetIdsField];
       }
@@ -486,6 +662,7 @@
       const oldKeyword = keyword.value;
       const lookupKeyword = firstKeyword(text);
       if (!lookupKeyword) {
+        clearSelection(target);
         return [];
       }
       // 历史数据可能只有备用参数，没有资源关联；这里按参数内容反查同类资源用于回显。
@@ -495,14 +672,19 @@
       } finally {
         keyword.value = oldKeyword;
       }
+      if (!isCurrentSelectionSequence(target, restoreSequence)) {
+        return [];
+      }
 
       const loadedIds = inferIdsByText(actionType, text);
       if (loadedIds.length > 0) {
         target[assetIdField] = loadedIds[0];
         target[assetIdsField] = multipleLimit(actionType) === 1 ? [loadedIds[0]] : loadedIds;
+        trackSelection(target, target[assetIdsField]);
         target[textField] = '';
         return target[assetIdsField];
       }
+      clearSelection(target);
       return [];
     }
 
@@ -516,6 +698,7 @@
       dialogVisible,
       editVisible,
       editMode,
+      sortSavingId,
       form,
       options,
       merge,
@@ -533,9 +716,11 @@
       openEdit,
       submit,
       toggleEnabled,
+      setSort,
       remove,
       applyTo,
       applySelection,
+      clearSelection,
       restoreSelectionFromText
     };
   }

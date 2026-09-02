@@ -169,6 +169,7 @@
       :title="buttonEditMode ? '编辑按钮' : '添加按钮'"
       width="760px"
       top="4vh"
+      @close="onButtonDialogClosed"
     >
         <el-alert title="点击事件为提交输入内容的时候,要目标接口返回字符串'ok'才会执行关闭窗口" type="info" style="margin-bottom: 20px"></el-alert>
         <el-alert title="按钮事件设置为“提交输入内容”，事件参数填写为：【https://api.yunzhuru.com/kami/】   即可对接本平台的卡密，注意后面的斜线,别复制漏了" type="error" style="margin-bottom: 20px"></el-alert>
@@ -490,6 +491,7 @@ function updateClickTextTip(val) {
 }
 
 function onButtonClickActionChange(val) {
+  clickParam.clearSelection(buttonForm);
   buttonForm.clickParamAssetId = null;
   buttonForm.clickParamAssetIds = [];
   buttonForm.clickText = '';
@@ -502,6 +504,10 @@ function onButtonClickActionChange(val) {
 function applyButtonClickParamAsset(assetId) {
   clickParam.applySelection(buttonForm, 'click', 'clickText', 'clickParamAssetId', assetId, 'clickParamAssetIds');
   updateClickTextTip(buttonForm.click);
+}
+
+function onButtonDialogClosed() {
+  clickParam.clearSelection(buttonForm);
 }
 
 async function manageButtons(popupId) {
@@ -518,6 +524,7 @@ async function manageButtons(popupId) {
 }
 
 function openAddButtonDialog() {
+  clickParam.clearSelection(buttonForm);
   buttonEditMode.value = false;
   Object.assign(buttonForm, {
     id: null,
@@ -565,6 +572,7 @@ async function submitAddButton() {
 		    dismiss: buttonForm.dismiss ? 1 : 0
 		  };
 		  if (!hasClickParam(buttonForm.click)) {
+	    clickParam.clearSelection(buttonForm);
 	    payload.clickText = '';
 	    payload.clickParamAssetId = 0;
 	    payload.clickParamAssetIds = [];
@@ -744,6 +752,7 @@ onMounted(() => {
 		  updateClickTextTip,
 		  onButtonClickActionChange,
 			  applyButtonClickParamAsset,
+			  onButtonDialogClosed,
 			  buttonClickParamAssetIds,
 			  selectedButtonClickParamAssets,
 			  clickParam,

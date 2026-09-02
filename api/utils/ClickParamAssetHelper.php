@@ -46,7 +46,16 @@ if (!function_exists('clickParamAssetAddIndex')) {
     function clickParamAssetAddIndex(PDO $pdo, string $table, string $indexName, string $definition): void
     {
         if (!clickParamAssetIndexExists($pdo, $table, $indexName)) {
-            $pdo->exec("CREATE INDEX `$indexName` ON `$table` ($definition)");
+            try {
+                $pdo->exec("CREATE INDEX `$indexName` ON `$table` ($definition)");
+            } catch (Throwable $e) {
+                // 多实例可能同时通过 SHOW 检查，先完成的请求已建好同名索引时可安全忽略。
+                $message = $e->getMessage();
+                $isDuplicate = stripos($message, 'Duplicate key name') !== false || strpos($message, '1061') !== false;
+                if (!$isDuplicate || !clickParamAssetIndexExists($pdo, $table, $indexName)) {
+                    throw $e;
+                }
+            }
         }
     }
 }
@@ -70,7 +79,16 @@ if (!function_exists('clickParamAssetAddColumnIfMissing')) {
     function clickParamAssetAddColumnIfMissing(PDO $pdo, string $table, string $column, string $definition): void
     {
         if (!clickParamAssetColumnExists($pdo, $table, $column)) {
-            $pdo->exec("ALTER TABLE `$table` ADD `$column` $definition");
+            try {
+                $pdo->exec("ALTER TABLE `$table` ADD `$column` $definition");
+            } catch (Throwable $e) {
+                // 多实例首次请求并发补列时，只忽略 MySQL 明确的重复字段错误。
+                $message = $e->getMessage();
+                $isDuplicate = stripos($message, 'Duplicate column') !== false || strpos($message, '1060') !== false;
+                if (!$isDuplicate || !clickParamAssetColumnExists($pdo, $table, $column)) {
+                    throw $e;
+                }
+            }
         }
     }
 }
@@ -117,6 +135,7 @@ if (!function_exists('clickParamAssetEnsureTables')) {
             `action_type` TINYINT NOT NULL DEFAULT 1 COMMENT '事件类型',
             `param_text` TEXT NOT NULL COMMENT '事件参数内容',
             `enabled` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+            `sort` INT NOT NULL DEFAULT 0 COMMENT '排序值，数值越大越靠前',
             `remark` VARCHAR(255) NOT NULL DEFAULT '' COMMENT '备注',
             `created_at` DATETIME NOT NULL COMMENT '创建时间',
             `updated_at` DATETIME NOT NULL COMMENT '更新时间'
@@ -131,12 +150,24 @@ if (!function_exists('clickParamAssetEnsureTables')) {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
         clickParamAssetAddColumnIfMissing($pdo, 'cainiao_click_param_asset', 'enabled', "TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用'");
+        clickParamAssetAddColumnIfMissing($pdo, 'cainiao_click_param_asset', 'sort', "INT NOT NULL DEFAULT 0 COMMENT '排序值，数值越大越靠前'");
         clickParamAssetAddIndex($pdo, 'cainiao_click_param_asset', 'idx_user_action_created', '`user_id`, `action_type`, `created_at`');
+        clickParamAssetAddIndex($pdo, 'cainiao_click_param_asset', 'idx_user_action_sort', '`user_id`, `action_type`, `sort`, `id`');
         clickParamAssetAddIndex($pdo, 'cainiao_click_param_asset_ref', 'idx_target', '`target_type`, `target_id`');
         clickParamAssetAddIndex($pdo, 'cainiao_click_param_asset_ref', 'idx_asset_id', '`asset_id`');
         clickParamAssetDropIndexIfExists($pdo, 'cainiao_click_param_asset_ref', 'uniq_target');
         clickParamAssetAddUniqueIndex($pdo, 'cainiao_click_param_asset_ref', 'uniq_target_asset', '`target_type`, `target_id`, `asset_id`');
         $ensured = true;
+    }
+}
+
+if (!function_exists('clickParamAssetNormalizeSort')) {
+    /**
+     * 清洗资源排序值，限制边界以避免异常大整数污染列表顺序。
+     */
+    function clickParamAssetNormalizeSort($value): int
+    {
+        return max(-10000, min(10000, (int)$value));
     }
 }
 
@@ -384,8 +415,12 @@ if (!function_exists('clickParamAssetFetchListByTargets')) {
         $enabledSelect = clickParamAssetColumnExists($pdo, 'cainiao_click_param_asset', 'enabled')
             ? 'a.enabled'
             : '1';
+        $sortSelect = clickParamAssetColumnExists($pdo, 'cainiao_click_param_asset', 'sort')
+            ? 'a.`sort`'
+            : '0';
         $stmt = $pdo->prepare("
-            SELECT r.target_id, r.asset_id AS id, a.name, a.action_type, a.param_text, $enabledSelect AS enabled, a.remark
+            SELECT r.target_id, r.asset_id AS id, a.name, a.action_type, a.param_text,
+                   $enabledSelect AS enabled, $sortSelect AS `sort`, a.remark
             FROM cainiao_click_param_asset_ref r
             JOIN cainiao_click_param_asset a ON a.id = r.asset_id
             WHERE r.target_type = ? AND r.target_id IN ($placeholders)
@@ -402,6 +437,7 @@ if (!function_exists('clickParamAssetFetchListByTargets')) {
                 'action_type' => (int)$row['action_type'],
                 'param_text' => $row['param_text'],
                 'enabled' => (int)$row['enabled'],
+                'sort' => (int)$row['sort'],
                 'remark' => $row['remark'],
             ];
         }

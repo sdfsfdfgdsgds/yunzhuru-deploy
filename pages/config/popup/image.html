@@ -237,7 +237,7 @@
 
 
 	    <!-- 图片配置字段较多，桌面宽度收口为 960px，更窄视口由公共主题防溢出。 -->
-	    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="960px" top="4vh">
+	    <el-dialog v-model="dialogVisible" :title="editMode ? '编辑弹窗' : '添加弹窗'" width="960px" top="4vh" @close="onFormDialogClosed">
       <el-form :model="form" label-width="100px">
         <el-form-item label="类型">
           <el-select v-model="form.popup_type">
@@ -397,7 +397,7 @@
       </el-table>
     </el-dialog>
 
-    <el-dialog v-model="batchDialogVisible" title="批量修改弹窗" width="960px" top="4vh">
+    <el-dialog v-model="batchDialogVisible" title="批量修改弹窗" width="960px" top="4vh" @close="onBatchDialogClosed">
         
 
       <el-form :model="batchForm" label-width="100px">
@@ -740,6 +740,7 @@
 	          clickTextPlaceholder.value = clickParamPlaceholder(val);
 	        }
 	        function onFormClickActionChange(val) {
+	          clickParam.clearSelection(form);
 	          form.clickParamAssetId = null;
 	          form.clickParamAssetIds = [];
 	          form.clickText = '';
@@ -751,6 +752,9 @@
 	        function applyFormClickParamAsset(assetId) {
 	          clickParam.applySelection(form, 'clickAction', 'clickText', 'clickParamAssetId', assetId, 'clickParamAssetIds');
 	          updateClickTextPlaceholder(form.clickAction);
+	        }
+	        function onFormDialogClosed() {
+	          clickParam.clearSelection(form);
 	        }
 
 	        function createEmptyStats() {
@@ -871,6 +875,7 @@ function changeApp() {
                 ElementPlus.ElMessage.warning('请先选择应用');
                 return;
               }
+          clickParam.clearSelection(form);
           Object.assign(form, {
             id: null,
             popup_type: '',
@@ -926,6 +931,7 @@ function changeApp() {
 	            return;
 	          }
 	          if (!hasClickParam(form.clickAction)) {
+	            clickParam.clearSelection(form);
 	            form.clickText = '';
 	            form.clickParamAssetId = null;
 	            form.clickParamAssetIds = [];
@@ -1124,6 +1130,7 @@ function openBatchDialog() {
     ElementPlus.ElMessage.warning('请先选择要修改的弹窗');
     return;
   }
+  clickParam.clearSelection(batchForm);
   Object.assign(batchForm, {
     lock: false,
     popup_type: '',
@@ -1162,6 +1169,7 @@ function updateBatchClickPlaceholder(val) {
 }
 
 function onBatchClickActionChange(val) {
+  clickParam.clearSelection(batchForm);
   batchForm.clickParamAssetId = null;
   batchForm.clickParamAssetIds = [];
   batchForm.clickText = '';
@@ -1174,6 +1182,10 @@ function onBatchClickActionChange(val) {
 function applyBatchClickParamAsset(assetId) {
   clickParam.applySelection(batchForm, 'clickAction', 'clickText', 'clickParamAssetId', assetId, 'clickParamAssetIds');
   updateBatchClickPlaceholder(batchForm.clickAction);
+}
+
+function onBatchDialogClosed() {
+  clickParam.clearSelection(batchForm);
 }
 
 // 批量保存
@@ -1189,6 +1201,7 @@ async function confirmBatchUpdate() {
 	    return;
 	  }
 	  if (!hasClickParam(batchForm.clickAction)) {
+	    clickParam.clearSelection(batchForm);
 	    batchForm.clickText = '';
 	    batchForm.clickParamAssetId = null;
 	    batchForm.clickParamAssetIds = [];
@@ -1242,6 +1255,7 @@ async function confirmBatchUpdate() {
 	          updateClickTextPlaceholder,
 	          onFormClickActionChange,
 	          applyFormClickParamAsset,
+	          onFormDialogClosed,
 	          clickTextPlaceholder,
 	          clickTextLabel,
 	          formClickParamAssetIds,
@@ -1262,6 +1276,7 @@ async function confirmBatchUpdate() {
 	  updateBatchClickPlaceholder,
 	  onBatchClickActionChange,
 	  applyBatchClickParamAsset,
+	  onBatchDialogClosed,
 	  batchClickParamAssetIds,
 	  selectedBatchClickParamAssets,
 	  confirmBatchUpdate,selectedPopups,
