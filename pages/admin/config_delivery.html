@@ -95,7 +95,7 @@
     <el-tabs v-model="activeTab" class="tabs">
       <!-- 复用已验收的存储桶管理页，避免复制桶凭据和文件盘点逻辑。 -->
       <el-tab-pane label="配置桶" name="bucket">
-        <iframe :key="bucketFrameKey" class="bucket-frame" src="/pages/admin/bucket.html" title="存储桶管理"></iframe>
+        <iframe :key="bucketFrameKey" class="bucket-frame" :src="bucketFrameSrc" title="存储桶管理"></iframe>
       </el-tab-pane>
 
       <el-tab-pane label="API 域名池" name="domain">
@@ -481,6 +481,7 @@ createApp({
     const loading = ref(false);
     const appId = ref('');
     const bucketFrameKey = ref(0);
+    const bucketFrameSrc = ref('/pages/admin/bucket.html');
     const dnsPoolEnabled = ref(false);
     const dnsPoolSaving = ref(false);
     const domains = ref([]);
@@ -714,8 +715,18 @@ createApp({
       }
     }
 
-    /** 顶部刷新同时重载独立的存储桶 iframe。 */
-    async function refreshAll() { bucketFrameKey.value += 1; await loadData(false); }
+    /** 顶部刷新将有效 APPID 传给独立桶页，并同时刷新其余配置分发数据。 */
+    async function refreshAll() {
+      const rawAppId = String(appId.value || '').trim();
+      if (rawAppId && !normalizedAppId()) {
+        ElMessage.warning('APPID 必须是正整数');
+        return;
+      }
+      const selectedAppId = normalizedAppId();
+      bucketFrameSrc.value = '/pages/admin/bucket.html' + (selectedAppId > 0 ? `?app_id=${selectedAppId}` : '');
+      bucketFrameKey.value += 1;
+      await loadData(false);
+    }
 
     /** 保存原有 dns_pool 总开关，失败时恢复页面上的旧状态。 */
     async function updateDnsPool(value) {
@@ -1534,7 +1545,7 @@ createApp({
       stopCloudResourcePolling();
     });
     return {
-      activeTab, loading, appId, bucketFrameKey, dnsPoolEnabled, dnsPoolSaving,
+      activeTab, loading, appId, bucketFrameKey, bucketFrameSrc, dnsPoolEnabled, dnsPoolSaving,
       domains, dohRows, dnsRows, pathSummary, pathRows, pathTotals, pathNotice,
       presets, previewText, previewLoading, dohPreset, dnsPreset, importing,
       editorVisible, editorSaving, editorType, editor, editorTitle, dateRange,

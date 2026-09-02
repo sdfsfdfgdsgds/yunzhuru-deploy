@@ -55,6 +55,57 @@
       gap: 10px;
       padding: 16px 20px 0;
     }
+    .stats-overview {
+      padding: 16px 20px 0;
+    }
+    .stats-overview-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 10px;
+    }
+    .stats-overview-title {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.4;
+    }
+    .stats-overview-subtitle {
+      margin-top: 4px;
+      color: #6b7280;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .stats-overview-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(112px, 1fr));
+      gap: 10px;
+    }
+    .stats-overview-card {
+      min-width: 0;
+      padding: 13px 14px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      background: linear-gradient(180deg, #fff 0%, #f8fafc 100%);
+    }
+    .stats-overview-label {
+      color: #6b7280;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .stats-overview-value {
+      margin-top: 6px;
+      overflow: hidden;
+      color: #111827;
+      font-size: 23px;
+      font-weight: 700;
+      line-height: 1.2;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .stats-overview-error {
+      margin-top: 10px;
+    }
     .table-shell { padding: 16px 20px 20px; }
     .name { font-weight: 600; line-height: 1.45; }
     .secondary {
@@ -84,10 +135,35 @@
     }
     .stats, .push-result { font-size: 12px; line-height: 1.7; }
     .stats strong { font-size: 13px; }
+    .stats-hit-link {
+      display: inline-flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0 4px;
+      max-width: 100%;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: #2563eb;
+      cursor: pointer;
+      font: inherit;
+      text-align: left;
+    }
+    .stats-hit-link:hover,
+    .stats-hit-link:focus-visible {
+      color: #1d4ed8;
+      text-decoration: underline;
+    }
+    .stats-hit-link:focus-visible {
+      border-radius: 3px;
+      outline: 2px solid #93c5fd;
+      outline-offset: 2px;
+    }
     .success { color: #15803d; }
     .danger { color: #dc2626; }
     .muted { color: #6b7280; }
-    .operation-row { width: max-content; min-width: 292px; }
+    .operation-row { width: max-content; min-width: 356px; }
     .credential-input .el-input-group__append {
       min-width: 66px;
       padding: 0 8px;
@@ -121,6 +197,89 @@
       white-space: nowrap;
     }
     .bucket-dialog { max-width: 90vw; }
+
+    .stats-detail-dialog {
+      width: min(1180px, calc(100vw - 32px)) !important;
+      max-width: 96vw;
+    }
+    .stats-detail-dialog .el-dialog__body {
+      max-height: calc(100vh - 150px);
+      overflow: auto;
+      padding-top: 10px;
+    }
+    .stats-filter-panel {
+      margin-bottom: 14px;
+      padding: 14px;
+      border: 1px solid #e5e7eb;
+      border-radius: 9px;
+      background: #f8fafc;
+    }
+    .stats-filter-grid {
+      display: grid;
+      grid-template-columns: minmax(260px, 1.35fr) minmax(190px, .9fr) minmax(220px, 1fr) auto;
+      align-items: end;
+      gap: 12px;
+    }
+    .stats-filter-item { min-width: 0; }
+    .stats-filter-label {
+      display: block;
+      margin-bottom: 6px;
+      color: #4b5563;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .stats-range-buttons {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .stats-range-buttons .el-button { margin-left: 0; }
+    .stats-filter-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+    .stats-custom-range {
+      margin-top: 12px;
+    }
+    .stats-custom-range .el-date-editor { width: min(440px, 100%); }
+    .stats-period-note {
+      margin: 10px 0 0;
+      color: #6b7280;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .stats-detail-summary {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(105px, 1fr));
+      gap: 10px;
+      margin: 14px 0;
+    }
+    .stats-detail-summary .summary-card { background: #fff; }
+    .stats-detail-summary .summary-value { font-size: 19px; }
+    .stats-tab-caption {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 32px;
+      margin-bottom: 8px;
+      color: #6b7280;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .stats-table .el-table__inner-wrapper::before { height: 0; }
+    .stats-app-name { font-weight: 600; }
+    .stats-app-meta {
+      margin-top: 3px;
+      color: #6b7280;
+      font-size: 12px;
+      line-height: 1.45;
+      word-break: break-all;
+    }
+    .stats-dialog-error { margin-bottom: 12px; }
 
     .bucket-files-drawer {
       width: 60% !important;
@@ -199,15 +358,17 @@
 
     @media (max-width: 1100px) {
       .summary-grid { grid-template-columns: repeat(3, minmax(100px, 1fr)); }
+      .stats-overview-grid, .stats-detail-summary { grid-template-columns: repeat(3, minmax(100px, 1fr)); }
+      .stats-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .bucket-files-drawer { width: 76% !important; min-width: 0; }
     }
     @media (max-width: 760px) {
       .page { padding: 10px; }
-      .page-header, .drawer-header, .file-toolbar {
+      .page-header, .drawer-header, .file-toolbar, .stats-overview-head {
         align-items: stretch;
         flex-direction: column;
       }
-      .page-header, .notices, .table-shell {
+      .page-header, .notices, .stats-overview, .table-shell {
         padding-left: 12px;
         padding-right: 12px;
       }
@@ -216,7 +377,20 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
       .page-actions .el-button, .drawer-actions .el-button { width: 100%; }
-      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .summary-grid, .stats-overview-grid, .stats-detail-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .stats-filter-grid { grid-template-columns: minmax(0, 1fr); }
+      .stats-filter-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .stats-filter-actions .el-button { width: 100%; margin-left: 0; }
+      .stats-detail-dialog {
+        width: calc(100vw - 16px) !important;
+        max-width: none;
+        margin-top: 1vh !important;
+      }
+      .stats-detail-dialog .el-dialog__body {
+        max-height: calc(100vh - 118px);
+        padding: 8px 12px 14px;
+      }
+      .stats-tab-caption { align-items: flex-start; flex-direction: column; }
       .bucket-files-drawer { width: 90% !important; }
       .dialog-switches {
         align-items: flex-start;
@@ -237,7 +411,8 @@
       </div>
       <div class="page-actions">
         <el-button type="primary" @click="showAddDialog">添加存储桶</el-button>
-        <el-button :loading="loading" @click="loadBuckets">刷新</el-button>
+        <el-button type="primary" plain @click="openStatsDetail(null)">统计详情</el-button>
+        <el-button :loading="loading || overviewLoading" @click="refreshPage">刷新</el-button>
         <el-button type="warning" :loading="pushing" @click="pushAll(false)">同步全部配置</el-button>
       </div>
     </header>
@@ -252,6 +427,56 @@
         type="warning" show-icon :closable="false">
       </el-alert>
     </div>
+
+    <section class="stats-overview" v-loading="overviewLoading">
+      <div class="stats-overview-head">
+        <div>
+          <h2 class="stats-overview-title">配置命中总览</h2>
+          <div class="stats-overview-subtitle">
+            日期按北京时间计算；命中指壳成功读取、解密并应用桶配置后提交的回执。
+          </div>
+        </div>
+        <el-button type="primary" plain @click="openStatsDetail(null)">查看统计详情</el-button>
+      </div>
+      <div class="stats-overview-grid">
+        <div class="stats-overview-card">
+          <div class="stats-overview-label">今日命中</div>
+          <div class="stats-overview-value">{{ formatStatNumber(statsOverview.today_hits) }}</div>
+        </div>
+        <div class="stats-overview-card">
+          <div class="stats-overview-label">昨日命中</div>
+          <div class="stats-overview-value">{{ formatStatNumber(statsOverview.yesterday_hits) }}</div>
+        </div>
+        <div class="stats-overview-card">
+          <div class="stats-overview-label">近 7 天命中</div>
+          <div class="stats-overview-value">{{ formatStatNumber(statsOverview.period_hits) }}</div>
+        </div>
+        <div class="stats-overview-card">
+          <div class="stats-overview-label">累计命中</div>
+          <div class="stats-overview-value">{{ formatStatNumber(statsOverview.total_hits) }}</div>
+        </div>
+        <div class="stats-overview-card">
+          <div class="stats-overview-label">配置桶数</div>
+          <div class="stats-overview-value">{{ formatStatNumber(statsOverview.configured_bucket_count) }}</div>
+        </div>
+        <div class="stats-overview-card">
+          <div class="stats-overview-label">近 7 天命中应用</div>
+          <div class="stats-overview-value">{{ formatStatNumber(statsOverview.app_count) }}</div>
+        </div>
+      </div>
+      <el-alert
+        v-if="overviewError"
+        class="stats-overview-error"
+        :title="overviewError"
+        type="warning"
+        show-icon
+        :closable="false">
+        <template #default>
+          <span>已用当前桶列表临时汇总今日、累计和配置桶数；昨日、近 7 天和命中应用数保留为—，不冒充 0。</span>
+          <el-button link type="primary" @click="loadStatsOverview">重试读取统计</el-button>
+        </template>
+      </el-alert>
+    </section>
 
     <div class="table-shell">
       <el-table
@@ -323,7 +548,13 @@
         <el-table-column label="命中统计" min-width="205">
           <template #default="scope">
             <div class="stats">
-              <div><strong>今日 {{ formatNumber(scope.row.stats.today_hits) }}，累计 {{ formatNumber(scope.row.stats.total_hits) }}</strong></div>
+              <button
+                type="button"
+                class="stats-hit-link"
+                :title="'查看 ' + (scope.row.name || ('桶 ' + scope.row.id)) + ' 的命中统计详情'"
+                @click="openStatsDetail(scope.row)">
+                <strong>今日 {{ formatNumber(scope.row.stats.today_hits) }}，累计 {{ formatNumber(scope.row.stats.total_hits) }}</strong>
+              </button>
               <div class="muted">最近命中：{{ formatTime(scope.row.stats.last_seen_at) }}</div>
             </div>
           </template>
@@ -346,11 +577,12 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="326" align="center" fixed="right">
+        <el-table-column label="操作" width="392" align="center" fixed="right">
           <template #default="scope">
             <div class="operation-row">
               <el-button size="small" type="success" :loading="scope.row._testing" @click="testBucket(scope.row)">测试</el-button>
               <el-button size="small" type="primary" plain @click="openFiles(scope.row)">文件</el-button>
+              <el-button size="small" type="primary" plain @click="openStatsDetail(scope.row)">统计</el-button>
               <el-button size="small" @click="showEditDialog(scope.row)">编辑</el-button>
               <el-button size="small" type="danger" plain @click="removeBucket(scope.row)">删除</el-button>
             </div>
@@ -564,6 +796,270 @@
     </template>
   </el-dialog>
 
+  <!-- 命中统计只展示配置成功回执；筛选参数和响应字段在脚本的统计合同处统一归一化。 -->
+  <el-dialog
+    v-model="statsVisible"
+    class="stats-detail-dialog"
+    title="配置桶命中统计详情"
+    width="1180px"
+    top="3vh"
+    destroy-on-close
+    @close="invalidateStatsDetailRequest"
+    @closed="clearStatsDetail">
+    <div class="stats-filter-panel">
+      <div class="stats-filter-grid">
+        <div class="stats-filter-item">
+          <span class="stats-filter-label">时间范围</span>
+          <div class="stats-range-buttons">
+            <el-button
+              v-for="option in statsRangeOptions"
+              :key="option.value"
+              size="small"
+              :type="statsFilters.range === option.value ? 'primary' : 'default'"
+              :plain="statsFilters.range !== option.value"
+              @click="setStatsRange(option.value)">
+              {{ option.label }}
+            </el-button>
+          </div>
+        </div>
+        <div class="stats-filter-item">
+          <span class="stats-filter-label">存储桶</span>
+          <el-select
+            v-model="statsFilters.bucket_id"
+            clearable
+            filterable
+            placeholder="全部存储桶"
+            style="width: 100%">
+            <el-option
+              v-for="item in statsBucketOptions"
+              :key="item.id"
+              :label="bucketOptionLabel(item)"
+              :value="item.id">
+            </el-option>
+          </el-select>
+        </div>
+        <div class="stats-filter-item">
+          <span class="stats-filter-label">应用</span>
+          <el-select
+            v-model="statsFilters.app_id"
+            clearable
+            filterable
+            allow-create
+            default-first-option
+            placeholder="全部应用，也可输入 APPID"
+            style="width: 100%">
+            <el-option
+              v-for="item in statsAppOptions"
+              :key="item.app_id"
+              :label="appOptionLabel(item)"
+              :value="String(item.app_id)">
+            </el-option>
+          </el-select>
+        </div>
+        <div class="stats-filter-actions">
+          <el-button type="primary" :loading="statsLoading" @click="loadStatsDetail">查询</el-button>
+          <el-button :disabled="statsLoading" @click="resetStatsFilters">重置</el-button>
+        </div>
+      </div>
+
+      <div v-if="statsFilters.range === 'custom'" class="stats-custom-range">
+        <span class="stats-filter-label">自定义起止日期（含起止当天，最多 366 天）</span>
+        <el-date-picker
+          v-model="statsFilters.custom_dates"
+          type="daterange"
+          unlink-panels
+          clearable
+          value-format="YYYY-MM-DD"
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          :disabled-date="disableFutureDate">
+        </el-date-picker>
+      </div>
+      <div class="stats-period-note">
+        已应用查询：{{ statsQueryDescription }}。桶和应用条件作用于所有卡片与表格；日期条件用于“所选区间”与逐日数据，统一按北京时间计算。
+      </div>
+    </div>
+
+    <el-alert
+      v-if="statsFiltersDirty"
+      class="stats-dialog-error"
+      title="筛选条件已变化，下方仍沿用已应用条件的结果"
+      :description="'待应用：' + statsDraftDescription + '。点击“查询”后更新结果。'"
+      type="warning"
+      show-icon
+      :closable="false">
+    </el-alert>
+
+    <el-alert
+      v-if="statsError"
+      class="stats-dialog-error"
+      :title="statsError"
+      type="error"
+      show-icon
+      :closable="false">
+    </el-alert>
+
+    <div v-loading="statsLoading">
+      <template v-if="statsLoaded">
+        <div class="stats-detail-summary">
+          <div class="summary-card">
+            <div class="summary-label">所选区间命中</div>
+            <div class="summary-value">{{ formatStatNumber(statsData.summary.period_hits) }}</div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-label">今日命中</div>
+            <div class="summary-value">{{ formatStatNumber(statsData.summary.today_hits) }}</div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-label">昨日命中</div>
+            <div class="summary-value">{{ formatStatNumber(statsData.summary.yesterday_hits) }}</div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-label">累计命中</div>
+            <div class="summary-value">{{ formatStatNumber(statsData.summary.total_hits) }}</div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-label">区间命中桶数</div>
+            <div class="summary-value">{{ formatStatNumber(statsData.summary.bucket_count) }}</div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-label">区间命中应用数</div>
+            <div class="summary-value">{{ formatStatNumber(statsData.summary.app_count) }}</div>
+          </div>
+        </div>
+
+        <el-tabs v-model="statsActiveTab">
+          <el-tab-pane label="逐日" name="daily">
+            <div class="stats-tab-caption">
+              <span>{{ statsResultPeriodLabel }}，每日一行，无命中日期显示 0。</span>
+              <span>共 {{ formatNumber(statsData.daily.length) }} 天</span>
+            </div>
+            <el-table class="stats-table" :data="statsData.daily" border max-height="440" empty-text="所选条件下暂无逐日统计">
+              <el-table-column label="日期" prop="stat_date" min-width="128"></el-table-column>
+              <el-table-column label="命中回执" min-width="118" align="right">
+                <template #default="scope"><strong>{{ formatStatNumber(scope.row.hits) }}</strong></template>
+              </el-table-column>
+              <el-table-column label="命中桶数" min-width="112" align="right">
+                <template #default="scope">{{ formatStatNumber(scope.row.bucket_count) }}</template>
+              </el-table-column>
+              <el-table-column label="命中应用数" min-width="124" align="right">
+                <template #default="scope">{{ formatStatNumber(scope.row.app_count) }}</template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+
+          <el-tab-pane label="按桶" name="bucket">
+            <div class="stats-tab-caption">
+              <span>每行一个存储桶；所选区间列受当前筛选影响。</span>
+              <span>共 {{ formatNumber(statsData.by_bucket.length) }} 个桶</span>
+            </div>
+            <el-table class="stats-table" :data="statsData.by_bucket" border max-height="440" empty-text="所选条件下暂无按桶统计">
+              <el-table-column label="存储桶" min-width="210" fixed="left">
+                <template #default="scope">
+                  <div class="name">{{ scope.row.bucket_name || ('桶 ' + scope.row.bucket_id) }}</div>
+                  <div class="secondary">
+                    <el-tag size="small" :type="providerTag(scope.row.provider)">{{ scope.row.provider_label || providerLabel(scope.row.provider) }}</el-tag>
+                    <span class="mono" style="margin-left: 6px">ID {{ scope.row.bucket_id || '-' }}</span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="所选区间" min-width="118" align="right">
+                <template #default="scope"><strong>{{ formatStatNumber(scope.row.period_hits) }}</strong></template>
+              </el-table-column>
+              <el-table-column label="今日" min-width="96" align="right">
+                <template #default="scope">{{ formatStatNumber(scope.row.today_hits) }}</template>
+              </el-table-column>
+              <el-table-column label="昨日" min-width="96" align="right">
+                <template #default="scope">{{ formatStatNumber(scope.row.yesterday_hits) }}</template>
+              </el-table-column>
+              <el-table-column label="累计" min-width="108" align="right">
+                <template #default="scope">{{ formatStatNumber(scope.row.total_hits) }}</template>
+              </el-table-column>
+              <el-table-column label="区间应用数" min-width="116" align="right">
+                <template #default="scope">{{ formatStatNumber(scope.row.app_count) }}</template>
+              </el-table-column>
+              <el-table-column label="区间最近命中" min-width="168">
+                <template #default="scope">{{ formatTime(scope.row.period_last_seen_at) }}</template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+
+          <el-tab-pane label="按应用" name="app">
+            <div class="stats-tab-caption">
+              <span>每行一个 APPID；包名用于区分同名应用。</span>
+              <span>共 {{ formatNumber(statsData.by_app.length) }} 个应用</span>
+            </div>
+            <el-table class="stats-table" :data="statsData.by_app" border max-height="440" empty-text="所选条件下暂无按应用统计">
+              <el-table-column label="应用" min-width="250" fixed="left">
+                <template #default="scope">
+                  <div class="stats-app-name">{{ scope.row.app_name || '未命名应用' }}</div>
+                  <div class="stats-app-meta mono">APPID：{{ scope.row.app_id || '-' }}<span v-if="scope.row.package_name">｜{{ scope.row.package_name }}</span></div>
+                </template>
+              </el-table-column>
+              <el-table-column label="所选区间" min-width="118" align="right">
+                <template #default="scope"><strong>{{ formatStatNumber(scope.row.period_hits) }}</strong></template>
+              </el-table-column>
+              <el-table-column label="今日" min-width="96" align="right">
+                <template #default="scope">{{ formatStatNumber(scope.row.today_hits) }}</template>
+              </el-table-column>
+              <el-table-column label="昨日" min-width="96" align="right">
+                <template #default="scope">{{ formatStatNumber(scope.row.yesterday_hits) }}</template>
+              </el-table-column>
+              <el-table-column label="累计" min-width="108" align="right">
+                <template #default="scope">{{ formatStatNumber(scope.row.total_hits) }}</template>
+              </el-table-column>
+              <el-table-column label="区间命中桶数" min-width="124" align="right">
+                <template #default="scope">{{ formatStatNumber(scope.row.bucket_count) }}</template>
+              </el-table-column>
+              <el-table-column label="区间最近命中" min-width="168">
+                <template #default="scope">{{ formatTime(scope.row.period_last_seen_at) }}</template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+
+          <el-tab-pane label="桶 × 应用" name="matrix">
+            <div class="stats-tab-caption">
+              <span>每行是一个“存储桶＋APPID”组合，可定位某应用具体命中了哪个桶。</span>
+              <span>共 {{ formatNumber(statsData.bucket_apps.length) }} 个组合</span>
+            </div>
+            <el-table class="stats-table" :data="statsData.bucket_apps" border max-height="440" empty-text="所选条件下暂无桶与应用交叉统计">
+              <el-table-column label="存储桶" min-width="190" fixed="left">
+                <template #default="scope">
+                  <div class="name">{{ scope.row.bucket_name || ('桶 ' + scope.row.bucket_id) }}</div>
+                  <div class="secondary mono">ID {{ scope.row.bucket_id || '-' }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="应用" min-width="245">
+                <template #default="scope">
+                  <div class="stats-app-name">{{ scope.row.app_name || '未命名应用' }}</div>
+                  <div class="stats-app-meta mono">APPID：{{ scope.row.app_id || '-' }}<span v-if="scope.row.package_name">｜{{ scope.row.package_name }}</span></div>
+                </template>
+              </el-table-column>
+              <el-table-column label="所选区间" min-width="118" align="right">
+                <template #default="scope"><strong>{{ formatStatNumber(scope.row.period_hits) }}</strong></template>
+              </el-table-column>
+              <el-table-column label="今日" min-width="96" align="right">
+                <template #default="scope">{{ formatStatNumber(scope.row.today_hits) }}</template>
+              </el-table-column>
+              <el-table-column label="昨日" min-width="96" align="right">
+                <template #default="scope">{{ formatStatNumber(scope.row.yesterday_hits) }}</template>
+              </el-table-column>
+              <el-table-column label="累计" min-width="108" align="right">
+                <template #default="scope">{{ formatStatNumber(scope.row.total_hits) }}</template>
+              </el-table-column>
+              <el-table-column label="区间最近命中" min-width="168">
+                <template #default="scope">{{ formatTime(scope.row.period_last_seen_at) }}</template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+        </el-tabs>
+      </template>
+
+      <el-empty v-else-if="!statsLoading && !statsError" description="请选择统计条件后查询"></el-empty>
+    </div>
+  </el-dialog>
+
   <!-- 文件抽屉读取真实对象清单，并与当前成功注入应用的期望文件集合对账。 -->
   <el-drawer
     v-model="filesVisible"
@@ -768,10 +1264,84 @@ createApp({
     const filePageSize = 100;
     const activeBucket = reactive({});
 
+    // 统计详情状态与桶资料管理解耦：统计接口异常时，桶列表仍可独立使用。
+    const statsVisible = ref(false);
+    const statsLoading = ref(false);
+    const statsLoaded = ref(false);
+    const statsError = ref('');
+    const statsActiveTab = ref('daily');
+    const overviewLoading = ref(false);
+    const overviewLoaded = ref(false);
+    const overviewError = ref('');
+    const statsRangeOptions = Object.freeze([
+      { value: 'today', label: '今天' },
+      { value: 'yesterday', label: '昨天' },
+      { value: '7d', label: '近 7 天' },
+      { value: '30d', label: '近 30 天' },
+      { value: 'custom', label: '自定义' },
+    ]);
+    const statsFilters = reactive({
+      range: '7d',
+      custom_dates: [],
+      bucket_id: '',
+      app_id: '',
+    });
+    // 界面筛选是待应用值；只有查询成功后才更新 appliedStatsFilters。
+    const appliedStatsFilters = reactive({
+      range: '',
+      start_date: '',
+      end_date: '',
+      bucket_id: '',
+      app_id: '',
+    });
+
+    /**
+     * 统计接口的稳定响应合同。空值保留为 null，页面显示“—”，
+     * 避免将“后端未返回”误表达为真实的 0 次。
+     */
+    function emptyStatsSummary() {
+      return {
+        period_hits: null,
+        today_hits: null,
+        yesterday_hits: null,
+        total_hits: null,
+        bucket_count: null,
+        configured_bucket_count: null,
+        active_bucket_count: null,
+        app_count: null,
+      };
+    }
+    function emptyStatsData() {
+      return {
+        period: { range: '7d', start_date: '', end_date: '', timezone: 'Asia/Shanghai', days: null },
+        summary: emptyStatsSummary(),
+        filters: { buckets: [], apps: [] },
+        daily: [],
+        by_bucket: [],
+        by_app: [],
+        bucket_apps: [],
+      };
+    }
+    const statsOverview = reactive(emptyStatsSummary());
+    const statsData = reactive(emptyStatsData());
+
+    // 配置分发父页可通过 ?app_id=253 传入 APPID；每次打开全局详情都恢复该上下文。
+    const initialStatsAppId = (function () {
+      try {
+        const value = new URLSearchParams(window.location.search).get('app_id');
+        return /^\d+$/.test(String(value || '')) && Number(value) > 0 ? String(Number(value)) : '';
+      } catch (error) {
+        return '';
+      }
+    })();
+
     // 请求代次只在当前页面内递增，用于丢弃关闭、切换或刷新后的迟到响应。
     let editRequestGeneration = 0;
     let credentialContextGeneration = 0;
     let fileRequestGeneration = 0;
+    let statsRequestGeneration = 0;
+    let overviewRequestGeneration = 0;
+    let bucketRequestGeneration = 0;
     const credentialRequestGeneration = {
       login_account: 0,
       login_password: 0,
@@ -865,6 +1435,209 @@ createApp({
       missingFilePage.value = 1;
     });
 
+    function firstPresent(source, fields) {
+      const object = source && typeof source === 'object' ? source : {};
+      for (const field of fields) {
+        if (
+          Object.prototype.hasOwnProperty.call(object, field) &&
+          object[field] !== null &&
+          object[field] !== ''
+        ) {
+          return object[field];
+        }
+      }
+      return null;
+    }
+    function nullableNumber(value) {
+      if (value === null || value === undefined || value === '') return null;
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    }
+    function numberField(source, fields) {
+      return nullableNumber(firstPresent(source, fields));
+    }
+    function arrayField(source, fields) {
+      const value = firstPresent(source, fields);
+      return Array.isArray(value) ? value : [];
+    }
+    function uniquePositiveCount(rows, fields) {
+      const values = new Set();
+      (Array.isArray(rows) ? rows : []).forEach(function (row) {
+        const value = firstPresent(row, fields);
+        if (value !== null && String(value) !== '' && Number(value) > 0) values.add(String(value));
+      });
+      return values.size;
+    }
+    function sumAvailable(rows, field) {
+      let hasValue = false;
+      const total = (Array.isArray(rows) ? rows : []).reduce(function (sum, row) {
+        const value = nullableNumber(row && row[field]);
+        if (value === null) return sum;
+        hasValue = true;
+        return sum + value;
+      }, 0);
+      return hasValue ? total : null;
+    }
+
+    // 预设日期始终按北京时间生成，不受管理员浏览器所在时区影响。
+    function formatDateOnly(date) {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return year + '-' + month + '-' + day;
+    }
+    function dateWithOffset(offset) {
+      let year;
+      let month;
+      let day;
+      try {
+        const parts = new Intl.DateTimeFormat('en-US', {
+          timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+        }).formatToParts(new Date());
+        const map = {};
+        parts.forEach(function (part) { map[part.type] = part.value; });
+        year = Number(map.year);
+        month = Number(map.month);
+        day = Number(map.day);
+      } catch (error) {
+        // 极旧浏览器缺少 IANA 时区时，用 UTC+8 取北京日历作为后备。
+        const beijingNow = new Date(Date.now() + 8 * 60 * 60 * 1000);
+        year = beijingNow.getUTCFullYear();
+        month = beijingNow.getUTCMonth() + 1;
+        day = beijingNow.getUTCDate();
+      }
+      const date = new Date(Date.UTC(year, month - 1, day));
+      date.setUTCDate(date.getUTCDate() + Number(offset || 0));
+      return date.toISOString().slice(0, 10);
+    }
+    function resolveStatsDates(range, customDates) {
+      if (range === 'today') return { start_date: dateWithOffset(0), end_date: dateWithOffset(0) };
+      if (range === 'yesterday') return { start_date: dateWithOffset(-1), end_date: dateWithOffset(-1) };
+      if (range === '30d') return { start_date: dateWithOffset(-29), end_date: dateWithOffset(0) };
+      if (range === 'custom') {
+        if (!Array.isArray(customDates) || customDates.length !== 2 || !customDates[0] || !customDates[1]) {
+          return null;
+        }
+        return { start_date: String(customDates[0]), end_date: String(customDates[1]) };
+      }
+      return { start_date: dateWithOffset(-6), end_date: dateWithOffset(0) };
+    }
+    function statsRangeLabel(range) {
+      const option = statsRangeOptions.find(function (item) { return item.value === range; });
+      return option ? option.label : '所选区间';
+    }
+    function disableFutureDate(date) {
+      return formatDateOnly(date) > dateWithOffset(0);
+    }
+
+    const statsBucketOptions = computed(function () {
+      const map = new Map();
+      const candidates = []
+        .concat(Array.isArray(buckets.value) ? buckets.value : [])
+        .concat(Array.isArray(statsData.filters.buckets) ? statsData.filters.buckets : []);
+      candidates.forEach(function (item) {
+        const id = Number(firstPresent(item, ['id', 'bucket_id']));
+        if (!Number.isInteger(id) || id <= 0) return;
+        const previous = map.get(id) || {};
+        map.set(id, {
+          ...previous,
+          ...item,
+          id: id,
+          name: firstPresent(item, ['name', 'bucket_name']) || previous.name || ('桶 ' + id),
+          provider: firstPresent(item, ['provider']) || previous.provider || '',
+          provider_label: firstPresent(item, ['provider_label']) || previous.provider_label || '',
+        });
+      });
+      return Array.from(map.values()).sort(function (left, right) { return left.id - right.id; });
+    });
+    const statsAppOptions = computed(function () {
+      const map = new Map();
+      (Array.isArray(statsData.filters.apps) ? statsData.filters.apps : []).forEach(function (item) {
+        const appId = Number(firstPresent(item, ['app_id', 'id']));
+        if (!Number.isInteger(appId) || appId <= 0) return;
+        map.set(appId, {
+          ...item,
+          app_id: appId,
+          app_name: firstPresent(item, ['app_name', 'name']) || '',
+          package_name: firstPresent(item, ['package_name', 'package']) || '',
+        });
+      });
+      return Array.from(map.values()).sort(function (left, right) { return left.app_id - right.app_id; });
+    });
+    function draftStatsFilterSnapshot() {
+      const dates = resolveStatsDates(statsFilters.range, statsFilters.custom_dates);
+      return {
+        range: statsFilters.range,
+        start_date: dates ? dates.start_date : '',
+        end_date: dates ? dates.end_date : '',
+        bucket_id: statsFilters.bucket_id === null ? '' : statsFilters.bucket_id,
+        app_id: statsFilters.app_id === null ? '' : String(statsFilters.app_id).trim(),
+      };
+    }
+    function statsFilterKey(filters) {
+      return JSON.stringify({
+        range: String(filters.range || ''),
+        start_date: String(filters.start_date || ''),
+        end_date: String(filters.end_date || ''),
+        bucket_id: String(filters.bucket_id || ''),
+        app_id: String(filters.app_id || ''),
+      });
+    }
+    function describeStatsFilters(filters, emptyLabel) {
+      if (!filters || !filters.range) return emptyLabel || '等待首次查询';
+      const parts = [statsRangeLabel(filters.range)];
+      if (filters.start_date && filters.end_date) parts.push(filters.start_date + ' 至 ' + filters.end_date);
+      else parts.push('请选择起止日期');
+      const bucketId = Number(filters.bucket_id || 0);
+      if (bucketId > 0) {
+        const bucket = statsBucketOptions.value.find(function (item) { return Number(item.id) === bucketId; });
+        parts.push('桶：' + (bucket ? bucket.name : ('ID ' + bucketId)));
+      }
+      const appIdText = String(filters.app_id || '').trim();
+      if (appIdText !== '') parts.push('APPID：' + appIdText);
+      return parts.join('｜');
+    }
+    const statsDraftDescription = computed(function () {
+      return describeStatsFilters(draftStatsFilterSnapshot(), '请选择查询条件');
+    });
+    const statsQueryDescription = computed(function () {
+      return describeStatsFilters(appliedStatsFilters, '等待首次查询');
+    });
+    const statsFiltersDirty = computed(function () {
+      if (!statsLoaded.value) return false;
+      return statsFilterKey(draftStatsFilterSnapshot()) !== statsFilterKey(appliedStatsFilters);
+    });
+    const statsResultPeriodLabel = computed(function () {
+      const period = statsData.period || {};
+      if (period.start_date && period.end_date) {
+        return String(period.start_date) + ' 至 ' + String(period.end_date);
+      }
+      return statsRangeLabel(period.range || appliedStatsFilters.range);
+    });
+
+    // 用户只要改动任一待应用条件，当前在途详情请求立即过期。
+    // flush=sync 保证快捷时间按钮在启动新请求前已先废弃旧请求。
+    watch(function () {
+      return [
+        statsFilters.range,
+        statsFilters.bucket_id,
+        statsFilters.app_id,
+        JSON.stringify(statsFilters.custom_dates || []),
+      ];
+    }, function () {
+      invalidateStatsDetailRequest();
+    }, { flush: 'sync' });
+
+    function bucketOptionLabel(item) {
+      const provider = item.provider_label || providerLabel(item.provider);
+      return String(item.name || ('桶 ' + item.id)) + '｜' + provider + '｜ID ' + item.id;
+    }
+    function appOptionLabel(item) {
+      const name = item.app_name || '未命名应用';
+      const packageName = item.package_name ? '｜' + item.package_name : '';
+      return 'APPID ' + item.app_id + '｜' + name + packageName;
+    }
+
     function providerTag(provider) {
       return { r2: 'warning', b2: 'success', s3: 'primary' }[String(provider || '').toLowerCase()] || 'info';
     }
@@ -906,6 +1679,10 @@ createApp({
     function formatNumber(value) {
       const number = Number(value || 0);
       return Number.isFinite(number) ? number.toLocaleString('zh-CN') : '0';
+    }
+    function formatStatNumber(value) {
+      const number = nullableNumber(value);
+      return number === null ? '—' : number.toLocaleString('zh-CN');
     }
     function formatBytes(value) {
       let bytes = Number(value || 0);
@@ -978,6 +1755,7 @@ createApp({
           ok_hits: Number(stats.ok_hits || 0),
           fail_hits: Number(stats.fail_hits || 0),
           today_hits: Number(stats.today_hits || 0),
+          yesterday_hits: nullableNumber(stats.yesterday_hits),
           today_ok_hits: Number(stats.today_ok_hits || 0),
           today_fail_hits: Number(stats.today_fail_hits || 0),
           last_seen_at: stats.last_seen_at || '',
@@ -988,17 +1766,312 @@ createApp({
       };
     }
 
+    /**
+     * getBucketStatsDetail 请求合同：
+     * { range: today|yesterday|7d|30d|custom, start_date?, end_date?, bucket_id?, app_id? }。
+     * 快捷预设只提交 range，由后端按北京时间解析；仅 custom 提交包含边界的日期。
+     */
+    function buildStatsRequest() {
+      const request = { range: statsFilters.range };
+      if (statsFilters.range === 'custom') {
+        const dates = resolveStatsDates(statsFilters.range, statsFilters.custom_dates);
+        if (!dates) throw new Error('请先选择自定义起止日期');
+        if (dates.start_date > dates.end_date) throw new Error('开始日期不能晚于结束日期');
+        const startTime = Date.parse(dates.start_date + 'T00:00:00Z');
+        const endTime = Date.parse(dates.end_date + 'T00:00:00Z');
+        if (!Number.isFinite(startTime) || !Number.isFinite(endTime)) throw new Error('日期格式必须为 YYYY-MM-DD');
+        if (Math.floor((endTime - startTime) / 86400000) + 1 > 366) throw new Error('单次最多查询 366 天');
+        request.start_date = dates.start_date;
+        request.end_date = dates.end_date;
+      }
+      if (statsFilters.bucket_id !== '' && statsFilters.bucket_id !== null) {
+        const bucketId = Number(statsFilters.bucket_id);
+        if (!Number.isInteger(bucketId) || bucketId <= 0) throw new Error('存储桶 ID 格式错误');
+        request.bucket_id = bucketId;
+      }
+      if (statsFilters.app_id !== '' && statsFilters.app_id !== null) {
+        const appIdText = String(statsFilters.app_id).trim();
+        if (!/^\d+$/.test(appIdText) || Number(appIdText) <= 0) throw new Error('APPID 必须是正整数');
+        request.app_id = Number(appIdText);
+      }
+      return request;
+    }
+
+    function normalizeStatsBucket(row) {
+      const source = row && typeof row === 'object' ? row : {};
+      return {
+        ...source,
+        bucket_id: numberField(source, ['bucket_id', 'id']),
+        bucket_name: firstPresent(source, ['bucket_name', 'name']) || '',
+        provider: firstPresent(source, ['provider']) || '',
+        provider_label: firstPresent(source, ['provider_label']) || '',
+        period_hits: numberField(source, ['period_hits', 'range_hits', 'hits', 'hit_count']),
+        today_hits: numberField(source, ['today_hits', 'today_count']),
+        yesterday_hits: numberField(source, ['yesterday_hits', 'yesterday_count']),
+        total_hits: numberField(source, ['total_hits', 'lifetime_hits', 'all_hits']),
+        app_count: numberField(source, ['app_count', 'apps_count']),
+        period_last_seen_at: firstPresent(source, ['period_last_seen_at', 'range_last_seen_at']) || '',
+        last_seen_at: firstPresent(source, ['last_seen_at', 'last_hit_at', 'last_seen']) || '',
+      };
+    }
+    function normalizeStatsApp(row) {
+      const source = row && typeof row === 'object' ? row : {};
+      return {
+        ...source,
+        app_id: numberField(source, ['app_id', 'id']),
+        app_name: firstPresent(source, ['app_name', 'name']) || '',
+        package_name: firstPresent(source, ['package_name', 'package']) || '',
+        period_hits: numberField(source, ['period_hits', 'range_hits', 'hits', 'hit_count']),
+        today_hits: numberField(source, ['today_hits', 'today_count']),
+        yesterday_hits: numberField(source, ['yesterday_hits', 'yesterday_count']),
+        total_hits: numberField(source, ['total_hits', 'lifetime_hits', 'all_hits']),
+        bucket_count: numberField(source, ['bucket_count', 'buckets_count']),
+        period_last_seen_at: firstPresent(source, ['period_last_seen_at', 'range_last_seen_at']) || '',
+        last_seen_at: firstPresent(source, ['last_seen_at', 'last_hit_at', 'last_seen']) || '',
+      };
+    }
+    function normalizeStatsMatrix(row) {
+      return { ...normalizeStatsBucket(row), ...normalizeStatsApp(row) };
+    }
+    function normalizeStatsDaily(row) {
+      const source = row && typeof row === 'object' ? row : {};
+      return {
+        ...source,
+        stat_date: firstPresent(source, ['stat_date', 'date', 'day']) || '',
+        hits: numberField(source, ['hits', 'hit_count', 'period_hits', 'total_hits']),
+        bucket_count: numberField(source, ['bucket_count', 'buckets_count']),
+        app_count: numberField(source, ['app_count', 'apps_count']),
+      };
+    }
+    function normalizeStatsFilterBucket(row) {
+      const normalized = normalizeStatsBucket(row);
+      return {
+        id: normalized.bucket_id,
+        name: normalized.bucket_name,
+        provider: normalized.provider,
+        provider_label: normalized.provider_label,
+      };
+    }
+    function normalizeStatsFilterApp(row) {
+      const normalized = normalizeStatsApp(row);
+      return {
+        app_id: normalized.app_id,
+        app_name: normalized.app_name,
+        package_name: normalized.package_name,
+      };
+    }
+
+    /**
+     * 期望响应为 data={period,summary,filters,daily,by_bucket,by_app,bucket_apps}。
+     * 为了让前后端分步发布时页面仍可用，同时兼容 daily_stats、bucket_stats、
+     * app_stats、bucket_app_stats 等直观别名，但对外展示统一使用上述稳定字段。
+     */
+    function normalizeStatsResponse(payload, request) {
+      const source = payload && typeof payload === 'object' ? payload : {};
+      const summarySource = firstPresent(source, ['summary', 'overview', 'totals']) || {};
+      const filtersSource = firstPresent(source, ['filters', 'options', 'filter_options']) || {};
+      const byBucket = arrayField(source, ['by_bucket', 'bucket_stats', 'buckets']).map(normalizeStatsBucket);
+      const byApp = arrayField(source, ['by_app', 'app_stats', 'apps']).map(normalizeStatsApp);
+      const bucketApps = arrayField(source, ['bucket_apps', 'bucket_app_stats', 'matrix', 'by_bucket_app'])
+        .map(normalizeStatsMatrix);
+      const daily = arrayField(source, ['daily', 'daily_stats', 'by_day', 'days'])
+        .map(normalizeStatsDaily);
+
+      let filterBuckets = arrayField(filtersSource, ['buckets', 'bucket_options']);
+      if (!filterBuckets.length) filterBuckets = arrayField(source, ['bucket_options']);
+      if (!filterBuckets.length) filterBuckets = byBucket;
+      let filterApps = arrayField(filtersSource, ['apps', 'app_options']);
+      if (!filterApps.length) filterApps = arrayField(source, ['app_options']);
+      if (!filterApps.length) filterApps = byApp;
+
+      const periodSource = firstPresent(source, ['period', 'date_range']) || {};
+      const period = {
+        range: firstPresent(periodSource, ['range', 'preset']) || firstPresent(source, ['range', 'preset']) || request.range,
+        start_date: firstPresent(periodSource, ['start_date', 'start']) || firstPresent(source, ['start_date']) || request.start_date,
+        end_date: firstPresent(periodSource, ['end_date', 'end']) || firstPresent(source, ['end_date']) || request.end_date,
+        timezone: firstPresent(periodSource, ['timezone', 'time_zone']) || firstPresent(source, ['timezone']) || 'Asia/Shanghai',
+        days: numberField(periodSource, ['days', 'day_count']),
+      };
+
+      let periodHits = numberField(summarySource, ['period_hits', 'range_hits', 'hits', 'hit_count']);
+      if (periodHits === null) periodHits = sumAvailable(daily, 'hits');
+      if (periodHits === null) periodHits = sumAvailable(byBucket, 'period_hits');
+      let bucketCount = numberField(summarySource, ['bucket_count', 'hit_bucket_count', 'buckets_count']);
+      if (bucketCount === null && byBucket.length) bucketCount = uniquePositiveCount(byBucket, ['bucket_id', 'id']);
+      let appCount = numberField(summarySource, ['app_count', 'hit_app_count', 'apps_count']);
+      if (appCount === null && byApp.length) appCount = uniquePositiveCount(byApp, ['app_id', 'id']);
+      if (appCount === null && bucketApps.length) appCount = uniquePositiveCount(bucketApps, ['app_id', 'id']);
+
+      return {
+        period: period,
+        summary: {
+          period_hits: periodHits,
+          today_hits: numberField(summarySource, ['today_hits', 'today_count']),
+          yesterday_hits: numberField(summarySource, ['yesterday_hits', 'yesterday_count']),
+          total_hits: numberField(summarySource, ['total_hits', 'lifetime_hits', 'all_hits']),
+          bucket_count: bucketCount,
+          configured_bucket_count: numberField(summarySource, ['configured_bucket_count', 'total_configured_bucket_count']),
+          active_bucket_count: numberField(summarySource, ['active_bucket_count', 'enabled_bucket_count']),
+          app_count: appCount,
+        },
+        filters: {
+          buckets: filterBuckets.map(normalizeStatsFilterBucket).filter(function (item) { return Number(item.id) > 0; }),
+          apps: filterApps.map(normalizeStatsFilterApp).filter(function (item) { return Number(item.app_id) > 0; }),
+        },
+        daily: daily,
+        by_bucket: byBucket,
+        by_app: byApp,
+        bucket_apps: bucketApps,
+      };
+    }
+
+    function applyBucketOverviewFallback() {
+      const rows = Array.isArray(buckets.value) ? buckets.value : [];
+      let yesterdayAvailable = false;
+      let yesterdayHits = 0;
+      rows.forEach(function (row) {
+        const value = nullableNumber(row && row.stats && row.stats.yesterday_hits);
+        if (value !== null) {
+          yesterdayAvailable = true;
+          yesterdayHits += value;
+        }
+      });
+      Object.assign(statsOverview, emptyStatsSummary(), {
+        today_hits: rows.reduce(function (sum, row) { return sum + Number(row.stats.today_hits || 0); }, 0),
+        yesterday_hits: yesterdayAvailable ? yesterdayHits : null,
+        total_hits: rows.reduce(function (sum, row) { return sum + Number(row.stats.total_hits || 0); }, 0),
+        bucket_count: rows.length,
+        configured_bucket_count: rows.length,
+        active_bucket_count: rows.filter(function (row) { return Number(row.enabled) === 1; }).length,
+      });
+    }
+
+    async function loadStatsOverview() {
+      const requestGeneration = ++overviewRequestGeneration;
+      overviewLoading.value = true;
+      overviewError.value = '';
+      try {
+        // 顶部卡片只需要 summary/filter 元数据，避免每次刷新都生成全部明细表。
+        const request = { range: '7d', summary_only: 1 };
+        const json = await api('getBucketStatsDetail', request);
+        if (requestGeneration !== overviewRequestGeneration) return;
+        if (Number(json.code) !== 200) throw new Error(json.message || '加载命中总览失败');
+        const normalized = normalizeStatsResponse(json.data || {}, request);
+        Object.assign(statsOverview, emptyStatsSummary(), normalized.summary);
+        if (statsOverview.configured_bucket_count === null) {
+          statsOverview.configured_bucket_count = buckets.value.length || normalized.filters.buckets.length;
+        }
+        overviewLoaded.value = true;
+      } catch (error) {
+        if (requestGeneration !== overviewRequestGeneration) return;
+        overviewLoaded.value = false;
+        overviewError.value = getErrorMessage(error, '命中总览暂未加载');
+        applyBucketOverviewFallback();
+      } finally {
+        if (requestGeneration === overviewRequestGeneration) overviewLoading.value = false;
+      }
+    }
+
+    async function loadStatsDetail() {
+      let request;
+      try {
+        request = buildStatsRequest();
+      } catch (error) {
+        ElementPlus.ElMessage.warning(getErrorMessage(error, '请检查统计条件'));
+        return;
+      }
+      const requestGeneration = ++statsRequestGeneration;
+      const hadLoadedData = statsLoaded.value;
+      statsLoading.value = true;
+      statsError.value = '';
+      try {
+        const json = await api('getBucketStatsDetail', request);
+        if (requestGeneration !== statsRequestGeneration || !statsVisible.value) return;
+        if (Number(json.code) !== 200) throw new Error(json.message || '加载统计详情失败');
+        const normalized = normalizeStatsResponse(json.data || {}, request);
+        Object.assign(statsData, emptyStatsData(), normalized);
+        Object.assign(appliedStatsFilters, {
+          range: request.range,
+          start_date: normalized.period.start_date || request.start_date || '',
+          end_date: normalized.period.end_date || request.end_date || '',
+          bucket_id: request.bucket_id || '',
+          app_id: request.app_id || '',
+        });
+        statsLoaded.value = true;
+      } catch (error) {
+        if (requestGeneration !== statsRequestGeneration || !statsVisible.value) return;
+        statsLoaded.value = hadLoadedData;
+        statsError.value = getErrorMessage(error, '加载统计详情失败');
+      } finally {
+        if (requestGeneration === statsRequestGeneration) statsLoading.value = false;
+      }
+    }
+
+    /** 废弃当前详情请求；迟到响应的 token 不再匹配，因此不会覆盖新条件。 */
+    function invalidateStatsDetailRequest() {
+      statsRequestGeneration += 1;
+      statsLoading.value = false;
+      statsError.value = '';
+    }
+
+    function openStatsDetail(row) {
+      invalidateStatsDetailRequest();
+      statsFilters.range = '7d';
+      statsFilters.custom_dates = [];
+      statsFilters.bucket_id = row && Number(row.id) > 0 ? Number(row.id) : '';
+      statsFilters.app_id = !row && initialStatsAppId ? initialStatsAppId : '';
+      statsActiveTab.value = row ? 'bucket' : 'daily';
+      statsLoaded.value = false;
+      Object.assign(appliedStatsFilters, { range: '', start_date: '', end_date: '', bucket_id: '', app_id: '' });
+      Object.assign(statsData, emptyStatsData());
+      statsVisible.value = true;
+      loadStatsDetail();
+    }
+    function clearStatsDetail() {
+      invalidateStatsDetailRequest();
+      statsLoaded.value = false;
+      Object.assign(appliedStatsFilters, { range: '', start_date: '', end_date: '', bucket_id: '', app_id: '' });
+      Object.assign(statsData, emptyStatsData());
+    }
+    function setStatsRange(range) {
+      statsFilters.range = range;
+      if (range === 'custom') {
+        if (!Array.isArray(statsFilters.custom_dates) || statsFilters.custom_dates.length !== 2) {
+          statsFilters.custom_dates = [dateWithOffset(-6), dateWithOffset(0)];
+        }
+        return;
+      }
+      loadStatsDetail();
+    }
+    function resetStatsFilters() {
+      statsFilters.range = '7d';
+      statsFilters.custom_dates = [];
+      statsFilters.bucket_id = '';
+      statsFilters.app_id = '';
+      statsActiveTab.value = 'daily';
+      loadStatsDetail();
+    }
+
     async function loadBuckets() {
+      const requestGeneration = ++bucketRequestGeneration;
       loading.value = true;
       try {
         const json = await api('getBuckets');
+        if (requestGeneration !== bucketRequestGeneration) return;
         if (Number(json.code) !== 200) throw new Error(json.message || '加载存储桶失败');
         buckets.value = (Array.isArray(json.data) ? json.data : []).map(normalizeBucket);
+        statsOverview.configured_bucket_count = buckets.value.length;
+        if (!overviewLoaded.value) applyBucketOverviewFallback();
       } catch (error) {
+        if (requestGeneration !== bucketRequestGeneration) return;
         ElementPlus.ElMessage.error(getErrorMessage(error, '加载存储桶失败'));
       } finally {
-        loading.value = false;
+        if (requestGeneration === bucketRequestGeneration) loading.value = false;
       }
+    }
+
+    async function refreshPage() {
+      await Promise.all([loadBuckets(), loadStatsOverview()]);
     }
 
     const credentialFields = ['login_account', 'login_password', 'access_key', 'secret_key'];
@@ -1404,22 +2477,30 @@ createApp({
       }
     }
 
-    onMounted(loadBuckets);
+    onMounted(refreshPage);
 
     return {
       buckets, loading, dialogVisible, isEdit, submitting, pushing, formTesting,
       filesVisible, filesLoading, filesLoaded, fileSearch, activeBucket, fileData,
       filePage, missingFilePage, filePageSize,
+      overviewLoading, overviewError, statsOverview,
+      statsVisible, statsLoading, statsLoaded, statsError, statsActiveTab,
+      statsRangeOptions, statsFilters, statsData,
       form, credentialVisible, credentialLoading, credentialCleared,
       providerHelp, endpointPlaceholder, regionPlaceholder,
       filteredFiles, filteredMissingFiles, paginatedFiles, paginatedMissingFiles,
+      statsBucketOptions, statsAppOptions, statsDraftDescription, statsQueryDescription,
+      statsFiltersDirty, statsResultPeriodLabel,
       providerTag, providerLabel, pushResultTag, fileScopeLabel, fileScopeTag,
+      bucketOptionLabel, appOptionLabel,
       publicCheckPerformed, publicCheckClass, publicCheckTag, publicCheckLabel,
-      fileStats, formatNumber, formatBytes, formatTime, shortText,
-      loadBuckets, showAddDialog, showEditDialog, clearCredentialState, handleDialogClosed,
+      fileStats, formatNumber, formatStatNumber, formatBytes, formatTime, shortText,
+      refreshPage, loadBuckets, showAddDialog, showEditDialog, clearCredentialState, handleDialogClosed,
       credentialPlaceholder, markCredentialDirty, toggleCredentialClear, toggleCredential,
       handleProviderChange, submitForm,
       testBucket, testForm, toggleEnabled, toggleInject, removeBucket, pushAll,
+      openStatsDetail, clearStatsDetail, invalidateStatsDetailRequest, setStatsRange, resetStatsFilters,
+      loadStatsDetail, loadStatsOverview, disableFutureDate,
       clearFilesState, openFiles, loadBucketFiles,
     };
   },

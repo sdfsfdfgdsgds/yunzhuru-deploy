@@ -143,6 +143,141 @@ function bucketFileStatsMap(PDO $pdo, int $bucketId): array {
     return $result;
 }
 
+/** 严格解析统计筛选中的可选整数 ID，空值表示不限制。 */
+function bucketStatsParseOptionalId($value, string $label): int {
+    if ($value === null || $value === '') return 0;
+    if (is_int($value)) {
+        $parsed = $value;
+    } elseif (is_string($value) && preg_match('/^(0|[1-9]\d*)$/', $value)) {
+        $parsed = (int)$value;
+    } else {
+        throw new InvalidArgumentException("{$label} 格式错误");
+    }
+    if ($parsed < 0 || $parsed > 2147483647) {
+        throw new InvalidArgumentException("{$label} 超出有效范围");
+    }
+    return $parsed;
+}
+
+/**
+ * 解析北京时间统计区间。
+ *
+ * start_date/end_date 是包含边界的日期；未传日期时可用 range 选择快捷区间，
+ * 并默认返回今天在内的最近 7 天。单次最多返回 366 个日聚合点。
+ */
+function bucketStatsDateRange(array $input): array {
+    $timezone = new DateTimeZone('Asia/Shanghai');
+    $today = new DateTimeImmutable('today', $timezone);
+    $range = strtolower(trim((string)($input['range'] ?? '')));
+    $aliases = [
+        '' => 'last7',
+        '7d' => 'last7',
+        'last_7_days' => 'last7',
+        '30d' => 'last30',
+        'last_30_days' => 'last30',
+    ];
+    if (isset($aliases[$range])) $range = $aliases[$range];
+    if (!in_array($range, ['today', 'yesterday', 'last7', 'last30', 'custom'], true)) {
+        throw new InvalidArgumentException('统计时间范围错误');
+    }
+
+    $startText = trim((string)($input['start_date'] ?? ''));
+    $endText = trim((string)($input['end_date'] ?? ''));
+    if (($startText === '') !== ($endText === '')) {
+        throw new InvalidArgumentException('自定义统计必须同时提供开始和结束日期');
+    }
+
+    $parse = static function (string $text) use ($timezone): DateTimeImmutable {
+        $date = DateTimeImmutable::createFromFormat('!Y-m-d', $text, $timezone);
+        $errors = DateTimeImmutable::getLastErrors();
+        if (!$date || (is_array($errors) && ($errors['warning_count'] > 0 || $errors['error_count'] > 0))) {
+            throw new InvalidArgumentException('日期格式必须为 YYYY-MM-DD');
+        }
+        return $date;
+    };
+
+    if ($startText !== '') {
+        $start = $parse($startText);
+        $end = $parse($endText);
+        // 旧前端曾在预设请求中同时传日期；只有日期与北京时间预设完全一致时保留预设语义。
+        $presetDates = [
+            'today' => [$today, $today],
+            'yesterday' => [$today->modify('-1 day'), $today->modify('-1 day')],
+            'last7' => [$today->modify('-6 days'), $today],
+            'last30' => [$today->modify('-29 days'), $today],
+        ];
+        if (!isset($presetDates[$range])
+            || $start->format('Y-m-d') !== $presetDates[$range][0]->format('Y-m-d')
+            || $end->format('Y-m-d') !== $presetDates[$range][1]->format('Y-m-d')) {
+            $range = 'custom';
+        }
+    } elseif ($range === 'today') {
+        $start = $today;
+        $end = $today;
+    } elseif ($range === 'yesterday') {
+        $start = $today->modify('-1 day');
+        $end = $start;
+    } elseif ($range === 'last30') {
+        $start = $today->modify('-29 days');
+        $end = $today;
+    } elseif ($range === 'custom') {
+        throw new InvalidArgumentException('自定义统计必须提供开始和结束日期');
+    } else {
+        $range = 'last7';
+        $start = $today->modify('-6 days');
+        $end = $today;
+    }
+
+    if ($start > $end) throw new InvalidArgumentException('开始日期不得晚于结束日期');
+    $days = (int)$start->diff($end)->format('%a') + 1;
+    if ($days > 366) throw new InvalidArgumentException('单次最多查询 366 天');
+
+    $labels = [
+        'today' => '今天',
+        'yesterday' => '昨天',
+        'last7' => '近7天',
+        'last30' => '近30天',
+        'custom' => '自定义',
+    ];
+    return [
+        'range' => $range,
+        'label' => $labels[$range],
+        'start_date' => $start->format('Y-m-d'),
+        'end_date' => $end->format('Y-m-d'),
+        'timezone' => 'Asia/Shanghai',
+        'days' => $days,
+    ];
+}
+
+/** 将数据库聚合行转换为前端稳定的整数统计字段。 */
+function bucketStatsNormalizeMetricRow(array $row): array {
+    foreach ([
+        'hits', 'period_hits', 'range_hits', 'today_hits', 'yesterday_hits',
+        'last7_hits', 'last30_hits', 'total_hits', 'bucket_count', 'app_count',
+        'last7_bucket_count', 'last7_app_count',
+        'period_bucket_count', 'period_app_count', 'total_bucket_count', 'total_app_count',
+    ] as $field) {
+        if (array_key_exists($field, $row)) $row[$field] = (int)$row[$field];
+    }
+    if (array_key_exists('last_seen_at', $row)) $row['last_seen_at'] = (string)($row['last_seen_at'] ?? '');
+    return $row;
+}
+
+/** 判断统计请求是否只需顶部总览，避免为首屏计算全部明细维度。 */
+function bucketStatsIsSummaryOnly(array $input): bool {
+    if (array_key_exists('summary_only', $input)) {
+        $value = $input['summary_only'];
+        return $value === true || $value === 1 || $value === '1'
+            || (is_string($value) && strtolower(trim($value)) === 'true');
+    }
+    if (array_key_exists('detail', $input)) {
+        $value = $input['detail'];
+        return $value === false || $value === 0 || $value === '0'
+            || (is_string($value) && strtolower(trim($value)) === 'false');
+    }
+    return false;
+}
+
 /**
  * 计算某个桶当前应该具备的 config/{APPID}.enc 集合。
  *
@@ -242,6 +377,323 @@ function getBuckets(PDO $pdo, array $input) {
         $rows[] = $safe;
     }
     return $rows;
+}
+
+/**
+ * 读取配置桶命中统计详情。
+ *
+ * 统计来自壳端成功应用 config/{APPID}.enc 后的日聚合回执，不是 B2/S3/R2
+ * 控制台的原始 HTTP 请求数。所有日期均按北京时间计算且包含起止日。
+ */
+function getBucketStatsDetail(PDO $pdo, array $input) {
+    bucketRequireAdmin($pdo);
+    $period = bucketStatsDateRange($input);
+    $bucketId = bucketStatsParseOptionalId($input['bucket_id'] ?? null, '桶 ID');
+    $appId = bucketStatsParseOptionalId($input['app_id'] ?? null, '应用 ID');
+    $summaryOnly = bucketStatsIsSummaryOnly($input);
+    $ownsTransaction = !$pdo->inTransaction();
+
+    try {
+        if ($ownsTransaction) {
+            // MySQL 的 REPEATABLE READ 会在首个一致性读取时建立快照，后续所有维度复用该快照。
+            if ($pdo->exec('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ') === false
+                || !$pdo->beginTransaction()) {
+                throw new RuntimeException('建立统计一致性快照失败');
+            }
+        }
+        if ($bucketId > 0) bucketFindById($pdo, $bucketId);
+
+    $timezone = new DateTimeZone('Asia/Shanghai');
+    $todayDate = new DateTimeImmutable(bucketFeatureToday(), $timezone);
+    $today = $todayDate->format('Y-m-d');
+    $yesterday = $todayDate->modify('-1 day')->format('Y-m-d');
+    $last7Start = $todayDate->modify('-6 days')->format('Y-m-d');
+    $last30Start = $todayDate->modify('-29 days')->format('Y-m-d');
+    $startDate = (string)$period['start_date'];
+    $endDate = (string)$period['end_date'];
+
+    // 日期全部先通过严格 Y-m-d 校验，再由 PDO 转义后用于多个聚合表达式。
+    $startQuoted = $pdo->quote($startDate);
+    $endQuoted = $pdo->quote($endDate);
+    $todayQuoted = $pdo->quote($today);
+    $yesterdayQuoted = $pdo->quote($yesterday);
+    $last7StartQuoted = $pdo->quote($last7Start);
+    $last30StartQuoted = $pdo->quote($last30Start);
+
+    $fileFilters = [];
+    if ($bucketId > 0) $fileFilters[] = 'f.bucket_id=' . $bucketId;
+    if ($appId > 0) $fileFilters[] = 'f.app_id=' . $appId;
+    $fileWhere = $fileFilters ? ' WHERE ' . implode(' AND ', $fileFilters) : '';
+    $periodCondition = "f.stat_date BETWEEN {$startQuoted} AND {$endQuoted}";
+
+    $summarySql = "SELECT
+        COALESCE(SUM(CASE WHEN {$periodCondition} THEN f.hit_count ELSE 0 END),0) AS period_hits,
+        COALESCE(SUM(CASE WHEN f.stat_date={$todayQuoted} THEN f.hit_count ELSE 0 END),0) AS today_hits,
+        COALESCE(SUM(CASE WHEN f.stat_date={$yesterdayQuoted} THEN f.hit_count ELSE 0 END),0) AS yesterday_hits,
+        COALESCE(SUM(CASE WHEN f.stat_date BETWEEN {$last7StartQuoted} AND {$todayQuoted} THEN f.hit_count ELSE 0 END),0) AS last7_hits,
+        COALESCE(SUM(CASE WHEN f.stat_date BETWEEN {$last30StartQuoted} AND {$todayQuoted} THEN f.hit_count ELSE 0 END),0) AS last30_hits,
+        COALESCE(SUM(f.hit_count),0) AS total_hits,
+        COUNT(DISTINCT CASE WHEN {$periodCondition} AND f.hit_count>0 THEN f.bucket_id END) AS bucket_count,
+        COUNT(DISTINCT CASE WHEN {$periodCondition} AND f.hit_count>0 THEN f.app_id END) AS app_count,
+        COUNT(DISTINCT CASE WHEN f.stat_date BETWEEN {$last7StartQuoted} AND {$todayQuoted} AND f.hit_count>0 THEN f.bucket_id END) AS last7_bucket_count,
+        COUNT(DISTINCT CASE WHEN f.stat_date BETWEEN {$last7StartQuoted} AND {$todayQuoted} AND f.hit_count>0 THEN f.app_id END) AS last7_app_count,
+        COUNT(DISTINCT f.bucket_id) AS total_bucket_count,
+        COUNT(DISTINCT f.app_id) AS total_app_count,
+        DATE_FORMAT(DATE_ADD(MAX(CASE WHEN {$periodCondition} THEN f.last_seen_at END), INTERVAL 8 HOUR), '%Y-%m-%d %H:%i:%s') AS period_last_seen_at,
+        DATE_FORMAT(DATE_ADD(MAX(f.last_seen_at), INTERVAL 8 HOUR), '%Y-%m-%d %H:%i:%s') AS last_seen_at
+        FROM cainiao_s3_bucket_file_stats f
+        INNER JOIN cainiao_s3_bucket valid_bucket ON valid_bucket.id=f.bucket_id{$fileWhere}";
+    $summary = $pdo->query($summarySql)->fetch(PDO::FETCH_ASSOC) ?: [];
+    $summary['range_hits'] = $summary['period_hits'] ?? 0;
+    $summary['hits'] = $summary['period_hits'] ?? 0;
+    $summary = bucketStatsNormalizeMetricRow($summary);
+    $summary['period_last_seen_at'] = (string)($summary['period_last_seen_at'] ?? '');
+
+    $configuredStmt = $pdo->prepare("SELECT COUNT(*) AS configured_bucket_count,
+        COALESCE(SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END),0) AS active_bucket_count
+        FROM cainiao_s3_bucket");
+    $configuredStmt->execute();
+    $configured = $configuredStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+    $summary['configured_bucket_count'] = (int)($configured['configured_bucket_count'] ?? 0);
+    $summary['active_bucket_count'] = (int)($configured['active_bucket_count'] ?? 0);
+
+    if ($summaryOnly) {
+        $result = [
+            'period' => $period,
+            'summary' => $summary,
+            'summary_only' => 1,
+            'notice' => '这里统计壳端成功应用配置后的回执，不是云存储控制台的原始 HTTP 请求数；累计为全部时间，与所选区间分开。',
+        ];
+        if ($ownsTransaction && !$pdo->commit()) throw new RuntimeException('提交统计读取快照失败');
+        return $result;
+    }
+
+    $dailySql = "SELECT f.stat_date,
+        SUM(f.hit_count) AS hits,
+        COUNT(DISTINCT f.bucket_id) AS bucket_count,
+        COUNT(DISTINCT f.app_id) AS app_count
+        FROM cainiao_s3_bucket_file_stats f
+        INNER JOIN cainiao_s3_bucket valid_bucket ON valid_bucket.id=f.bucket_id
+        " . ($fileWhere !== '' ? $fileWhere . ' AND ' : ' WHERE ') . "{$periodCondition}
+        GROUP BY f.stat_date
+        ORDER BY f.stat_date ASC";
+    $dailyMap = [];
+    foreach ($pdo->query($dailySql)->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $dailyMap[(string)$row['stat_date']] = bucketStatsNormalizeMetricRow($row);
+    }
+    $daily = [];
+    $cursor = new DateTimeImmutable($startDate, $timezone);
+    $last = new DateTimeImmutable($endDate, $timezone);
+    while ($cursor <= $last) {
+        $date = $cursor->format('Y-m-d');
+        $row = $dailyMap[$date] ?? ['hits' => 0, 'bucket_count' => 0, 'app_count' => 0];
+        $daily[] = [
+            'date' => $date,
+            'stat_date' => $date,
+            'hits' => (int)($row['hits'] ?? 0),
+            'bucket_count' => (int)($row['bucket_count'] ?? 0),
+            'app_count' => (int)($row['app_count'] ?? 0),
+        ];
+        $cursor = $cursor->modify('+1 day');
+    }
+
+    // 桶维度从桶主表出发，因此新桶或当前区间为 0 的桶也会出现在明细中。
+    $bucketJoinFilter = $appId > 0 ? ' AND f.app_id=' . $appId : '';
+    $bucketWhere = $bucketId > 0 ? ' WHERE b.id=' . $bucketId : '';
+    $byBucketSql = "SELECT b.id AS bucket_id, b.name AS bucket_name, b.provider, b.enabled, b.inject,
+        COALESCE(SUM(CASE WHEN {$periodCondition} THEN f.hit_count ELSE 0 END),0) AS period_hits,
+        COALESCE(SUM(CASE WHEN f.stat_date={$todayQuoted} THEN f.hit_count ELSE 0 END),0) AS today_hits,
+        COALESCE(SUM(CASE WHEN f.stat_date={$yesterdayQuoted} THEN f.hit_count ELSE 0 END),0) AS yesterday_hits,
+        COALESCE(SUM(f.hit_count),0) AS total_hits,
+        COUNT(DISTINCT CASE WHEN {$periodCondition} AND f.hit_count>0 THEN f.app_id END) AS app_count,
+        DATE_FORMAT(DATE_ADD(MAX(CASE WHEN {$periodCondition} THEN f.last_seen_at END), INTERVAL 8 HOUR), '%Y-%m-%d %H:%i:%s') AS period_last_seen_at,
+        DATE_FORMAT(DATE_ADD(MAX(f.last_seen_at), INTERVAL 8 HOUR), '%Y-%m-%d %H:%i:%s') AS last_seen_at
+        FROM cainiao_s3_bucket b
+        LEFT JOIN cainiao_s3_bucket_file_stats f ON f.bucket_id=b.id{$bucketJoinFilter}
+        {$bucketWhere}
+        GROUP BY b.id,b.name,b.provider,b.enabled,b.inject
+        ORDER BY period_hits DESC,total_hits DESC,b.id ASC";
+    $byBucket = [];
+    foreach ($pdo->query($byBucketSql)->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $row['bucket_id'] = (int)$row['bucket_id'];
+        $row['id'] = (int)$row['bucket_id'];
+        $row['name'] = (string)$row['bucket_name'];
+        $row['provider'] = strtolower((string)$row['provider']);
+        $row['provider_label'] = bucketProviderLabel($row['provider']);
+        $row['enabled'] = (int)$row['enabled'];
+        $row['inject'] = (int)$row['inject'];
+        $row['hits'] = $row['period_hits'];
+        $row['range_hits'] = $row['period_hits'];
+        $row = bucketStatsNormalizeMetricRow($row);
+        $row['period_last_seen_at'] = (string)($row['period_last_seen_at'] ?? '');
+        $byBucket[] = $row;
+    }
+
+    $byAppSql = "SELECT f.app_id,
+        COALESCE(NULLIF(a.name,''), CONCAT('应用 #',f.app_id)) AS app_name,
+        COALESCE(a.package,'') AS package_name,
+        COALESCE(SUM(CASE WHEN {$periodCondition} THEN f.hit_count ELSE 0 END),0) AS period_hits,
+        COALESCE(SUM(CASE WHEN f.stat_date={$todayQuoted} THEN f.hit_count ELSE 0 END),0) AS today_hits,
+        COALESCE(SUM(CASE WHEN f.stat_date={$yesterdayQuoted} THEN f.hit_count ELSE 0 END),0) AS yesterday_hits,
+        COALESCE(SUM(f.hit_count),0) AS total_hits,
+        COUNT(DISTINCT CASE WHEN {$periodCondition} AND f.hit_count>0 THEN f.bucket_id END) AS bucket_count,
+        DATE_FORMAT(DATE_ADD(MAX(CASE WHEN {$periodCondition} THEN f.last_seen_at END), INTERVAL 8 HOUR), '%Y-%m-%d %H:%i:%s') AS period_last_seen_at,
+        DATE_FORMAT(DATE_ADD(MAX(f.last_seen_at), INTERVAL 8 HOUR), '%Y-%m-%d %H:%i:%s') AS last_seen_at
+        FROM cainiao_s3_bucket_file_stats f
+        INNER JOIN cainiao_s3_bucket valid_bucket ON valid_bucket.id=f.bucket_id
+        LEFT JOIN cainiao_apk a ON a.id=f.app_id
+        {$fileWhere}
+        GROUP BY f.app_id,a.name,a.package
+        HAVING period_hits>0
+        ORDER BY period_hits DESC,total_hits DESC,f.app_id ASC";
+    $byApp = [];
+    foreach ($pdo->query($byAppSql)->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $row['app_id'] = (int)$row['app_id'];
+        $row['id'] = (int)$row['app_id'];
+        $row['name'] = (string)$row['app_name'];
+        $row['package'] = (string)$row['package_name'];
+        $row['hits'] = $row['period_hits'];
+        $row['range_hits'] = $row['period_hits'];
+        $row = bucketStatsNormalizeMetricRow($row);
+        $row['period_last_seen_at'] = (string)($row['period_last_seen_at'] ?? '');
+        $byApp[] = $row;
+    }
+
+    $bucketAppsSql = "SELECT f.bucket_id, b.name AS bucket_name, b.provider, f.app_id,
+        COALESCE(NULLIF(a.name,''), CONCAT('应用 #',f.app_id)) AS app_name,
+        COALESCE(a.package,'') AS package_name,
+        COALESCE(SUM(CASE WHEN {$periodCondition} THEN f.hit_count ELSE 0 END),0) AS period_hits,
+        COALESCE(SUM(CASE WHEN f.stat_date={$todayQuoted} THEN f.hit_count ELSE 0 END),0) AS today_hits,
+        COALESCE(SUM(CASE WHEN f.stat_date={$yesterdayQuoted} THEN f.hit_count ELSE 0 END),0) AS yesterday_hits,
+        COALESCE(SUM(f.hit_count),0) AS total_hits,
+        DATE_FORMAT(DATE_ADD(MAX(CASE WHEN {$periodCondition} THEN f.last_seen_at END), INTERVAL 8 HOUR), '%Y-%m-%d %H:%i:%s') AS period_last_seen_at,
+        DATE_FORMAT(DATE_ADD(MAX(f.last_seen_at), INTERVAL 8 HOUR), '%Y-%m-%d %H:%i:%s') AS last_seen_at
+        FROM cainiao_s3_bucket_file_stats f
+        INNER JOIN cainiao_s3_bucket b ON b.id=f.bucket_id
+        LEFT JOIN cainiao_apk a ON a.id=f.app_id
+        {$fileWhere}
+        GROUP BY f.bucket_id,b.name,b.provider,f.app_id,a.name,a.package
+        HAVING period_hits>0
+        ORDER BY period_hits DESC,total_hits DESC,f.bucket_id ASC,f.app_id ASC";
+    $bucketApps = [];
+    foreach ($pdo->query($bucketAppsSql)->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $row['bucket_id'] = (int)$row['bucket_id'];
+        $row['app_id'] = (int)$row['app_id'];
+        $row['provider'] = strtolower((string)$row['provider']);
+        $row['provider_label'] = bucketProviderLabel($row['provider']);
+        $row['package'] = (string)$row['package_name'];
+        $row['hits'] = $row['period_hits'];
+        $row['range_hits'] = $row['period_hits'];
+        $row = bucketStatsNormalizeMetricRow($row);
+        $row['period_last_seen_at'] = (string)($row['period_last_seen_at'] ?? '');
+        $bucketApps[] = $row;
+    }
+
+    $bucketOptions = [];
+    $optionRows = $pdo->query('SELECT id,name,provider,enabled,inject FROM cainiao_s3_bucket ORDER BY id ASC')
+        ->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($optionRows as $row) {
+        $provider = strtolower((string)$row['provider']);
+        $bucketOptions[] = [
+            'id' => (int)$row['id'],
+            'bucket_id' => (int)$row['id'],
+            'name' => (string)$row['name'],
+            'bucket_name' => (string)$row['name'],
+            'provider' => $provider,
+            'provider_label' => bucketProviderLabel($provider),
+            'enabled' => (int)$row['enabled'],
+            'inject' => (int)$row['inject'],
+        ];
+    }
+
+    // 应用选项基于已经产生回执的 APPID，同时保留已删除或历史 APPID 的可查性。
+    $appOptionsSql = "SELECT f.app_id,
+        COALESCE(NULLIF(a.name,''), CONCAT('应用 #',f.app_id)) AS app_name,
+        COALESCE(a.package,'') AS package_name,
+        SUM(f.hit_count) AS total_hits,
+        DATE_FORMAT(DATE_ADD(MAX(f.last_seen_at), INTERVAL 8 HOUR), '%Y-%m-%d %H:%i:%s') AS last_seen_at
+        FROM cainiao_s3_bucket_file_stats f
+        LEFT JOIN cainiao_apk a ON a.id=f.app_id
+        GROUP BY f.app_id,a.name,a.package
+        ORDER BY MAX(f.last_seen_at) DESC,f.app_id DESC";
+    $appOptions = [];
+    foreach ($pdo->query($appOptionsSql)->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $appOptions[] = [
+            'id' => (int)$row['app_id'],
+            'app_id' => (int)$row['app_id'],
+            'name' => (string)$row['app_name'],
+            'app_name' => (string)$row['app_name'],
+            'package' => (string)$row['package_name'],
+            'package_name' => (string)$row['package_name'],
+            'total_hits' => (int)$row['total_hits'],
+            'last_seen_at' => (string)($row['last_seen_at'] ?? ''),
+        ];
+    }
+
+    $presets = [
+        'today' => ['label' => '今天', 'start_date' => $today, 'end_date' => $today],
+        'yesterday' => ['label' => '昨天', 'start_date' => $yesterday, 'end_date' => $yesterday],
+        'last7' => ['label' => '近7天', 'start_date' => $last7Start, 'end_date' => $today],
+        'last30' => ['label' => '近30天', 'start_date' => $last30Start, 'end_date' => $today],
+    ];
+    $filters = [
+        'bucket_id' => $bucketId,
+        'app_id' => $appId,
+        'buckets' => $bucketOptions,
+        'apps' => $appOptions,
+        'presets' => $presets,
+    ];
+
+    $sumMetric = static function (array $rows, string $field): int {
+        $total = 0;
+        foreach ($rows as $row) $total += (int)($row[$field] ?? 0);
+        return $total;
+    };
+    $dimensionTotals = [
+        'summary_period_hits' => (int)$summary['period_hits'],
+        'daily_period_hits' => $sumMetric($daily, 'hits'),
+        'bucket_period_hits' => $sumMetric($byBucket, 'period_hits'),
+        'app_period_hits' => $sumMetric($byApp, 'period_hits'),
+        'matrix_period_hits' => $sumMetric($bucketApps, 'period_hits'),
+    ];
+    $periodValues = array_values($dimensionTotals);
+    $consistency = [
+        'matched' => count(array_unique($periodValues, SORT_REGULAR)) === 1 ? 1 : 0,
+        'totals' => $dimensionTotals,
+        'scope' => '所选日期区间',
+    ];
+    if ($consistency['matched'] !== 1) {
+        throw new RuntimeException('配置桶统计维度汇总不一致');
+    }
+
+    $result = [
+        'period' => $period,
+        'summary' => $summary,
+        'filters' => $filters,
+        'daily' => $daily,
+        'by_bucket' => $byBucket,
+        'by_app' => $byApp,
+        'bucket_apps' => $bucketApps,
+        'consistency' => $consistency,
+        // 保留直观的通用别名，便于其他管理页直接复用该合同。
+        'buckets' => $byBucket,
+        'apps' => $byApp,
+        'details' => $bucketApps,
+        'options' => $filters,
+        'notice' => '这里统计壳端成功应用配置后的回执，不是云存储控制台的原始 HTTP 请求数；累计为全部时间，与所选区间分开。',
+    ];
+    if ($ownsTransaction && !$pdo->commit()) throw new RuntimeException('提交统计读取快照失败');
+    return $result;
+    } catch (Throwable $e) {
+        if ($ownsTransaction && $pdo->inTransaction()) {
+            try {
+                $pdo->rollBack();
+            } catch (Throwable $ignored) {
+                // 保留导致读取失败的原始异常。
+            }
+        }
+        throw $e;
+    }
 }
 
 /** 获取单个桶的非敏感详情；编辑页不会一次性得到四项原始凭据。 */
@@ -582,27 +1034,67 @@ function recordBucketHit(PDO $pdo, array $input) {
     $ok = !($okRaw === false || $okRaw === 0 || $okRaw === '0' || strtolower((string)$okRaw) === 'false');
     if (!$ok) throw new InvalidArgumentException('仅接收已成功应用配置的桶命中回执');
     $today = bucketFeatureToday();
-    $stat = $pdo->prepare("INSERT INTO cainiao_s3_bucket_stats
-        (bucket_id, stat_date, hit_count, ok_count, fail_count, last_seen_at)
-        VALUES (:bucket_id, :stat_date, 1, :ok_count, :fail_count, UTC_TIMESTAMP())
-        ON DUPLICATE KEY UPDATE
-            hit_count=hit_count+1,
-            ok_count=ok_count+VALUES(ok_count),
-            fail_count=fail_count+VALUES(fail_count),
-            last_seen_at=UTC_TIMESTAMP()");
-    $stat->execute([
-        ':bucket_id' => $bucketId,
-        ':stat_date' => $today,
-        ':ok_count' => $ok ? 1 : 0,
-        ':fail_count' => $ok ? 0 : 1,
-    ]);
+    $ownsWriteTransaction = !$pdo->inTransaction();
+    $savepointStarted = false;
+    $savepoint = '';
+    try {
+        if ($ownsWriteTransaction) {
+            if (!$pdo->beginTransaction()) throw new RuntimeException('建立桶命中写入事务失败');
+        } else {
+            // 已处于上层事务时使用独立 savepoint，失败只撤销本函数的两次计数。
+            $savepoint = 'bucket_hit_' . bin2hex(random_bytes(8));
+            $pdo->exec('SAVEPOINT ' . $savepoint);
+            $savepointStarted = true;
+        }
 
-    if ($ok) {
+        // 锁定归属桶到两张统计表写入完成，避免与删除桶并发产生孤立统计。
+        $bucketLock = $pdo->prepare('SELECT id FROM cainiao_s3_bucket WHERE id=:bucket_id FOR UPDATE');
+        $bucketLock->execute([':bucket_id' => $bucketId]);
+        if (!$bucketLock->fetchColumn()) throw new RuntimeException('桶域名未登记');
+
+        $stat = $pdo->prepare("INSERT INTO cainiao_s3_bucket_stats
+            (bucket_id, stat_date, hit_count, ok_count, fail_count, last_seen_at)
+            VALUES (:bucket_id, :stat_date, 1, :ok_count, :fail_count, UTC_TIMESTAMP())
+            ON DUPLICATE KEY UPDATE
+                hit_count=hit_count+1,
+                ok_count=ok_count+VALUES(ok_count),
+                fail_count=fail_count+VALUES(fail_count),
+                last_seen_at=UTC_TIMESTAMP()");
+        $stat->execute([
+            ':bucket_id' => $bucketId,
+            ':stat_date' => $today,
+            ':ok_count' => 1,
+            ':fail_count' => 0,
+        ]);
+
         $fileStat = $pdo->prepare("INSERT INTO cainiao_s3_bucket_file_stats
             (bucket_id, app_id, stat_date, hit_count, last_seen_at)
             VALUES (:bucket_id, :app_id, :stat_date, 1, UTC_TIMESTAMP())
             ON DUPLICATE KEY UPDATE hit_count=hit_count+1, last_seen_at=UTC_TIMESTAMP()");
         $fileStat->execute([':bucket_id' => $bucketId, ':app_id' => $appId, ':stat_date' => $today]);
+
+        if ($ownsWriteTransaction) {
+            if (!$pdo->commit()) throw new RuntimeException('提交桶命中写入事务失败');
+        } else {
+            $pdo->exec('RELEASE SAVEPOINT ' . $savepoint);
+            $savepointStarted = false;
+        }
+    } catch (Throwable $e) {
+        if ($ownsWriteTransaction && $pdo->inTransaction()) {
+            try {
+                $pdo->rollBack();
+            } catch (Throwable $ignored) {
+                // 保留原始写入异常。
+            }
+        } elseif ($savepointStarted) {
+            try {
+                $pdo->exec('ROLLBACK TO SAVEPOINT ' . $savepoint);
+                $pdo->exec('RELEASE SAVEPOINT ' . $savepoint);
+            } catch (Throwable $ignored) {
+                // 保留原始写入异常，由上层决定外层事务的最终去向。
+            }
+        }
+        throw $e;
     }
 
     return ['message' => 'ok', 'bucket_id' => $bucketId];
