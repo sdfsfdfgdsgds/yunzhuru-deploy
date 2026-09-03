@@ -547,7 +547,7 @@ function replace_smali_string($dir, $search, $replace, $case_sensitive = true) {
        "--out \"$signed_apk\" \"$unsigned_apk\"";
     }
     
-    echo "执行签名命令：$cmd\n";
+    echo "执行签名：签名参数已脱敏\n";
 
     // 执行命令
     $output = shell_exec($cmd);
@@ -631,7 +631,11 @@ function sign_apk($keystore, $alias, $storepass, $keypass, $unsigned_apk, $signe
              . "--out $signed_arg $unsigned_arg";
     }
 
-    echo "执行签名命令：$cmd\n";
+    // 实际命令含 keystore 口令，日志只保留工具和制品文件名。
+    echo "执行签名：工具=" . basename($apksigner_path)
+        . "，输入=" . basename($unsigned_apk)
+        . "，输出=" . basename($signed_apk)
+        . "，签名参数已脱敏\n";
 
     // 执行命令，捕获 stdout + stderr
     $output = shell_exec($cmd . ' 2>&1');

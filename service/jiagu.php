@@ -122,8 +122,7 @@ function handleJiaguTasks(PDO $pdo, $oss)
     echo "任务归属: {$user_id}\n";
     echo "加固规则: {$task['rules']}\n";
     echo "alias: {$alias}\n";
-    echo "storepass: {$storepass}\n";
-    echo "keypass: {$keypass}\n";
+    echo "签名凭据: 已加载（日志已脱敏）\n";
     
     if (preg_match('/[\x{4e00}-\x{9fa5}]/u', $task['alias'])) {
         echo "证书别名包含中文字符\n";

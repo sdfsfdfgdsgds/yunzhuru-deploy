@@ -185,11 +185,12 @@ function getTemplates(PDO $pdo, array $input) {
             }
         }
     }
-    // 自动识别协议与域名，补齐完整访问路径
-    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
-    $domain = $_SERVER['HTTP_HOST'] ?? 'localhost';
-    $baseUrl = rtrim($protocol . $domain, '/');
-    $fileurl = $baseUrl . '/local_inject/' . $final_name;
+    // 签发一次性短期地址，保留 Android 和桌面端当前的绝对 URL 合同。
+    // 公开基址优先取部署配置，避免 Railway TLS 终止后误拼成内部 HTTP 地址。
+    $fileurl = privateDownloadPublicBaseUrl() . issuePrivateDownloadUrl(
+        '/local_inject/' . $final_name,
+        $final_name
+    );
 
     return [
         'fileurl' => $fileurl

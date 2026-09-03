@@ -12,8 +12,9 @@
 - 健康探针：`/healthz`（轻量进程探针，超时 120 秒）
 - 运行资产：`/var/www/html/uploads` 持久卷；模板、签名文件和发布产物按启动脚本规则保留
 
-数据库、Redis、AWS 和 CloudFront 的敏感值只从 Railway Variables 读取。本仓库不保存可用凭据，
-也不把运行日志、PID、Finder 元数据或本机缓存带入镜像。
+数据库、Redis、AWS 和 CloudFront 的敏感值只从 Railway Variables 读取。历史提交曾纳入用户签名材料，
+当前版本已停止跟踪并改由 Railway 持久卷承载；相关材料仍需按归属完成轮换和 Git 历史专项治理。
+运行日志、PID、Finder 元数据和本机缓存不进入镜像。
 
 ## 本地检查与发布
 

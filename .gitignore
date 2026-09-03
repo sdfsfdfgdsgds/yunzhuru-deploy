@@ -14,3 +14,9 @@ service/.inject_service.pid
 # 容器运行时临时目录（Railway 卷提供持久数据）
 temp/
 uploads/
+
+# 用户签名材料与 worker 运行制品由 Railway 持久卷保存，不进入新提交或镜像。
+signfile/
+jks/
+local_inject/
+release/

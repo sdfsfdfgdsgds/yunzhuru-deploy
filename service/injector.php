@@ -224,8 +224,8 @@ function handleInjectionTasks(PDO $pdo, $oss)
     echo "任务归属: {$user_id}\n";
     echo "注入模式: {$mode}\n";
     echo "alias: {$alias}\n";
-    echo "storepass: {$storepass}\n";
-    echo "keypass: {$keypass}\n";
+    // 签名口令只用于当前进程调用签名工具，日志仅记录已加载状态，避免后台日志泄露凭据。
+    echo "签名凭据: 已加载（日志已脱敏）\n";
     $link = $task['inject_to_top'];//true=壳作为最终父链，false=壳继承父链
 
     if (preg_match('/[\x{4e00}-\x{9fa5}]/u', $task['alias'])) {
@@ -3249,7 +3249,8 @@ function dexedit_sd($dexedit, $xmx, $inputapk, $max, $outputapk){
 
 //AES加密原始入口
 function encrypt_text($text, $key = '1234567890abcdef') {
-    echo "加密内容：{$text}\n";
+    // 配置正文可能包含用户规则和业务地址，日志只记录长度，不复制明文。
+    echo "配置密文生成：输入长度=" . strlen((string)$text) . " 字节\n";
     // 生成16字节随机IV
     $iv = openssl_random_pseudo_bytes(16);
     // 使用AES-128-CBC模式加密
@@ -3837,7 +3838,9 @@ function optimizeApk($ApkDataMultiplexing, $inputApk, $outputApk, $entryPath, $k
         escapeshellarg($storepass) . ' ' .
         escapeshellarg($alias) . ' ' .
         escapeshellarg($keypass);
-    echo "执行APK数据优化命令：{$cmd}\n";
+    // 命令参数含签名口令，只记录非敏感的输入输出文件名。
+    echo "执行APK数据优化：输入=" . basename($inputApk)
+        . "，输出=" . basename($outputApk) . "，签名参数已脱敏\n";
     // 执行命令
     $output = shell_exec($cmd);
     echo $output;

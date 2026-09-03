@@ -1,1 +1,1 @@
-go build -o ws.ws main.go
+GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o ws.ws main.go

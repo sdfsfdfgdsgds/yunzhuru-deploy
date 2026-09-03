@@ -415,12 +415,6 @@
       </div>
     </el-dialog>
 
-    <el-image-viewer
-      v-if="imageViewerVisible"
-      :url-list="imageList"
-      @close="imageViewerVisible = false"
-    ></el-image-viewer>
-
     <!-- 固定桶是本次制品证据；API 域名分开展示历史固定证据与当前控制面。 -->
     <el-dialog
       v-model="staticBucketDialogVisible"
@@ -1282,26 +1276,21 @@ function formatMode(row) {
   return '未知注入';
 }
 
-const imageViewerVisible = ref(false);
-const imageList = ref([]);
-
-//https打开方案
-/*function previewImage(url) {
-  if (!url) {
-    ElementPlus.ElMessage.warning('图片地址为空');
-    return;
-  }
-  const fullUrl = '/image.php?url=' + encodeURIComponent(url);
-  imageList.value = [fullUrl];
-  imageViewerVisible.value = true;
-}*/
 function previewImage(url) {
   if (!url) {
     ElementPlus.ElMessage.warning('图片地址为空');
     return;
   }
-  const encodedUrl = encodeURIComponent(url);
-  window.open('http://115.190.43.236/image.php?url=' + encodedUrl, '_blank');
+  try {
+    const target = new URL(url, window.location.origin);
+    if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+      throw new Error('仅支持 HTTP(S) 图片地址');
+    }
+    // 图片由浏览器直连素材站，避免生产服务端成为通用网络代理。
+    window.open(target.href, '_blank', 'noopener,noreferrer');
+  } catch (error) {
+    ElementPlus.ElMessage.error(error.message || '图片地址不合法');
+  }
 }
         const openInNewTab = (url) => {
             if (!url) {
@@ -1694,8 +1683,6 @@ async function confirmLanzouUpload() {
           qrImageUrl,
           qrDownloadUrl,
           handleDirectDownload,
-          imageViewerVisible,
-          imageList,
           previewImage,
           openInNewTab,
           staticBucketDialogVisible,

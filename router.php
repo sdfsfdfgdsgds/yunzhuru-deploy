@@ -9,6 +9,51 @@ $uri = $_SERVER['REQUEST_URI'] ?? '/';
 $path = parse_url($uri, PHP_URL_PATH);
 
 /**
+ * 归一化路由安全判断使用的路径。
+ *
+ * PHP 内置服务器与前置代理对百分号编码、双斜线的解码时机可能不同，
+ * 因此黑名单统一使用最多三轮解码后的标准路径，避免变体绕过。
+ */
+function normalizeSecurityRequestPath($path): ?string
+{
+    if (!is_string($path)) {
+        return null;
+    }
+    if ($path === '') {
+        return '/';
+    }
+
+    $decoded = $path;
+    for ($round = 0; $round < 3; $round++) {
+        $next = rawurldecode($decoded);
+        if ($next === $decoded) {
+            break;
+        }
+        $decoded = $next;
+    }
+
+    $decoded = str_replace('\\', '/', $decoded);
+    $decoded = preg_replace('#/+#', '/', $decoded);
+    if (!is_string($decoded) || strpos($decoded, "\0") !== false) {
+        return null;
+    }
+
+    foreach (explode('/', $decoded) as $segment) {
+        if ($segment === '..') {
+            return null;
+        }
+    }
+
+    return $decoded[0] === '/' ? $decoded : '/' . $decoded;
+}
+
+$path = normalizeSecurityRequestPath($path);
+if ($path === null) {
+    http_response_code(403);
+    return true;
+}
+
+/**
  * 为后台核心静态资源返回预压缩 gzip 文件。
  *
  * Railway 当前由 PHP 内置服务器直接分发静态文件，默认没有 gzip。
@@ -81,7 +126,7 @@ if ($path === '/healthz' || $path === '/readyz') {
 // 诊断端点：确认 router.php 在运行
 if ($path === '/router-status') {
     header('Content-Type: application/json');
-    echo json_encode(['router' => true, 'version' => 'v29', 'time' => date('Y-m-d H:i:s')]);
+    echo json_encode(['router' => true, 'version' => 'v31', 'time' => date('Y-m-d H:i:s')]);
     return true;
 }
 
@@ -99,6 +144,19 @@ if (strpos($path, '/config/') === 0) {
     return true;
 }
 
+// 签名文件、转换产物和本地注入包均由一次性下载入口分发。
+// uploads/signfile 是 Railway 持久卷中的真实目录，必须在 uploads 白名单前同时拦截。
+$privatePathPrefixes = [
+    '/signfile', '/jks', '/local_inject', '/release', '/templates',
+    '/uploads/signfile', '/uploads/jks', '/uploads/release', '/uploads/templates'
+];
+foreach ($privatePathPrefixes as $privatePathPrefix) {
+    if ($path === $privatePathPrefix || strpos($path, $privatePathPrefix . '/') === 0) {
+        http_response_code(403);
+        return true;
+    }
+}
+
 // 禁止访问隐藏文件
 if (strpos($path, '/.') !== false) {
     http_response_code(403);
@@ -107,8 +165,8 @@ if (strpos($path, '/.') !== false) {
 
 // ========== 白名单路径（放行） ==========
 
-// Pure Admin 是独立的静态后台入口。目录请求需要交给 PHP 内置服务器，
-// 由它继续解析 admin-pure/index.html；Hash 路由后续只访问已放行的静态资源。
+// Pure Admin 是独立的静态后台入口。目录请求交给 PHP 内置服务器，
+// 由它解析 admin-pure/index.html；Hash 路由随后只访问已放行的静态资源。
 if ($path === '/admin-pure' || $path === '/admin-pure/') {
     return false;
 }
@@ -118,17 +176,12 @@ if (servePrecompressedStatic($path)) {
 }
 
 // 静态资源
-if (preg_match('/\.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|apk|jar|keystore|html|map)$/i', $path)) {
+if (preg_match('/\.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|jar|html|map)$/i', $path)) {
     return false; // PHP 内置服务器处理静态文件
 }
 
 // config.js
 if ($path === '/config.js') {
-    return false;
-}
-
-// uploads 目录
-if (strpos($path, '/uploads/') === 0) {
     return false;
 }
 
@@ -151,7 +204,7 @@ if (in_array($path, $allowedCardEndpoints, true)) {
 $allowedPhp = [
     '/shell.php', '/captcha.php',
     '/down.php', '/friend_links.php', '/help.php', '/icon.php',
-    '/image.php', '/phpqrcode.php', '/release.php', '/violation.php'
+    '/private-download.php', '/qrcode.php', '/violation.php'
 ];
 // 维护脚本不进入生产发布仓；如需排障，使用受控 SSH 与源码目录。
 if (in_array($path, $allowedPhp, true)) {
