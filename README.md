@@ -2,7 +2,7 @@
 
 云注入 Railway 生产部署仓。此仓库是独立的 Docker 构建上下文，和主源码仓
 `/Users/yyh/Documents/Codex/云注入/源码仓` 分开维护。当前 GitHub 远程同步前，production
-deployment trigger 保持暂停，生产发布使用显式 `railway up`。
+deployment trigger 已删除，生产发布使用显式 `railway up`。
 
 ## 生产合同
 
@@ -29,7 +29,7 @@ railway up \
   --detach
 ```
 
-GitHub 远程 `main` 同步到当前部署提交后，再恢复 production trigger。恢复前，
+GitHub 远程 `main` 同步到当前部署提交后，再重新创建 production trigger。重建前，
 上面的固定目标 `railway up` 是唯一生产发布路径。一次提交只走一条路径，发布后
 保存 deployment ID 并执行线上验收。Railway CLI 当前提示 `railway.json` 将在
 2026-12-01 后停止作为配置入口，迁移到 `.railway/railway.ts` 前先单独执行
