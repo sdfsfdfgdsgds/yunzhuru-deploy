@@ -494,14 +494,7 @@ if (!function_exists('configSyncStateNormalizeResultSummary')) {
 }
 
 if (!function_exists('configSyncStateHydrateAppMetadata')) {
-    /**
-     * 为历史同步快照补齐公开应用身份。
-     *
-     * 旧版 result_json 只保存 APPID 和桶结果，页面刷新后没有机会重新拿到
-     * 应用名称。这里按 APPID 一次性查询 cainiao_apk，再把名称/包名写入
-     * app_results、各类 items 及嵌套桶明细；查询失败时保留原快照，不影响同步状态。
-     * @return array{details:array,app_meta:array,current_app:string}
-     */
+    /** 为历史同步快照补齐应用名称/包名，并统一当前应用显示标签。 */
     function configSyncStateHydrateAppMetadata(PDO $pdo, array $details, int $currentAppId = 0, string $currentApp = ''): array
     {
         $ids = [];
@@ -509,9 +502,7 @@ if (!function_exists('configSyncStateHydrateAppMetadata')) {
             if (!is_array($value)) return;
             $id = (int)($value['app_id'] ?? $value['apk_id'] ?? $value['application_id'] ?? 0);
             if ($id > 0) $ids[$id] = $id;
-            foreach ($value as $child) {
-                if (is_array($child)) $collectIds($child);
-            }
+            foreach ($value as $child) if (is_array($child)) $collectIds($child);
         };
         $collectIds($details);
         if ($currentAppId > 0) $ids[$currentAppId] = $currentAppId;
@@ -520,50 +511,45 @@ if (!function_exists('configSyncStateHydrateAppMetadata')) {
             try {
                 $idList = array_values($ids);
                 $placeholders = implode(',', array_fill(0, count($idList), '?'));
-                $stmt = $pdo->prepare("SELECT id, name AS app_name, `package` AS package_name
-                    FROM cainiao_apk WHERE id IN ({$placeholders})");
+                $stmt = $pdo->prepare("SELECT id, name AS app_name, `package` AS package_name FROM cainiao_apk WHERE id IN ({$placeholders})");
                 $stmt->execute($idList);
                 foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
                     $id = (int)($row['id'] ?? 0);
                     if ($id <= 0) continue;
                     $meta[$id] = [
-                        'app_id' => $id,
                         'app_name' => trim((string)($row['app_name'] ?? '')) ?: '未命名应用',
                         'package_name' => trim((string)($row['package_name'] ?? '')),
                     ];
                 }
             } catch (Throwable $ignored) {
-                // 历史展示增强不应阻断同步状态读取；保留 APPID 即可定位对象。
-                $meta = [];
+                // 展示增强失败时仍返回原始 APPID/桶结果。
             }
         }
-
         $hydrate = static function (&$value) use (&$hydrate, $meta): void {
             if (!is_array($value)) return;
             $id = (int)($value['app_id'] ?? $value['apk_id'] ?? $value['application_id'] ?? 0);
             if ($id > 0 && isset($meta[$id])) {
-                if (trim((string)($value['app_name'] ?? '')) === '') $value['app_name'] = $meta[$id]['app_name'];
+                $existing = trim((string)($value['app_name'] ?? ''));
+                // 未命名应用是旧版本的占位符，查询到真实名称后覆盖它。
+                if ($existing === '' || $existing === '未命名应用' || $existing === '应用 #' . $id) {
+                    $value['app_name'] = $meta[$id]['app_name'];
+                }
                 if (trim((string)($value['package_name'] ?? '')) === '' && $meta[$id]['package_name'] !== '') {
                     $value['package_name'] = $meta[$id]['package_name'];
                 }
             }
-            foreach ($value as &$child) {
-                if (is_array($child)) $hydrate($child);
-            }
+            foreach ($value as &$child) if (is_array($child)) $hydrate($child);
             unset($child);
         };
         $hydrate($details);
-
-        $resolvedCurrentApp = trim($currentApp);
-        if ($currentAppId <= 0 && preg_match('/应用\s*#\s*(\d+)/u', $resolvedCurrentApp, $match)) {
-            $currentAppId = (int)$match[1];
-        }
+        $resolved = trim($currentApp);
+        if ($currentAppId <= 0 && preg_match('/应用\s*#\s*(\d+)/u', $resolved, $match)) $currentAppId = (int)$match[1];
         if ($currentAppId > 0 && isset($meta[$currentAppId])) {
-            $resolvedCurrentApp = '应用 #' . $currentAppId . ' · ' . $meta[$currentAppId]['app_name'];
-        } elseif ($resolvedCurrentApp === '' && $currentAppId > 0) {
-            $resolvedCurrentApp = '应用 #' . $currentAppId;
+            $resolved = '应用 #' . $currentAppId . ' · ' . $meta[$currentAppId]['app_name'];
+        } elseif ($resolved === '' && $currentAppId > 0) {
+            $resolved = '应用 #' . $currentAppId;
         }
-        return ['details' => $details, 'app_meta' => $meta, 'current_app' => $resolvedCurrentApp];
+        return ['details' => $details, 'app_meta' => $meta, 'current_app' => $resolved];
     }
 }
 
@@ -591,51 +577,15 @@ if (!function_exists('configSyncStateRead')) {
         // 统一归一化 APP、桶和对象级结果。旧快照没有这些字段时也能由 data
         // 推导；新快照则直接复用同一份公开明细，保证轮询和终态展示一致。
         $details = configSyncStateNormalizeResultSummary($result);
-        // 旧任务快照可能只保存 APPID，没有保存当时的应用名称；读取时从当前应用表
-        // 补齐公开名称，让刷新页面也能把“应用 #30”还原成“应用 #30 · 应用名称”。
-        $appNames = [];
-        $walkAppItems = static function (&$value) use (&$walkAppItems, &$appNames): void {
-            if (!is_array($value)) return;
-            if (array_key_exists('app_id', $value)) {
-                $appId = (int)$value['app_id'];
-                if ($appId > 0 && !isset($appNames[$appId])) $appNames[$appId] = '';
-            }
-            foreach ($value as &$child) {
-                if (is_array($child)) $walkAppItems($child);
-            }
-            unset($child);
-        };
-        $walkAppItems($details);
-        $appIds = array_keys(array_filter($appNames, static function ($name): bool {
-            return $name === '';
-        }));
-        if ($appIds) {
-            try {
-                $placeholders = implode(',', array_fill(0, count($appIds), '?'));
-                $nameStmt = $pdo->prepare("SELECT id, name FROM cainiao_apk WHERE id IN ({$placeholders})");
-                $nameStmt->execute(array_map('intval', $appIds));
-                foreach ($nameStmt->fetchAll(PDO::FETCH_ASSOC) as $appRow) {
-                    $appId = (int)($appRow['id'] ?? 0);
-                    if ($appId > 0) $appNames[$appId] = trim((string)($appRow['name'] ?? '')) ?: '未命名应用';
-                }
-            } catch (Throwable $ignored) {
-                // 应用名称只是展示增强；查询失败时仍保留 APPID 和对象明细。
-            }
-        }
-        if ($appNames) {
-            $hydrateAppItems = static function (&$value) use (&$hydrateAppItems, $appNames): void {
-                if (!is_array($value)) return;
-                $appId = (int)($value['app_id'] ?? 0);
-                if ($appId > 0 && array_key_exists($appId, $appNames) && trim((string)($value['app_name'] ?? '')) === '') {
-                    $value['app_name'] = $appNames[$appId];
-                }
-                foreach ($value as &$child) {
-                    if (is_array($child)) $hydrateAppItems($child);
-                }
-                unset($child);
-            };
-            $hydrateAppItems($details);
-        }
+        $currentAppId = (int)($row['current_app_id'] ?? 0);
+        $hydrated = configSyncStateHydrateAppMetadata(
+            $pdo,
+            $details,
+            $currentAppId,
+            (string)($row['current_app'] ?? '')
+        );
+        $details = $hydrated['details'];
+        $hydratedCurrentApp = (string)($hydrated['current_app'] ?? '');
         // 旧版本曾把“任一桶失败”直接落成 failed。读取历史快照时按已经保存的
         // 桶级明细重算一次有效状态，让 B2 成功 + AWS/R2 失败的既有任务立即显示
         // 为“部分失败”，无需用户先重新执行一轮同步才能看到真实结果。
@@ -682,15 +632,7 @@ if (!function_exists('configSyncStateRead')) {
             'bucket_total' => (int)($details['result_summary']['bucket_total'] ?? 0),
             'cleanup_fail' => (int)($details['result_summary']['cleanup_failed_count'] ?? 0),
             'current_app_id' => (int)($row['current_app_id'] ?? 0),
-            'current_app' => (function () use ($row, $appNames): string {
-                $currentId = (int)($row['current_app_id'] ?? 0);
-                $current = trim((string)($row['current_app'] ?? ''));
-                if ($currentId > 0 && isset($appNames[$currentId]) && $appNames[$currentId] !== ''
-                    && strpos($current, $appNames[$currentId]) === false) {
-                    $current = '应用 #' . $currentId . ' · ' . $appNames[$currentId];
-                }
-                return $current !== '' ? $current : ($currentId > 0 ? '应用 #' . $currentId : '');
-            })(),
+            'current_app' => $hydratedCurrentApp,
             'current_bucket' => (string)($row['current_bucket'] ?? ''),
             'total' => (int)($row['expected_total'] ?? 0),
             'current' => (int)($row['current_index'] ?? 0),

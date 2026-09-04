@@ -1718,6 +1718,7 @@
               <span v-if="item.app_id !== ''">APPID {{ item.app_id }}</span><span v-if="item.package_name"> · {{ item.package_name }}</span>
             </div>
             <div class="config-sync-center__result-card-meta">
+              <div v-if="item.sync_time">同步时间：<strong>{{ formatTime(item.sync_time) }}</strong></div>
               <div v-if="item.phase">处理阶段：<strong>{{ syncPhaseLabel(item.phase) }}</strong></div>
               <div v-if="item.item_kind === 'app' && (item.bucket_total !== '' || item.bucket_success !== '' || item.bucket_failed !== '')">桶对象：<strong>成功 {{ item.bucket_success || 0 }} / 失败 {{ item.bucket_failed || 0 }} / 合计 {{ item.bucket_total || 0 }}</strong></div>
               <div v-if="item.bucket_name">配置桶：<strong>{{ item.bucket_name }}</strong><span v-if="item.provider"> · {{ item.provider }}</span></div>
@@ -1926,9 +1927,15 @@ createApp({
         context.bucket_name
       );
       const provider = firstSyncValue(source.provider, bucket.provider, context.provider);
-    const objectKey = firstSyncValue(
+      const objectKey = firstSyncValue(
         source.object_key, source.objectKey, source.config_key, source.configKey,
         source.key, context.object_key
+      );
+      // 每条结果优先使用自身时间，旧快照回退到任务时间。
+      const syncTime = firstSyncValue(
+        source.synced_at, source.completed_at, source.finished_at, source.updated_at,
+        source.created_at, source.started_at, source.timestamp, source.time, context.sync_time,
+        syncProgress.updated_at, syncProgress.finished_at, syncProgress.started_at
       );
       // 服务端对象键固定为 config/{APPID}.enc；旧版别名缺少 app_id 时可由
       // 对象键恢复归属，避免同名桶跨应用折叠。
@@ -1992,6 +1999,7 @@ createApp({
         bucket_name: bucketName || (bucketId !== '' ? '配置桶 #' + bucketId : '全部配置桶'),
         provider,
         object_key: objectKey,
+        sync_time: syncTime,
         config_scope: configScope,
         bucket_total: bucketTotal,
         bucket_success: bucketSuccess,
@@ -2031,11 +2039,14 @@ createApp({
         const normalized = normalizeSyncResultItem(raw, context);
         // 多个兼容字段会重复指向同一条结果；APPID、对象键/桶标识、阶段和
         // 结果码构成稳定主键，避免不同来源把同一对象重复列出。
-        const target = normalized.bucket_id || normalized.bucket_name || normalized.item_kind;
-      const baseIdentity = [
-        target, normalized.object_key, normalized.phase,
-        normalized.code
-      ].join('|');
+        // 同一结果可能同时出现在 success_items、app_results、result_summary；
+        // 用 APPID + 对象 + 桶名 + 服务商 + 阶段 + 结果码合并别名。
+        // bucket_id 仅在缺少桶名时兜底，避免有无 bucket_id 造成重复卡片。
+        const bucketIdentity = normalized.bucket_name || normalized.bucket_id || normalized.item_kind;
+        const baseIdentity = [
+          normalized.object_key, normalized.bucket_name || bucketIdentity,
+          normalized.provider, normalized.phase, normalized.code
+        ].join('|');
         // APPID 始终参与去重：旧快照的桶结果经常只有桶名称，没有对象路径，
         // 若省略 APPID，会把多个应用的同名桶错误折叠成一张卡片。
         const identity = [normalized.app_id, baseIdentity].join('|');
