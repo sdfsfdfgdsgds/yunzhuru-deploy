@@ -40,6 +40,7 @@ function add(PDO $pdo, array $input) {
         ':newactivity'=> $newactivity,
         ':remark'     => $input['remark'] ?? ''
     ]);
+    Auth::afterConfigChange($pdo, $apkId);
 
     return ['message' => '添加成功'];
 }
@@ -49,6 +50,12 @@ function edit(PDO $pdo, array $input) {
     $user = Auth::check($pdo);
     $userId = (int)$user['id'];
     $isAdmin = ($user['role'] ?? '') === 'admin';
+
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_newactivity n
+        JOIN cainiao_apk_config c ON n.config_id = c.id WHERE n.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
 
     if (!$isAdmin) {
         $stmt = $pdo->prepare("
@@ -71,6 +78,7 @@ function edit(PDO $pdo, array $input) {
         ':id'          => $input['id']
     ]);
 
+    Auth::afterConfigChange($pdo, $apkId);
     return ['message' => '更新成功'];
 }
 
@@ -79,6 +87,12 @@ function delete(PDO $pdo, array $input) {
     $user = Auth::check($pdo);
     $userId = (int)$user['id'];
     $isAdmin = ($user['role'] ?? '') === 'admin';
+
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_newactivity n
+        JOIN cainiao_apk_config c ON n.config_id = c.id WHERE n.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
 
     if (!$isAdmin) {
         $stmt = $pdo->prepare("
@@ -94,6 +108,7 @@ function delete(PDO $pdo, array $input) {
     $stmt = $pdo->prepare("DELETE FROM cainiao_newactivity WHERE id = ?");
     $stmt->execute([$input['id']]);
 
+    Auth::afterConfigChange($pdo, $apkId);
     return ['message' => '删除成功'];
 }
 
@@ -109,4 +124,3 @@ function getConfigIdByApk($pdo, $userId, $apkId, $isAdmin = false) {
     }
     return $stmt->fetchColumn();
 }
-

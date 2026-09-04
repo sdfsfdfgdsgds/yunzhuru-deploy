@@ -289,3 +289,86 @@ if (!function_exists('configSyncStateMarkFinished')) {
         return configSyncStateRead($pdo);
     }
 }
+
+if (!function_exists('configSyncStateScheduleWorker')) {
+    /**
+     * 合并配置变更并启动全量同步 worker。
+     *
+     * 所有配置写入口都通过此 helper 进入同一份 ConfigSyncState 快照，避免每个
+     * 模块重复实现排队、并发合并和后台进程启动逻辑。返回值中的 scheduled 表示
+     * 当前变更已有 worker 接管（包括加入已有任务），snapshot 是可直接返回前端的
+     * 非敏感状态摘要。
+     */
+    function configSyncStateScheduleWorker(PDO $pdo, string $reason = '配置变更'): array
+    {
+        $before = [];
+        $alreadyActive = false;
+        try {
+            $before = configSyncStateRead($pdo);
+            $alreadyActive = in_array((string)($before['status'] ?? ''), ['queued', 'running'], true)
+                && (string)($before['job_id'] ?? '') !== '';
+        } catch (Throwable $ignored) {
+            // 首次迁移时由下面的排队调用补齐状态表。
+        }
+
+        $snapshot = configSyncStateMarkQueued($pdo, $reason);
+        // 读取旧状态与排队之间任务可能已结束；只有仍属同一 job 才视为加入旧任务。
+        if ($alreadyActive) {
+            $alreadyActive = in_array((string)($snapshot['status'] ?? ''), ['queued', 'running'], true)
+                && (string)($snapshot['job_id'] ?? '') !== ''
+                && (string)($snapshot['job_id'] ?? '') === (string)($before['job_id'] ?? '');
+        }
+
+        $script = realpath(__DIR__ . '/../../service/push_all_configs.php');
+        if ($alreadyActive) {
+            return [
+                'scheduled' => true,
+                'started' => false,
+                'joined' => true,
+                'snapshot' => configSyncStateRead($pdo),
+            ];
+        }
+
+        if (!$script || !function_exists('exec')) {
+            $failed = configSyncStateMarkFinished(
+                $pdo,
+                ['total' => 0, 'success' => 0, 'fail' => 0, 'message' => '后台同步脚本未启动'],
+                (string)($snapshot['job_id'] ?? ''),
+                new RuntimeException('后台同步脚本未启动')
+            );
+            return [
+                'scheduled' => false,
+                'started' => false,
+                'joined' => false,
+                'snapshot' => $failed,
+            ];
+        }
+
+        $output = [];
+        $exitCode = 1;
+        $jobId = (string)($snapshot['job_id'] ?? '');
+        $command = 'php ' . escapeshellarg($script)
+            . ($jobId !== '' ? ' ' . escapeshellarg($jobId) : '')
+            . ' > /dev/null 2>&1 & echo $!';
+        @exec($command, $output, $exitCode);
+        $started = $exitCode === 0
+            && !empty($output)
+            && ctype_digit(trim((string)end($output)));
+        if (!$started) {
+            $snapshot = configSyncStateMarkFinished(
+                $pdo,
+                ['total' => 0, 'success' => 0, 'fail' => 0, 'message' => '后台同步脚本未启动'],
+                $jobId,
+                new RuntimeException('后台同步脚本未启动')
+            );
+        } else {
+            $snapshot = configSyncStateRead($pdo);
+        }
+        return [
+            'scheduled' => $started,
+            'started' => $started,
+            'joined' => false,
+            'snapshot' => $snapshot,
+        ];
+    }
+}

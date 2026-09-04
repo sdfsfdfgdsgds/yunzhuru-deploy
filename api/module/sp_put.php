@@ -28,6 +28,7 @@ function add(PDO $pdo, array $input)
         ':config_id' => $configId,
         ':sp_name'   => $input['sp_name']
     ]);
+    Auth::afterConfigChange($pdo, (int)$input['apk_id']);
 
     return ['message' => '添加成功'];
 }
@@ -66,14 +67,15 @@ function edit(PDO $pdo, array $input)
 
     // 校验该SP数据是否属于当前用户的应用
     $check = $pdo->prepare("
-        SELECT s.id
+        SELECT s.id, c.apk_id
         FROM cainiao_sp_put_name s
         JOIN cainiao_apk_config c ON s.config_id = c.id
         JOIN cainiao_apk a ON c.apk_id = a.id
         WHERE s.id = :id AND a.user_id = :uid
     ");
     $check->execute([':id' => $id, ':uid' => $userId]);
-    if (!$check->fetch()) {
+    $checkRow = $check->fetch(PDO::FETCH_ASSOC);
+    if (!$checkRow) {
         throw new Exception('权限不足或数据不存在');
     }
 
@@ -83,6 +85,7 @@ function edit(PDO $pdo, array $input)
         ':sp_name' => $spName,
         ':id' => $id
     ]);
+    Auth::afterConfigChange($pdo, (int)$checkRow['apk_id']);
 
     return ['message' => '更新成功'];
 }
@@ -97,16 +100,18 @@ function deleteSpName(PDO $pdo, array $input)
 
     // 校验权限
     $stmt = $pdo->prepare("
-        SELECT n.config_id FROM cainiao_sp_put_name n
+        SELECT n.config_id, c.apk_id FROM cainiao_sp_put_name n
         JOIN cainiao_apk_config c ON n.config_id = c.id
         JOIN cainiao_apk a ON c.apk_id = a.id
         WHERE n.id = :id AND a.user_id = :uid
     ");
     $stmt->execute([':id' => $input['id'], ':uid' => $userId]);
-    if (!$stmt->fetch()) throw new Exception('权限不足');
+    $nameRow = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$nameRow) throw new Exception('权限不足');
 
     $pdo->prepare("DELETE FROM cainiao_sp_put_detail WHERE name_id = :id")->execute([':id' => $input['id']]);
     $pdo->prepare("DELETE FROM cainiao_sp_put_name WHERE id = :id")->execute([':id' => $input['id']]);
+    Auth::afterConfigChange($pdo, (int)$nameRow['apk_id']);
 
     return ['message' => '删除成功'];
 }
@@ -161,7 +166,7 @@ function editKey(PDO $pdo, array $input)
     $keyId = (int)$input['id'];
 
     $check = $pdo->prepare("
-        SELECT d.id
+        SELECT d.id, c.apk_id
         FROM cainiao_sp_put_detail d
         JOIN cainiao_sp_put_name n ON d.name_id = n.id
         JOIN cainiao_apk_config c ON n.config_id = c.id
@@ -169,7 +174,8 @@ function editKey(PDO $pdo, array $input)
         WHERE d.id = :id AND a.user_id = :uid
     ");
     $check->execute([':id' => $keyId, ':uid' => $userId]);
-    if (!$check->fetch()) {
+    $checkRow = $check->fetch(PDO::FETCH_ASSOC);
+    if (!$checkRow) {
         throw new Exception('权限不足或键值不存在');
     }
 
@@ -184,6 +190,7 @@ function editKey(PDO $pdo, array $input)
         ':key_value' => $input['key_value'],
         ':type' => $input['type']
     ]);
+    Auth::afterConfigChange($pdo, (int)$checkRow['apk_id']);
 
     return ['message' => '更新成功'];
 }
@@ -200,13 +207,14 @@ function addKey(PDO $pdo, array $input)
 
     // 校验权限
     $stmt = $pdo->prepare("
-        SELECT n.id FROM cainiao_sp_put_name n
+        SELECT n.id, c.apk_id FROM cainiao_sp_put_name n
         JOIN cainiao_apk_config c ON n.config_id = c.id
         JOIN cainiao_apk a ON c.apk_id = a.id
         WHERE n.id = :id AND a.user_id = :uid
     ");
     $stmt->execute([':id' => $input['name_id'], ':uid' => $userId]);
-    if (!$stmt->fetch()) throw new Exception('权限不足');
+    $nameRow = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$nameRow) throw new Exception('权限不足');
 
     $stmt = $pdo->prepare("INSERT INTO cainiao_sp_put_detail (name_id, key_name, key_value, type, created_at)
                            VALUES (:name_id, :key_name, :key_value, :type, NOW())");
@@ -216,6 +224,7 @@ function addKey(PDO $pdo, array $input)
         ':key_value' => $input['key_value'] ?? '',
         ':type'      => $input['type'] ?? ''
     ]);
+    Auth::afterConfigChange($pdo, (int)$nameRow['apk_id']);
 
     return ['message' => '添加成功'];
 }
@@ -234,7 +243,7 @@ function deleteKey(PDO $pdo, array $input)
 
     // 校验权限：确保该键值对应的应用属于当前用户
     $check = $pdo->prepare("
-        SELECT d.id
+        SELECT d.id, c.apk_id
         FROM cainiao_sp_put_detail d
         JOIN cainiao_sp_put_name n ON d.name_id = n.id
         JOIN cainiao_apk_config c ON n.config_id = c.id
@@ -242,14 +251,15 @@ function deleteKey(PDO $pdo, array $input)
         WHERE d.id = :id AND a.user_id = :uid
     ");
     $check->execute([':id' => $keyId, ':uid' => $userId]);
-    if (!$check->fetch()) {
+    $checkRow = $check->fetch(PDO::FETCH_ASSOC);
+    if (!$checkRow) {
         throw new Exception('权限不足或键值不存在');
     }
 
     // 执行删除
     $stmt = $pdo->prepare("DELETE FROM cainiao_sp_put_detail WHERE id = :id");
     $stmt->execute([':id' => $keyId]);
+    Auth::afterConfigChange($pdo, (int)$checkRow['apk_id']);
 
     return ['message' => '删除成功'];
 }
-

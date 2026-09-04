@@ -85,7 +85,8 @@ function add(PDO $pdo, array $input)
     ");
     $stmt->execute([$apk_id1, $apk_id2, $remark]);
     if($apk_id1 > 0){
-        Auth::reset_redis($apk_id1);
+        // 重定向关系属于壳端配置；写入后进入全局同步中心并清理来源 APP 缓存。
+        Auth::afterConfigChange($pdo, $apk_id1);
     }
     return ['message' => '映射创建成功'];
 }
@@ -104,6 +105,13 @@ function update(PDO $pdo, array $input)
     if ($apk_id1 <= 0 || $apk_id2 <= 0) throw new Exception('应用ID无效');
     if ($apk_id1 === $apk_id2) throw new Exception('不能重定向到自身');
 
+    // 保存旧来源，修改映射来源时需要同时清理旧来源缓存。
+    $oldStmt = $pdo->prepare("SELECT apk_id1 FROM cainiao_redirect WHERE id=? LIMIT 1");
+    $oldStmt->execute([$id]);
+    $oldRow = $oldStmt->fetch(PDO::FETCH_ASSOC);
+    if (!$oldRow) throw new Exception('记录不存在');
+    $oldApkId1 = (int)($oldRow['apk_id1'] ?? 0);
+
     // apk_id2 是否存在
     $exists = $pdo->prepare("SELECT COUNT(*) FROM cainiao_apk WHERE id = ?");
     $exists->execute([$apk_id2]);
@@ -120,8 +128,8 @@ function update(PDO $pdo, array $input)
         WHERE id=?
     ");
     $stmt->execute([$apk_id1, $apk_id2, $remark, $id]);
-    if($apk_id1 > 0){
-        Auth::reset_redis($apk_id1);
+    foreach (array_values(array_unique(array_filter([$oldApkId1, $apk_id1]))) as $affectedApkId) {
+        Auth::afterConfigChange($pdo, (int)$affectedApkId);
     }
     return ['message' => '映射已更新'];
 }
@@ -168,9 +176,9 @@ function delete(PDO $pdo, array $input)
     $stmt = $pdo->prepare("DELETE FROM cainiao_redirect WHERE id=?");
     $stmt->execute([$id]);
 
-    // 清理 redis
+    // 清理来源缓存并进入全局同步任务。
     if ($apk_id1 > 0) {
-        Auth::reset_redis($apk_id1);
+        Auth::afterConfigChange($pdo, $apk_id1);
     }
 
     return ['message' => '映射已删除'];

@@ -41,6 +41,7 @@ function add(PDO $pdo, array $input)
     $stmt = $pdo->prepare("INSERT INTO cainiao_sp_override_name (config_id, sp_name, created_at)
                            VALUES (:config_id, :sp_name, NOW())");
     $stmt->execute([':config_id' => $configId, ':sp_name' => $input['sp_name']]);
+    Auth::afterConfigChange($pdo, (int)$input['apk_id']);
 
     return ['message' => '添加成功'];
 }
@@ -55,6 +56,13 @@ function edit(PDO $pdo, array $input)
     if (empty($input['id'])) {
         throw new Exception('缺少记录ID');
     }
+
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_sp_override_name n
+        JOIN cainiao_apk_config c ON c.id = n.config_id
+        WHERE n.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
 
     if (!$isAdmin) {
         $stmt = $pdo->prepare("SELECT c.id FROM cainiao_sp_override_name n
@@ -75,6 +83,7 @@ function edit(PDO $pdo, array $input)
 
     $stmt = $pdo->prepare("UPDATE cainiao_sp_override_name SET sp_name = :sp_name WHERE id = :id");
     $stmt->execute([':sp_name' => $input['sp_name'], ':id' => $input['id']]);
+    Auth::afterConfigChange($pdo, $apkId);
 
     return ['message' => '更新成功'];
 }
@@ -90,6 +99,13 @@ function delete(PDO $pdo, array $input)
     if (empty($input['id'])) {
         throw new Exception('缺少记录ID');
     }
+
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_sp_override_name n
+        JOIN cainiao_apk_config c ON c.id = n.config_id
+        WHERE n.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
 
     if (!$isAdmin) {
         $stmt = $pdo->prepare("SELECT c.id FROM cainiao_sp_override_name n
@@ -115,6 +131,7 @@ function delete(PDO $pdo, array $input)
     // 删除关联子表
     $stmt = $pdo->prepare("DELETE FROM cainiao_sp_override_detail WHERE name_id = :id");
     $stmt->execute([':id' => $input['id']]);
+    Auth::afterConfigChange($pdo, $apkId);
 
     return ['message' => '删除成功'];
 }
@@ -166,6 +183,14 @@ function addKey(PDO $pdo, array $input)
         throw new Exception('缺少参数 name_id');
     }
 
+    // 读取归属 APP，确保写入键值后能进入统一全局同步任务。
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_sp_override_name n
+        JOIN cainiao_apk_config c ON c.id = n.config_id
+        WHERE n.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['name_id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
+
     if (!$isAdmin) {
         $stmt = $pdo->prepare("SELECT n.id FROM cainiao_sp_override_name n
                                JOIN cainiao_apk_config c ON c.id = n.config_id
@@ -191,6 +216,7 @@ function addKey(PDO $pdo, array $input)
         ':key_value' => $input['key_value'],
         ':type' => $input['type']
     ]);
+    Auth::afterConfigChange($pdo, $apkId);
 
     return ['message' => '添加成功'];
 }
@@ -205,6 +231,14 @@ function editKey(PDO $pdo, array $input)
     if (empty($input['id'])) {
         throw new Exception('缺少参数 id');
     }
+
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_sp_override_detail d
+        JOIN cainiao_sp_override_name n ON n.id = d.name_id
+        JOIN cainiao_apk_config c ON c.id = n.config_id
+        WHERE d.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
 
     if (!$isAdmin) {
         $stmt = $pdo->prepare("SELECT d.id FROM cainiao_sp_override_detail d
@@ -233,6 +267,7 @@ function editKey(PDO $pdo, array $input)
         ':type' => $input['type'],
         ':id' => $input['id']
     ]);
+    Auth::afterConfigChange($pdo, $apkId);
 
     return ['message' => '更新成功'];
 }
@@ -248,6 +283,14 @@ function deleteKey(PDO $pdo, array $input)
     if (empty($input['id'])) {
         throw new Exception('缺少参数 id');
     }
+
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_sp_override_detail d
+        JOIN cainiao_sp_override_name n ON n.id = d.name_id
+        JOIN cainiao_apk_config c ON c.id = n.config_id
+        WHERE d.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
 
     if (!$isAdmin) {
         $stmt = $pdo->prepare("SELECT d.id FROM cainiao_sp_override_detail d
@@ -269,7 +312,7 @@ function deleteKey(PDO $pdo, array $input)
 
     $stmt = $pdo->prepare("DELETE FROM cainiao_sp_override_detail WHERE id = :id");
     $stmt->execute([':id' => $input['id']]);
+    Auth::afterConfigChange($pdo, $apkId);
 
     return ['message' => '删除成功'];
 }
-

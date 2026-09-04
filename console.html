@@ -722,9 +722,14 @@
       z-index: 3000;
     }
 
-    .global-config-sync__launcher {
+    /* Element Plus 的 .is-circle 带有更高选择器优先级，使用徽标祖先提高优先级，
+       同时锁定宽高、内边距和 flex 尺寸，保证入口始终是正圆。 */
+    .global-config-sync__badge .global-config-sync__launcher {
       width: 52px;
       height: 52px;
+      min-width: 52px;
+      padding: 0;
+      flex: 0 0 52px;
       border: 0;
       border-radius: 50%;
       box-shadow: 0 8px 24px rgb(64 158 255 / 35%);
@@ -934,7 +939,12 @@
 
     @media (max-width: 600px) {
       .global-config-sync__badge { right: 14px; bottom: 14px; }
-      .global-config-sync__launcher { width: 48px; height: 48px; }
+      .global-config-sync__badge .global-config-sync__launcher {
+        width: 48px;
+        height: 48px;
+        min-width: 48px;
+        flex-basis: 48px;
+      }
     }
 
     @media (max-width: 900px) {
@@ -2256,6 +2266,12 @@
         /** 将状态接口响应归一成全局同步中心使用的最小快照。 */
         function applyGlobalSyncSnapshot(source) {
           let data = source && typeof source === 'object' ? source : {};
+          // 配置分发页的写接口把同步任务放在 data.invalidate.sync_job；
+          // 先展开该层，保证外壳和桶页看到同一份任务快照。
+          if (data.invalidate && typeof data.invalidate === 'object') {
+            data = data.invalidate.sync_job && typeof data.invalidate.sync_job === 'object'
+              ? data.invalidate.sync_job : data.invalidate;
+          }
           if (data.data && typeof data.data === 'object' && (
             data.data.status || data.data.job_id || data.data.sync_job
             || data.data.total !== undefined || data.data.expected_total !== undefined
@@ -2307,6 +2323,39 @@
             globalSyncProgress.failed_items = resultItems.filter(item => Number(item && item.code) !== 200);
           }
           return globalSyncProgress;
+        }
+
+        /**
+         * 接收业务 iframe 的配置变更回执。配置分发写接口的同步任务嵌在
+         * invalidate.sync_job 中，桶页则直接返回 sync_job；两种格式都归一到
+         * 外壳状态并立即触发一次轮询，不等待 5 秒空闲轮询窗口。
+         */
+        function observeGlobalSyncMutation(source) {
+          let data = source && typeof source === 'object' ? source : {};
+          const invalidation = data.invalidate && typeof data.invalidate === 'object'
+            ? data.invalidate : data;
+          const job = invalidation.sync_job && typeof invalidation.sync_job === 'object'
+            ? invalidation.sync_job
+            : (data.sync_job && typeof data.sync_job === 'object' ? data.sync_job : null);
+          if (job) {
+            applyGlobalSyncSnapshot(job);
+          } else if (Number(invalidation.sync_started || invalidation.sync_joined || invalidation.sync_scheduled) === 1) {
+            applyGlobalSyncSnapshot({
+              status: 'queued',
+              phase: 'queue',
+              phase_label: '排队中',
+              message: invalidation.message || data.message || '配置已修改，等待全局配置同步'
+            });
+          }
+          globalSyncStatusSupported.value = true;
+          scheduleGlobalSyncStatusPoll(0);
+        }
+
+        function handleGlobalSyncMutationMessage(event) {
+          if (!event || event.origin !== window.location.origin) return;
+          const payload = event.data && typeof event.data === 'object' ? event.data : null;
+          if (!payload || payload.type !== 'yunzhuru:config-sync-updated') return;
+          observeGlobalSyncMutation(payload.payload || payload.sync_job || payload);
         }
 
         function clearGlobalSyncStatusTimer() {
@@ -2901,6 +2950,55 @@ function closeOtherTabs() {
 }
 
 /**
+ * 为同源业务 iframe 安装轻量 API 回执桥。旧业务页没有统一状态 store，
+ * 因此所有 POST API 成功回执都通知外壳立即刷新同步状态；若回执包含
+ * invalidate.sync_job 或 sync_job，则同时转发任务摘要，避免等待空闲轮询。
+ */
+function installGlobalSyncFrameBridge(frameWindow) {
+  if (!frameWindow || frameWindow.__yunzhuruGlobalSyncBridge) return;
+  const originalFetch = frameWindow.fetch;
+  if (typeof originalFetch !== 'function') return;
+  const parentWindow = window;
+  const targetOrigin = frameWindow.location && frameWindow.location.origin
+    ? frameWindow.location.origin : '';
+  if (!targetOrigin) return;
+  frameWindow.__yunzhuruGlobalSyncBridge = true;
+  frameWindow.fetch = function globalSyncFetch(input, init) {
+    const requestInit = init && typeof init === 'object' ? init : {};
+    const method = String(requestInit.method || (input && input.method) || 'GET').toUpperCase();
+    const requestUrl = typeof input === 'string'
+      ? input : (input && input.url ? String(input.url) : '');
+    const promise = originalFetch.apply(this, arguments);
+    if (method !== 'POST' || !/\/api\/index\.php(?:[?#]|$)/i.test(requestUrl)) {
+      return promise;
+    }
+    Promise.resolve(promise).then(response => {
+      if (!response || typeof response.clone !== 'function') return;
+      response.clone().json().then(json => {
+        if (!json || typeof json !== 'object') return;
+        const data = json.data && typeof json.data === 'object' ? json.data : {};
+        const payload = {};
+        if (data.invalidate && typeof data.invalidate === 'object') {
+          payload.invalidate = data.invalidate;
+        }
+        if (data.sync_job && typeof data.sync_job === 'object') {
+          payload.sync_job = data.sync_job;
+        }
+        ['sync_started', 'sync_joined', 'sync_scheduled'].forEach(field => {
+          if (data[field] !== undefined) payload[field] = data[field];
+        });
+        if (!Object.keys(payload).length) payload.refresh_only = true;
+        parentWindow.postMessage({
+          type: 'yunzhuru:config-sync-updated',
+          payload,
+        }, targetOrigin);
+      }).catch(() => {});
+    }).catch(() => {});
+    return promise;
+  };
+}
+
+/**
  * iframe 每次完成导航后注入统一主题。注入过程严格幂等，并按书签隔离异步事件。
  */
 function handleIframeLoaded(event, tab) {
@@ -3087,6 +3185,7 @@ function handleIframeLoaded(event, tab) {
     }
 
     const frameWindow = frameElement.contentWindow;
+    installGlobalSyncFrameBridge(frameWindow);
     const existingStabilizer = frameWindow && frameWindow.AdminScrollLockStabilizer;
     if (existingStabilizer && existingStabilizer.assetVersion === ADMIN_FRAME_ASSET_VERSION) {
       existingStabilizer.refresh();
@@ -3637,6 +3736,7 @@ async function clearS3Config() {
           window.addEventListener('resize', updateViewport);
           window.addEventListener('keydown', handleRefreshShortcut, true);
           window.addEventListener('storage', handleAuthenticationStorageChange);
+          window.addEventListener('message', handleGlobalSyncMutationMessage);
           loadMenu();
           loadAdminInfo();
           loadUnreadCount();
@@ -3688,6 +3788,7 @@ async function clearS3Config() {
           window.removeEventListener('resize', updateViewport);
           window.removeEventListener('keydown', handleRefreshShortcut, true);
           window.removeEventListener('storage', handleAuthenticationStorageChange);
+          window.removeEventListener('message', handleGlobalSyncMutationMessage);
           [...iframeThemeCleanups.keys()].forEach(clearIframeThemeWait);
           if (unreadTimer) {
             window.clearInterval(unreadTimer);
@@ -3778,6 +3879,7 @@ async function clearS3Config() {
           globalSyncFailureItems,
           openGlobalSyncCenter,
           startGlobalConfigSync,
+          observeGlobalSyncMutation,
           handleAndroidClick
         };
       }

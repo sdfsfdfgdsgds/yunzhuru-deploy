@@ -601,6 +601,27 @@ createApp({
       return json.data || {};
     }
 
+    /**
+     * 将配置分发写入回执通知控制台父页。后端同步任务位于
+     * data.invalidate.sync_job，统一消息让外壳立即接管同一条全局任务轮询。
+     */
+    function notifyGlobalSyncChange(payload) {
+      if (typeof window === 'undefined') return;
+      try {
+        if (!window.top || typeof window.top.postMessage !== 'function') return;
+        const targetOrigin = window.location && typeof window.location.origin === 'string'
+          ? window.location.origin
+          : '';
+        if (!targetOrigin) return;
+        window.top.postMessage({
+          type: 'yunzhuru:config-sync-updated',
+          payload: payload && typeof payload === 'object' ? payload : {},
+        }, targetOrigin);
+      } catch (error) {
+        // 父页关闭或浏览器策略阻断时不影响当前配置保存结果。
+      }
+    }
+
     /** 将数据库 tinyint 或布尔值规范成 Element Plus 使用的 0/1。 */
     function enabledValue(value) { return value === true || Number(value) === 1 ? 1 : 0; }
     function rowsWithEnabled(rows) { return Array.isArray(rows) ? rows.map(row => ({ ...row, enabled: enabledValue(row.enabled) })) : []; }
@@ -734,6 +755,7 @@ createApp({
       dnsPoolSaving.value = true;
       try {
         const data = await api('updateDnsPool', { enabled: Boolean(value) });
+        notifyGlobalSyncChange(data);
         dnsPoolEnabled.value = data.enabled === undefined ? Boolean(value) : Boolean(data.enabled);
         ElMessage.success(data.message || '抗污染设置已保存');
       } catch (error) {
@@ -774,6 +796,7 @@ createApp({
       editorSaving.value = true;
       try {
         const data = await api(methods[editorType.value], payload);
+        notifyGlobalSyncChange(data);
         ElMessage.success(data.message || '保存成功');
         editorVisible.value = false;
         await loadData(true);
@@ -799,6 +822,7 @@ createApp({
       try {
         row.enabled = enabledValue(value);
         const data = await api(methods[type], rowPayload(type, row));
+        notifyGlobalSyncChange(data);
         ElMessage.success(data.message || (row.enabled ? '已启用' : '已停用'));
       } catch (error) {
         row.enabled = oldValue;
@@ -816,6 +840,7 @@ createApp({
       setRowBusy(busyType, row.id, true);
       try {
         const data = await api(methods[type], { id: row.id });
+        notifyGlobalSyncChange(data);
         ElMessage.success(data.message || '删除成功');
         await loadData(true);
       } catch (error) { ElMessage.error(error.message || '删除失败'); }
@@ -1494,6 +1519,7 @@ createApp({
       importing[type] = true;
       try {
         const data = await api('importCommon', { type });
+        notifyGlobalSyncChange(data);
         ElMessage.success(data.message || '导入完成');
         await loadData(true);
       } catch (error) { ElMessage.error(error.message || '导入失败'); }

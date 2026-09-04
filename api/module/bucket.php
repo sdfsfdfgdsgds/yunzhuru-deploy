@@ -65,6 +65,16 @@ function bucketSanitizeRow(array $row, bool $includeCredentialDisplays = false):
 
 /** 启动全量配置后台同步；启动失败不影响桶资料事务。 */
 function bucketScheduleFullSync(PDO $pdo, string $reason = '配置桶变更'): bool {
+    // 统一复用状态 helper，保证桶资料、应用配置和全局节点池共用同一任务代次。
+    if (function_exists('configSyncStateScheduleWorker')) {
+        try {
+            $scheduled = configSyncStateScheduleWorker($pdo, $reason);
+            if (!empty($scheduled['scheduled'])) return true;
+            // helper 已将失败写入状态，继续尝试旧路径，兼容 exec 临时受限的滚动发布窗口。
+        } catch (Throwable $ignored) {
+            // 状态表/worker 调度异常不阻断桶资料保存；继续走下方兼容路径。
+        }
+    }
     $script = realpath(__DIR__ . '/../../service/push_all_configs.php');
     $alreadyActive = false;
     $before = [];
@@ -891,7 +901,17 @@ function deleteBucket(PDO $pdo, array $input) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         throw $e;
     }
-    return ['message' => '存储桶管理记录已删除；云端 Bucket 和已有文件保持原状', 'id' => $id];
+    // 删除启用桶会改变所有应用的目标桶集合，事务提交后排队一次全量同步，
+    // 让旧桶上的配置快照尽快收敛；云端 Bucket 与已有文件仍按原合同保留。
+    $scheduled = bucketScheduleFullSync($pdo, '删除配置桶管理记录');
+    return [
+        'message' => $scheduled
+            ? '存储桶管理记录已删除，已启动后台同步；云端 Bucket 和已有文件保持原状'
+            : '存储桶管理记录已删除，后台同步未启动；云端 Bucket 和已有文件保持原状',
+        'id' => $id,
+        'sync_scheduled' => $scheduled ? 1 : 0,
+        'sync_job' => bucketReadSyncStateSafe($pdo),
+    ];
 }
 
 /** 测试已保存桶或保存前表单；测试对象使用随机名并在成功后立即清理。 */

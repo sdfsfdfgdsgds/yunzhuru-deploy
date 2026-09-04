@@ -59,6 +59,7 @@ function addView(PDO $pdo, array $input) {
         isset($input['enabled']) ? (int)$input['enabled'] : 1
     ]);
 
+    Auth::afterConfigChange($pdo, (int)$input['apk_id']);
     return ['message' => '添加成功'];
 }
 
@@ -70,6 +71,13 @@ function editView(PDO $pdo, array $input) {
 
     $user = Auth::check($pdo);
     $isAdmin = ($user['role'] ?? '') === 'admin';
+
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_view v
+        JOIN cainiao_apk_config c ON v.config_id = c.id
+        WHERE v.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
 
     if (!$isAdmin) {
         // 非管理员进行所属校验
@@ -108,6 +116,7 @@ function editView(PDO $pdo, array $input) {
         (int)$input['id']
     ]);
 
+    Auth::afterConfigChange($pdo, $apkId);
     return ['message' => '更新成功'];
 }
 
@@ -117,6 +126,13 @@ function deleteView(PDO $pdo, array $input) {
 
     $user = Auth::check($pdo);
     $isAdmin = ($user['role'] ?? '') === 'admin';
+
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_view v
+        JOIN cainiao_apk_config c ON v.config_id = c.id
+        WHERE v.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
 
     if (!$isAdmin) {
         // 非管理员进行所属校验
@@ -131,5 +147,6 @@ function deleteView(PDO $pdo, array $input) {
     $stmt = $pdo->prepare("DELETE FROM cainiao_view WHERE id = ?");
     $stmt->execute([$input['id']]);
 
+    Auth::afterConfigChange($pdo, $apkId);
     return ['message' => '删除成功'];
 }

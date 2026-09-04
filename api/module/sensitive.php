@@ -66,6 +66,7 @@ function add(PDO $pdo, array $input) {
         ':remark'        => $remark
     ]);
 
+    Auth::afterConfigChange($pdo, (int)$input['apk_id']);
     return ['message' => '添加成功'];
 }
 
@@ -77,6 +78,14 @@ function edit(PDO $pdo, array $input) {
     $user    = Auth::check($pdo);
     $userId  = (int)$user['id'];
     $isAdmin = ($user['role'] ?? '') === 'admin';
+
+    // 读取归属 APP，供全局同步与 Redis 失效使用。
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_sensitive_app a
+        JOIN cainiao_apk_config c ON a.config_id = c.id
+        WHERE a.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
 
     // 校验权限（管理员不验证user_id）
     if (!$isAdmin) {
@@ -118,6 +127,7 @@ function edit(PDO $pdo, array $input) {
         ':id'           => $input['id']
     ]);
 
+    Auth::afterConfigChange($pdo, $apkId);
     return ['message' => '更新成功'];
 }
 
@@ -127,6 +137,13 @@ function delete(PDO $pdo, array $input) {
     $user    = Auth::check($pdo);
     $userId  = (int)$user['id'];
     $isAdmin = ($user['role'] ?? '') === 'admin';
+
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_sensitive_app a
+        JOIN cainiao_apk_config c ON a.config_id = c.id
+        WHERE a.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
 
     if (!$isAdmin) {
         $stmt = $pdo->prepare("
@@ -143,6 +160,7 @@ function delete(PDO $pdo, array $input) {
     $stmt = $pdo->prepare("DELETE FROM cainiao_sensitive_app WHERE id = :id");
     $stmt->execute([':id' => $input['id']]);
 
+    Auth::afterConfigChange($pdo, $apkId);
     return ['message' => '删除成功'];
 }
 

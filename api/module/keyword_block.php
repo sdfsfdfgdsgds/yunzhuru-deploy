@@ -50,6 +50,7 @@ function addKeyword(PDO $pdo, array $input) {
     $stmt = $pdo->prepare("INSERT INTO cainiao_keyword (config_id, keyword, type, new_keyword, clickAction, clickText, created_at)
                            VALUES (?, ?, ?, ?, ?, ?, NOW())");
     $stmt->execute([$configId, $input['keyword'], $type, $newKeyword, $clickAction, $clickText]);
+    Auth::afterConfigChange($pdo, (int)$input['apk_id']);
 
     return ['message' => '添加成功'];
 }
@@ -64,6 +65,14 @@ function editKeyword(PDO $pdo, array $input) {
 
     $user = Auth::check($pdo);
     $isAdmin = ($user['role'] ?? '') === 'admin';
+
+    // 更新前获取归属 APP，供 Redis 失效和全局同步使用。
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_keyword k
+        JOIN cainiao_apk_config c ON k.config_id = c.id
+        WHERE k.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
 
     if (!$isAdmin) {
         // 仅普通用户校验权限
@@ -88,6 +97,7 @@ function editKeyword(PDO $pdo, array $input) {
         $input['clickText'] ?? '',
         (int)$input['id']
     ]);
+    Auth::afterConfigChange($pdo, $apkId);
 
     return ['message' => '更新成功'];
 }
@@ -99,6 +109,13 @@ function deleteKeyword(PDO $pdo, array $input) {
 
     $user = Auth::check($pdo);
     $isAdmin = ($user['role'] ?? '') === 'admin';
+
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_keyword k
+        JOIN cainiao_apk_config c ON k.config_id = c.id
+        WHERE k.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
 
     if (!$isAdmin) {
         // 仅普通用户校验权限
@@ -114,6 +131,7 @@ function deleteKeyword(PDO $pdo, array $input) {
 
     $stmt = $pdo->prepare("DELETE FROM cainiao_keyword WHERE id = ?");
     $stmt->execute([$input['id']]);
+    Auth::afterConfigChange($pdo, $apkId);
 
     return ['message' => '删除成功'];
 }
@@ -158,6 +176,7 @@ function addBlockedType(PDO $pdo, array $input) {
     // 插入新记录
     $stmt = $pdo->prepare("INSERT INTO cainiao_popup_block_type (config_id, popup_id, created_at) VALUES (?, ?, NOW())");
     $stmt->execute([$configId, $input['popup_id']]);
+    Auth::afterConfigChange($pdo, (int)$input['apk_id']);
 
     return ['message' => '添加成功'];
 }
@@ -188,6 +207,9 @@ function editBlockedType(PDO $pdo, array $input) {
     if (!$row) throw new Exception('权限不足');
 
     $configId = $row['config_id'];
+    $appStmt = $pdo->prepare('SELECT apk_id FROM cainiao_apk_config WHERE id = :id LIMIT 1');
+    $appStmt->execute([':id' => $configId]);
+    $apkId = (int)$appStmt->fetchColumn();
     $currentPopupId = $row['popup_id'];
 
     if ((int)$currentPopupId === (int)$input['popup_id']) {
@@ -207,6 +229,7 @@ function editBlockedType(PDO $pdo, array $input) {
     // 执行更新
     $stmt = $pdo->prepare("UPDATE cainiao_popup_block_type SET popup_id = ? WHERE id = ?");
     $stmt->execute([$input['popup_id'], $input['id']]);
+    if ($apkId > 0) Auth::afterConfigChange($pdo, $apkId);
 
     return ['message' => '更新成功'];
 }
@@ -221,6 +244,13 @@ function deleteBlockedType(PDO $pdo, array $input) {
     $userId = (int)$user['id'];
     $isAdmin = ($user['role'] ?? '') === 'admin';
 
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_popup_block_type b
+        JOIN cainiao_apk_config c ON b.config_id = c.id
+        WHERE b.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
+
     if (!$isAdmin) {
         // 普通用户权限校验
         $stmt = $pdo->prepare("SELECT b.id FROM cainiao_popup_block_type b
@@ -234,6 +264,7 @@ function deleteBlockedType(PDO $pdo, array $input) {
     // 执行删除
     $stmt = $pdo->prepare("DELETE FROM cainiao_popup_block_type WHERE id = ?");
     $stmt->execute([$input['id']]);
+    Auth::afterConfigChange($pdo, $apkId);
 
     return ['message' => '删除成功'];
 }

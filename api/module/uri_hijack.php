@@ -53,6 +53,8 @@ function add(PDO $pdo, array $input)
         ':class_name' => $input['class_name'] ?? '',
         ':uri_value'  => $input['uri_value'] ?? ''
     ]);
+    $apkId = (int)$input['apk_id'];
+    Auth::afterConfigChange($pdo, $apkId);
     return ['message' => '添加成功'];
 }
 
@@ -76,6 +78,15 @@ function edit(PDO $pdo, array $input)
         if (!$check->fetch()) throw new Exception('权限不足或记录不存在');
     }
 
+    // 更新前读取归属 APP，供全局同步与 Redis 失效使用。
+    $appStmt = $pdo->prepare("SELECT c.apk_id
+        FROM cainiao_uri_hijack h
+        JOIN cainiao_apk_config c ON c.id = h.config_id
+        WHERE h.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
+
     $stmt = $pdo->prepare("UPDATE cainiao_uri_hijack 
                            SET remark = :remark, class_name = :class_name, uri_value = :uri_value 
                            WHERE id = :id");
@@ -85,6 +96,7 @@ function edit(PDO $pdo, array $input)
         ':uri_value'  => $input['uri_value'] ?? '',
         ':id'         => $input['id']
     ]);
+    Auth::afterConfigChange($pdo, $apkId);
     return ['message' => '更新成功'];
 }
 
@@ -108,7 +120,16 @@ function delete(PDO $pdo, array $input)
         if (!$check->fetch()) throw new Exception('权限不足或记录不存在');
     }
 
+    $appStmt = $pdo->prepare("SELECT c.apk_id
+        FROM cainiao_uri_hijack h
+        JOIN cainiao_apk_config c ON c.id = h.config_id
+        WHERE h.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
+
     $stmt = $pdo->prepare("DELETE FROM cainiao_uri_hijack WHERE id = ?");
     $stmt->execute([$input['id']]);
+    Auth::afterConfigChange($pdo, $apkId);
     return ['message' => '删除成功'];
 }

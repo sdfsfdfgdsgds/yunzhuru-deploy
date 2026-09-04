@@ -272,16 +272,40 @@ class Auth
     }
 
     /**
-     * 配置变更后统一处理：清 Redis 缓存 + 推送到存储桶（含级联复用应用）
-     * 弹窗等模块的增删改操作完成后调用此方法
+     * 配置变更后统一处理：清 Redis 缓存 + 进入全局配置同步任务。
+     *
+     * 以前这里仅启动 push_config.php（单 APPID worker），同步中心看不到该
+     * 任务，且连续修改时每个入口各自推送。现在统一写入 ConfigSyncState 并由
+     * push_all_configs.php 合并执行，弹窗、链接、跳转等调用方无需复制调度代码。
      */
     public static function afterConfigChange(PDO $pdo, int $apkId) {
         self::reset_redis($apkId);
-        // 异步推送配置到存储桶，不阻塞前端响应
-        $script = realpath(__DIR__ . '/../../service/push_config.php');
-        if ($script) {
-            exec("php " . escapeshellarg($script) . " " . (int)$apkId . " > /dev/null 2>&1 &");
+
+        // API 总入口通常已经加载该工具；独立脚本/测试环境则按需加载。
+        $statePath = __DIR__ . '/ConfigSyncState.php';
+        if (!function_exists('configSyncStateScheduleWorker') && file_exists($statePath)) {
+            require_once $statePath;
         }
+        if (function_exists('configSyncStateScheduleWorker')) {
+            try {
+                $scheduled = configSyncStateScheduleWorker($pdo, '应用 #' . (int)$apkId . ' 配置变更');
+                if (!empty($scheduled['scheduled'])) {
+                    return $scheduled['snapshot'] ?? [];
+                }
+                // worker 启动失败时继续走旧单应用兜底，避免升级窗口丢失本次对象推送。
+                error_log('[Auth::afterConfigChange] 全局同步未启动 appId=' . (int)$apkId);
+            } catch (Throwable $e) {
+                // 状态记录异常不阻断配置保存；保留旧单应用 worker 作为兜底。
+                error_log('[Auth::afterConfigChange] 全局同步调度失败 appId=' . (int)$apkId . ': ' . $e->getMessage());
+            }
+        }
+
+        // 兼容未部署 ConfigSyncState 的旧节点，避免升级过程中丢失对象推送。
+        $script = realpath(__DIR__ . '/../../service/push_config.php');
+        if ($script && function_exists('exec')) {
+            @exec('php ' . escapeshellarg($script) . ' ' . (int)$apkId . ' > /dev/null 2>&1 &');
+        }
+        return [];
     }
 
     /**

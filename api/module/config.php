@@ -200,11 +200,10 @@ function updateAppConfig(PDO $pdo, array $input)
     $stmt->execute([':id' => $configId]);
     $app = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    Auth::reset_redis($app['apk_id']);
+    Auth::afterConfigChange($pdo, (int)$app['apk_id']);
 
     return ['message' => '更新成功'];
 }
-
 
 
 

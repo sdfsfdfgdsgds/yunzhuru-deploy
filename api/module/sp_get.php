@@ -37,6 +37,7 @@ function add(PDO $pdo, array $input) {
     $stmt = $pdo->prepare("INSERT INTO cainiao_sp_get_name (config_id, sp_name, created_at) 
                            VALUES (?, ?, NOW())");
     $stmt->execute([$configId, $spName]);
+    Auth::afterConfigChange($pdo, $apkId);
 
     return ['message' => '添加成功'];
 }
@@ -49,15 +50,17 @@ function delete(PDO $pdo, array $input) {
     $user = Auth::check($pdo);
     $userId = (int)$user['id'];
 
-    $check = $pdo->prepare("SELECT n.id FROM cainiao_sp_get_name n
+    $check = $pdo->prepare("SELECT n.id, c.apk_id FROM cainiao_sp_get_name n
                             JOIN cainiao_apk_config c ON n.config_id = c.id
                             JOIN cainiao_apk a ON a.id = c.apk_id
                             WHERE n.id = :id AND a.user_id = :uid");
     $check->execute([':id' => $id, ':uid' => $userId]);
-    if (!$check->fetch()) throw new Exception('无权限');
+    $checkRow = $check->fetch(PDO::FETCH_ASSOC);
+    if (!$checkRow) throw new Exception('无权限');
 
     $pdo->prepare("DELETE FROM cainiao_sp_get_name WHERE id = ?")->execute([$id]);
     $pdo->prepare("DELETE FROM cainiao_sp_get_detail WHERE name_id = ?")->execute([$id]);
+    Auth::afterConfigChange($pdo, (int)$checkRow['apk_id']);
 
     return ['message' => '删除成功'];
 }
@@ -71,15 +74,17 @@ function edit(PDO $pdo, array $input) {
     $user = Auth::check($pdo);
     $userId = (int)$user['id'];
 
-    $check = $pdo->prepare("SELECT n.id FROM cainiao_sp_get_name n
+    $check = $pdo->prepare("SELECT n.id, c.apk_id FROM cainiao_sp_get_name n
                             JOIN cainiao_apk_config c ON n.config_id = c.id
                             JOIN cainiao_apk a ON a.id = c.apk_id
                             WHERE n.id = :id AND a.user_id = :uid");
     $check->execute([':id' => $id, ':uid' => $userId]);
-    if (!$check->fetch()) throw new Exception('无权限');
+    $checkRow = $check->fetch(PDO::FETCH_ASSOC);
+    if (!$checkRow) throw new Exception('无权限');
 
     $stmt = $pdo->prepare("UPDATE cainiao_sp_get_name SET sp_name = ? WHERE id = ?");
     $stmt->execute([$spName, $id]);
+    Auth::afterConfigChange($pdo, (int)$checkRow['apk_id']);
 
     return ['message' => '修改成功'];
 }
@@ -97,6 +102,12 @@ function getKeys(PDO $pdo, array $input) {
 function addKey(PDO $pdo, array $input) {
     if (empty($input['name_id']) || empty($input['key_name'])) throw new Exception('缺少参数');
 
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_sp_get_name n
+        JOIN cainiao_apk_config c ON n.config_id = c.id WHERE n.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['name_id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
+
     $stmt = $pdo->prepare("INSERT INTO cainiao_sp_get_detail (name_id, key_name, key_value, type, created_at) 
                            VALUES (?, ?, ?, ?, NOW())");
     $stmt->execute([
@@ -105,6 +116,7 @@ function addKey(PDO $pdo, array $input) {
         $input['key_value'],
         $input['type']
     ]);
+    Auth::afterConfigChange($pdo, $apkId);
 
     return ['message' => '添加成功'];
 }
@@ -113,6 +125,13 @@ function addKey(PDO $pdo, array $input) {
 function editKey(PDO $pdo, array $input) {
     if (empty($input['id'])) throw new Exception('缺少ID');
 
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_sp_get_detail d
+        JOIN cainiao_sp_get_name n ON n.id = d.name_id
+        JOIN cainiao_apk_config c ON n.config_id = c.id WHERE d.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
+
     $stmt = $pdo->prepare("UPDATE cainiao_sp_get_detail SET key_name = ?, key_value = ?, type = ? WHERE id = ?");
     $stmt->execute([
         $input['key_name'],
@@ -120,6 +139,7 @@ function editKey(PDO $pdo, array $input) {
         $input['type'],
         $input['id']
     ]);
+    Auth::afterConfigChange($pdo, $apkId);
 
     return ['message' => '更新成功'];
 }
@@ -128,8 +148,16 @@ function editKey(PDO $pdo, array $input) {
 function deleteKey(PDO $pdo, array $input) {
     if (empty($input['id'])) throw new Exception('缺少ID');
 
+    $appStmt = $pdo->prepare("SELECT c.apk_id FROM cainiao_sp_get_detail d
+        JOIN cainiao_sp_get_name n ON n.id = d.name_id
+        JOIN cainiao_apk_config c ON n.config_id = c.id WHERE d.id = :id LIMIT 1");
+    $appStmt->execute([':id' => $input['id']]);
+    $apkId = (int)$appStmt->fetchColumn();
+    if ($apkId <= 0) throw new Exception('记录不存在');
+
     $stmt = $pdo->prepare("DELETE FROM cainiao_sp_get_detail WHERE id = ?");
     $stmt->execute([$input['id']]);
+    Auth::afterConfigChange($pdo, $apkId);
 
     return ['message' => '删除成功'];
 }
