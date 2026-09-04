@@ -951,8 +951,11 @@ function setBucketStatus(PDO $pdo, array $input) {
     $stmt = $pdo->prepare("UPDATE cainiao_s3_bucket SET `{$field}`=:value WHERE id=:id");
     $stmt->execute([':value' => $value, ':id' => $id]);
 
+    // 用更新后的快照生成原因，避免停用/启用时把旧状态误传给差异比较器。
+    $updated = $existing;
+    $updated[$field] = $value;
     $scheduled = $field === 'enabled'
-        ? bucketScheduleFullSync($pdo, bucketSyncConnectionReason('更新配置桶推送开关', $existing, $id))
+        ? bucketScheduleFullSync($pdo, bucketSyncConnectionReason('更新配置桶推送开关', $updated, $id, $existing))
         : false;
     return [
         'message' => $field === 'enabled'
