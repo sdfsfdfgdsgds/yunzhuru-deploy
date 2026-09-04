@@ -33,7 +33,7 @@ function bucketFindById(PDO $pdo, int $bucketId): array {
  * 这里只展示名称、服务商和公开端点/域名，不携带 AccessKey、SecretKey 等敏感字段，
  * 让“触发原因”明确指出本次更新影响了哪一条连接。
  */
-function bucketSyncConnectionReason(string $action, array $record, int $bucketId = 0): string {
+function bucketSyncConnectionReason(string $action, array $record, int $bucketId = 0, ?array $previous = null): string {
     $name = trim((string)($record['name'] ?? ''));
     $provider = trim((string)($record['provider_label'] ?? $record['provider'] ?? ''));
     $endpoint = trim((string)($record['endpoint'] ?? ''));
@@ -41,10 +41,65 @@ function bucketSyncConnectionReason(string $action, array $record, int $bucketId
     $bucket = trim((string)($record['bucket'] ?? ''));
     $parts = [];
     if ($bucketId > 0) $parts[] = '桶 #' . $bucketId;
+    if ($previous !== null) {
+        // 编辑时只列出本次真正变更的字段，管理员能直接看出改了哪条链接；
+        // 凭据只显示“访问凭据已更新”，绝不把原值或新值写入任务原因。
+        $before = [
+            'name' => trim((string)($previous['name'] ?? '')),
+            'provider' => strtolower(trim((string)($previous['provider'] ?? ''))),
+            'endpoint' => trim((string)($previous['endpoint'] ?? '')),
+            'domain' => trim((string)($previous['domain'] ?? '')),
+            'bucket' => trim((string)($previous['bucket'] ?? '')),
+            'region' => strtolower(trim((string)($previous['region'] ?? ''))),
+            'note' => trim((string)($previous['note'] ?? '')),
+            'enabled' => (int)($previous['enabled'] ?? 0),
+            'inject' => (int)($previous['inject'] ?? 0),
+        ];
+        $after = [
+            'name' => $name,
+            'provider' => strtolower(trim((string)($record['provider'] ?? ''))),
+            'endpoint' => $endpoint,
+            'domain' => $domain,
+            'bucket' => $bucket,
+            'region' => strtolower(trim((string)($record['region'] ?? ''))),
+            'note' => trim((string)($record['note'] ?? '')),
+            'enabled' => (int)($record['enabled'] ?? 0),
+            'inject' => (int)($record['inject'] ?? 0),
+        ];
+        $labels = [
+            'name' => '名称',
+            'provider' => '服务商',
+            'endpoint' => '端点',
+            'domain' => '公开域名',
+            'bucket' => 'Bucket',
+            'region' => 'Region',
+            'note' => '备注',
+            'enabled' => '推送开关',
+            'inject' => '注入开关',
+        ];
+        $changed = [];
+        foreach ($labels as $field => $label) {
+            if ((string)$before[$field] === (string)$after[$field]) continue;
+            $value = $after[$field];
+            if (in_array($field, ['enabled', 'inject'], true)) $value = $value === 1 ? '开启' : '关闭';
+            if ($value === '') $value = '已清空';
+            $changed[] = $label . ' ' . $value;
+        }
+        if ($changed) $parts[] = '更新内容：' . implode('、', $changed);
+        $credentialChanged = false;
+        foreach (['access_key' => '访问凭据', 'secret_key' => '访问凭据', 'login_account' => '平台登录资料', 'login_password' => '平台登录资料'] as $field => $label) {
+            $beforeValue = bucketDecryptSecret((string)($previous[$field] ?? ''));
+            $afterValue = trim((string)($record[$field] ?? ''));
+            if ($beforeValue !== $afterValue) $credentialChanged = true;
+        }
+        if ($credentialChanged) $parts[] = '访问凭据已更新';
+        if (count($parts) === ($bucketId > 0 ? 1 : 0)) $parts[] = '未检测到字段变化';
+        $reason = trim($action . ($parts ? ' · ' . implode(' · ', $parts) : ''));
+        return function_exists('mb_substr') ? mb_substr($reason, 0, 240, 'UTF-8') : substr($reason, 0, 240);
+    }
     if ($name !== '') $parts[] = $name;
     if ($provider !== '') $parts[] = $provider;
-    // Endpoint、domain、Bucket 是三类不同定位信息，全部保留并分别标注，
-    // 避免只改公开域名时同步中心仍显示旧的写入端点。
+    // 新增/删除等没有旧快照时保留完整公开定位信息。
     if ($endpoint !== '') $parts[] = '端点 ' . $endpoint;
     if ($domain !== '') $parts[] = '域名 ' . $domain;
     if ($bucket !== '') $parts[] = 'Bucket ' . $bucket;
@@ -871,7 +926,7 @@ function updateBucket(PDO $pdo, array $input) {
         ':enabled' => $record['enabled'],
         ':inject' => $record['inject'],
     ]);
-    $scheduled = bucketScheduleFullSync($pdo, bucketSyncConnectionReason('更新配置桶连接', $record, $id));
+    $scheduled = bucketScheduleFullSync($pdo, bucketSyncConnectionReason('更新配置桶连接', $record, $id, $existing));
     return [
         'message' => $scheduled
             ? '存储桶已更新，已启动后台同步'
