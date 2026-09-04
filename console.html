@@ -714,6 +714,229 @@
       border-top: 1px solid #eef2f6;
     }
 
+    /* 全局配置同步入口属于后台外壳，不跟随业务 iframe 的高度变化。 */
+    .global-config-sync__badge {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      z-index: 3000;
+    }
+
+    .global-config-sync__launcher {
+      width: 52px;
+      height: 52px;
+      border: 0;
+      border-radius: 50%;
+      box-shadow: 0 8px 24px rgb(64 158 255 / 35%);
+    }
+
+    .global-config-sync__launcher.is-queued,
+    .global-config-sync__launcher.is-running {
+      box-shadow: 0 8px 24px rgb(230 162 60 / 38%);
+    }
+
+    .global-config-sync__launcher.is-partial_failure,
+    .global-config-sync__launcher.is-failed {
+      box-shadow: 0 8px 24px rgb(245 108 108 / 38%);
+    }
+
+    .global-config-sync__launcher-icon {
+      display: inline-block;
+      font-size: 21px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .global-config-sync__launcher-icon.is-spinning {
+      animation: global-config-sync-rotate 1.1s linear infinite;
+    }
+
+    @keyframes global-config-sync-rotate {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    .global-config-sync__drawer {
+      width: min(92vw, 440px) !important;
+    }
+
+    .global-config-sync__drawer .el-drawer__header {
+      margin-bottom: 0;
+      padding-bottom: 14px;
+      border-bottom: 1px solid #eef2f6;
+    }
+
+    .global-config-sync__drawer .el-drawer__body {
+      padding: 14px 18px 20px;
+      overflow-y: auto;
+    }
+
+    .global-config-sync__drawer .el-drawer__footer {
+      padding: 12px 18px 16px;
+      border-top: 1px solid #eef2f6;
+    }
+
+    .global-config-sync__header,
+    .global-config-sync__footer,
+    .global-config-sync__details-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .global-config-sync__title {
+      color: #1f2937;
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .global-config-sync__subtitle {
+      display: flex;
+      align-items: center;
+      margin-top: 5px;
+      color: #6b7280;
+      font-size: 12px;
+    }
+
+    .global-config-sync__status-dot {
+      width: 7px;
+      height: 7px;
+      margin-right: 6px;
+      border-radius: 50%;
+      background: #94a3b8;
+    }
+
+    .global-config-sync__status-dot.is-success { background: #22c55e; }
+    .global-config-sync__status-dot.is-warning {
+      background: #e6a23c;
+      animation: global-config-sync-pulse 1.2s ease-in-out infinite;
+    }
+    .global-config-sync__status-dot.is-danger { background: #ef4444; }
+
+    .global-config-sync__summary {
+      margin-bottom: 14px;
+      padding: 14px;
+      border: 1px solid #dbeafe;
+      border-radius: 10px;
+      background: #eff6ff;
+    }
+
+    .global-config-sync__summary.is-completed {
+      border-color: #bbf7d0;
+      background: #f0fdf4;
+    }
+
+    .global-config-sync__summary.is-partial_failure,
+    .global-config-sync__summary.is-failed {
+      border-color: #fecaca;
+      background: #fef2f2;
+    }
+
+    .global-config-sync__summary-message {
+      margin-bottom: 10px;
+      color: #334155;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .global-config-sync__metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .global-config-sync__metric {
+      min-width: 0;
+      padding: 10px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .global-config-sync__metric span,
+    .global-config-sync__details-row span {
+      color: #64748b;
+      font-size: 11px;
+    }
+
+    .global-config-sync__metric strong {
+      display: block;
+      margin-top: 4px;
+      overflow: hidden;
+      color: #1f2937;
+      font-size: 18px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .global-config-sync__metric.is-success strong { color: #15803d; }
+    .global-config-sync__metric.is-danger strong { color: #dc2626; }
+
+    .global-config-sync__details {
+      display: grid;
+      gap: 9px;
+      margin-bottom: 14px;
+      padding: 12px;
+      border: 1px solid #eef2f6;
+      border-radius: 8px;
+      background: #f8fafc;
+    }
+
+    .global-config-sync__details-row strong {
+      max-width: 64%;
+      overflow: hidden;
+      color: #334155;
+      font-size: 12px;
+      text-align: right;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .global-config-sync__failures-title {
+      margin-bottom: 8px;
+      color: #991b1b;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .global-config-sync__failure {
+      margin-bottom: 8px;
+      padding: 9px 10px;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      background: #fff7f7;
+      color: #7f1d1d;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .global-config-sync__failure code {
+      display: block;
+      margin-top: 3px;
+      overflow-wrap: anywhere;
+      color: #991b1b;
+      font-size: 11px;
+    }
+
+    .global-config-sync__meta {
+      display: grid;
+      gap: 4px;
+      color: #94a3b8;
+      font-size: 11px;
+    }
+
+    @keyframes global-config-sync-pulse {
+      0%, 100% { opacity: .45; }
+      50% { opacity: 1; }
+    }
+
+    @media (max-width: 600px) {
+      .global-config-sync__badge { right: 14px; bottom: 14px; }
+      .global-config-sync__launcher { width: 48px; height: 48px; }
+    }
+
     @media (max-width: 900px) {
       .admin-sidebar {
         display: none;
@@ -1075,6 +1298,151 @@
         </el-menu>
       </div>
       <div class="mobile-drawer-footer">v{{ appVersion }} · {{ siteTitle }}</div>
+    </el-drawer>
+
+    <!-- 全局配置同步中心固定在后台外壳，所有业务页面共用同一个入口。 -->
+    <el-badge
+      class="global-config-sync__badge"
+      :value="globalSyncBadgeValue"
+      :hidden="globalSyncBadgeValue === 0"
+      :max="99"
+    >
+      <el-button
+        class="global-config-sync__launcher"
+        :class="'is-' + (globalSyncProgress.status || 'idle')"
+        :type="globalSyncLauncherType"
+        circle
+        aria-label="打开全局配置同步中心"
+        title="打开全局配置同步中心"
+        @click="openGlobalSyncCenter"
+      >
+        <span
+          class="global-config-sync__launcher-icon"
+          :class="{ 'is-spinning': globalSyncBusy }"
+        >↻</span>
+      </el-button>
+    </el-badge>
+
+    <el-drawer
+      v-model="globalSyncCenterVisible"
+      class="global-config-sync__drawer"
+      direction="rtl"
+      size="min(92vw, 440px)"
+      append-to-body
+      :destroy-on-close="false"
+    >
+      <template #header>
+        <div class="global-config-sync__header">
+          <div>
+            <div class="global-config-sync__title">全局配置同步</div>
+            <div class="global-config-sync__subtitle">
+              <span
+                class="global-config-sync__status-dot"
+                :class="globalSyncStatusDotClass"
+                aria-hidden="true"
+              ></span>
+              {{ globalSyncProgress.phase_label || globalSyncStatusLabel }}
+              <span v-if="globalSyncBusy && globalSyncTotal > 0">
+                · {{ globalSyncCurrent }}/{{ globalSyncTotal }}
+              </span>
+            </div>
+          </div>
+          <el-tag :type="globalSyncStatusTagType" size="small" effect="light">
+            {{ globalSyncStatusLabel }}
+          </el-tag>
+        </div>
+      </template>
+
+      <div class="global-config-sync__body" aria-live="polite">
+        <section
+          class="global-config-sync__summary"
+          :class="'is-' + (globalSyncProgress.status || 'idle')"
+        >
+          <div class="global-config-sync__summary-message">
+            {{ globalSyncProgress.message || '等待配置变更' }}
+          </div>
+          <el-progress
+            :percentage="globalSyncProgressPercent"
+            :stroke-width="9"
+            :indeterminate="globalSyncBusy && globalSyncTotal === 0"
+            :duration="2"
+            :status="globalSyncProgress.status === 'completed' ? 'success' : (['partial_failure', 'failed'].includes(globalSyncProgress.status) ? 'exception' : undefined)"
+          ></el-progress>
+        </section>
+
+        <div class="global-config-sync__metrics">
+          <div class="global-config-sync__metric">
+            <span>计划应用</span>
+            <strong>{{ globalSyncTotal }}</strong>
+          </div>
+          <div class="global-config-sync__metric">
+            <span>当前进度</span>
+            <strong>{{ globalSyncCurrent }}</strong>
+          </div>
+          <div class="global-config-sync__metric is-success">
+            <span>成功</span>
+            <strong>{{ globalSyncProgress.success || globalSyncProgress.success_count || 0 }}</strong>
+          </div>
+          <div class="global-config-sync__metric is-danger">
+            <span>失败</span>
+            <strong>{{ globalSyncProgress.fail || globalSyncProgress.fail_count || 0 }}</strong>
+          </div>
+        </div>
+
+        <section class="global-config-sync__details">
+          <div class="global-config-sync__details-row">
+            <span>当前应用</span>
+            <strong :title="globalSyncProgress.current_app || '-'">
+              {{ globalSyncProgress.current_app || '-' }}
+            </strong>
+          </div>
+          <div class="global-config-sync__details-row">
+            <span>当前配置桶</span>
+            <strong :title="globalSyncProgress.current_bucket || '-'">
+              {{ globalSyncProgress.current_bucket || '-' }}
+            </strong>
+          </div>
+          <div class="global-config-sync__details-row">
+            <span>任务编号</span>
+            <strong :title="globalSyncProgress.job_id || '-'">
+              {{ globalSyncProgress.job_id || '-' }}
+            </strong>
+          </div>
+        </section>
+
+        <section v-if="globalSyncFailureItems.length">
+          <div class="global-config-sync__failures-title">失败明细</div>
+          <article
+            v-for="(item, index) in globalSyncFailureItems"
+            :key="(item.bucket_id || item.bucket || index) + '-' + index"
+            class="global-config-sync__failure"
+          >
+            <strong>{{ item.bucket || item.bucket_name || '未知配置桶' }}</strong>
+            <div>{{ item.message || item.error || '同步失败' }}</div>
+            <code v-if="item.key || item.object_key">{{ item.key || item.object_key }}</code>
+          </article>
+        </section>
+
+        <div class="global-config-sync__meta">
+          <div>开始：{{ globalSyncProgress.started_at || '-' }}</div>
+          <div>更新：{{ globalSyncProgress.updated_at || '-' }}</div>
+          <div>完成：{{ globalSyncProgress.finished_at || '-' }}</div>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="global-config-sync__footer">
+          <span class="muted">所有业务页面共用此同步任务</span>
+          <el-button
+            type="primary"
+            :loading="globalSyncStarting"
+            :disabled="globalSyncBusy"
+            @click="startGlobalConfigSync"
+          >
+            {{ ['partial_failure', 'failed'].includes(globalSyncProgress.status) ? '重新全量同步' : '同步全部配置' }}
+          </el-button>
+        </div>
+      </template>
     </el-drawer>
 
     <el-dialog v-model="passwordDialogVisible" title="修改密码" width="400px">
@@ -1791,6 +2159,245 @@
           findMenuAncestorIds(menuList.value, activeMenu.value) || []
         );
         const showMenuTip = ref(false);
+
+        // 全局配置同步状态由后台外壳统一读取，避免业务 iframe 高度影响右下角入口。
+        const globalSyncCenterVisible = ref(false);
+        const globalSyncStarting = ref(false);
+        const globalSyncStatusSupported = ref(true);
+        const globalSyncProgress = reactive({
+          job_id: '', status: 'idle', phase: 'idle', phase_label: '待命',
+          message: '等待配置变更', total: 0, expected_total: 0,
+          current: 0, processed: 0, success: 0, fail: 0,
+          success_count: 0, fail_count: 0, current_app: '', current_bucket: '',
+          failed_items: [], started_at: '', updated_at: '', finished_at: ''
+        });
+        let globalSyncStatusTimer = null;
+        let globalSyncStatusRequestGeneration = 0;
+        let globalSyncRuntimeActive = false;
+
+        const globalSyncBusy = computed(() => (
+          globalSyncStarting.value
+          || ['queued', 'running'].includes(String(globalSyncProgress.status || ''))
+        ));
+        const globalSyncStatusLabel = computed(() => ({
+          queued: '排队中', running: '同步中', completed: '已完成',
+          partial_failure: '部分失败', failed: '同步失败', idle: '待命'
+        }[String(globalSyncProgress.status || 'idle')] || '待命'));
+        const globalSyncStatusTagType = computed(() => ({
+          queued: 'warning', running: 'warning', completed: 'success',
+          partial_failure: 'danger', failed: 'danger', idle: 'info'
+        }[String(globalSyncProgress.status || 'idle')] || 'info'));
+        const globalSyncLauncherType = computed(() => ({
+          queued: 'warning', running: 'warning', completed: 'success',
+          partial_failure: 'danger', failed: 'danger', idle: 'primary'
+        }[String(globalSyncProgress.status || 'idle')] || 'primary'));
+        const globalSyncBadgeValue = computed(() => {
+          if (globalSyncBusy.value) return 1;
+          if (['partial_failure', 'failed'].includes(String(globalSyncProgress.status || ''))) {
+            return Math.max(1, Number(globalSyncProgress.fail || globalSyncProgress.fail_count || 0));
+          }
+          return 0;
+        });
+        const globalSyncTotal = computed(() => Math.max(
+          0,
+          Number(globalSyncProgress.total || globalSyncProgress.expected_total || 0)
+        ));
+        const globalSyncCurrent = computed(() => Math.max(
+          0,
+          Number(
+            globalSyncProgress.current || globalSyncProgress.processed
+            || Number(globalSyncProgress.success || globalSyncProgress.success_count || 0)
+              + Number(globalSyncProgress.fail || globalSyncProgress.fail_count || 0)
+          )
+        ));
+        const globalSyncProgressPercent = computed(() => {
+          if (globalSyncTotal.value > 0) {
+            return Math.min(100, Math.round((globalSyncCurrent.value / globalSyncTotal.value) * 100));
+          }
+          return globalSyncProgress.status === 'completed' ? 100 : 0;
+        });
+        const globalSyncStatusDotClass = computed(() => {
+          const status = String(globalSyncProgress.status || 'idle');
+          if (status === 'completed') return 'is-success';
+          if (['queued', 'running'].includes(status)) return 'is-warning';
+          if (['partial_failure', 'failed'].includes(status)) return 'is-danger';
+          return 'is-idle';
+        });
+        const globalSyncFailureItems = computed(() => (
+          Array.isArray(globalSyncProgress.failed_items) ? globalSyncProgress.failed_items : []
+        ));
+
+        function globalSyncErrorMessage(error, fallback) {
+          return error && error.message ? error.message : fallback;
+        }
+
+        /** 调用桶同步接口；同步中心只接收任务摘要，不读取配置正文或桶凭据。 */
+        async function globalSyncApi(method, data) {
+          const response = await fetch('/api/index.php?module=bucket&method=' + encodeURIComponent(method), {
+            method: 'POST',
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data || {})
+          });
+          const text = await response.text();
+          let json;
+          try {
+            json = JSON.parse(text);
+          } catch (error) {
+            throw new Error(response.ok ? '接口返回了无效 JSON' : 'HTTP ' + response.status);
+          }
+          if (!response.ok && Number(json.code) === 200) {
+            throw new Error(json.message || 'HTTP ' + response.status);
+          }
+          return json;
+        }
+
+        /** 将状态接口响应归一成全局同步中心使用的最小快照。 */
+        function applyGlobalSyncSnapshot(source) {
+          let data = source && typeof source === 'object' ? source : {};
+          if (data.data && typeof data.data === 'object' && (
+            data.data.status || data.data.job_id || data.data.sync_job
+            || data.data.total !== undefined || data.data.expected_total !== undefined
+          )) {
+            data = data.data.sync_job && typeof data.data.sync_job === 'object'
+              ? data.data.sync_job : data.data;
+          }
+          if (data.sync_job && typeof data.sync_job === 'object') data = data.sync_job;
+          const incomingJobId = String(data.job_id || '').trim();
+          if (incomingJobId && incomingJobId !== String(globalSyncProgress.job_id || '').trim()) {
+            globalSyncProgress.failed_items = [];
+            globalSyncProgress.current = 0;
+            globalSyncProgress.processed = 0;
+            globalSyncProgress.total = 0;
+            globalSyncProgress.expected_total = 0;
+            globalSyncProgress.current_app = '';
+            globalSyncProgress.current_bucket = '';
+            globalSyncProgress.success = 0;
+            globalSyncProgress.fail = 0;
+          }
+          const status = String(data.status || data.state || '').trim();
+          const resultItems = data.results && typeof data.results === 'object'
+            ? (Array.isArray(data.results) ? data.results : Object.values(data.results)) : [];
+          const success = Number.isFinite(Number(data.success)) ? Number(data.success)
+            : Number.isFinite(Number(data.success_count)) ? Number(data.success_count)
+              : resultItems.filter(item => Number(item && item.code) === 200).length;
+          const fail = Number.isFinite(Number(data.fail)) ? Number(data.fail)
+            : Number.isFinite(Number(data.fail_count)) ? Number(data.fail_count)
+              : resultItems.filter(item => Number(item && item.code) !== 200).length;
+          const inferredStatus = status || (
+            data.code !== undefined
+              ? (Number(data.code) === 200 && fail === 0 ? 'completed' : 'partial_failure')
+              : ''
+          );
+          if (inferredStatus) globalSyncProgress.status = inferredStatus;
+          ['job_id', 'phase', 'phase_label', 'message', 'current_app', 'current_bucket',
+            'started_at', 'updated_at', 'finished_at'].forEach(field => {
+            if (data[field] !== undefined) globalSyncProgress[field] = String(data[field] || '');
+          });
+          ['total', 'expected_total', 'current', 'processed'].forEach(field => {
+            if (data[field] !== undefined) globalSyncProgress[field] = Number(data[field]) || 0;
+          });
+          globalSyncProgress.success = success;
+          globalSyncProgress.fail = fail;
+          globalSyncProgress.success_count = success;
+          globalSyncProgress.fail_count = fail;
+          if (Array.isArray(data.failed_items)) globalSyncProgress.failed_items = data.failed_items;
+          else if (resultItems.length && fail > 0) {
+            globalSyncProgress.failed_items = resultItems.filter(item => Number(item && item.code) !== 200);
+          }
+          return globalSyncProgress;
+        }
+
+        function clearGlobalSyncStatusTimer() {
+          if (globalSyncStatusTimer !== null) clearTimeout(globalSyncStatusTimer);
+          globalSyncStatusTimer = null;
+        }
+
+        function scheduleGlobalSyncStatusPoll(delay) {
+          clearGlobalSyncStatusTimer();
+          if (!globalSyncRuntimeActive || !globalSyncStatusSupported.value) return;
+          globalSyncStatusTimer = setTimeout(() => {
+            globalSyncStatusTimer = null;
+            refreshGlobalSyncStatus();
+          }, Math.max(0, Number(delay) || 0));
+        }
+
+        async function refreshGlobalSyncStatus() {
+          if (!globalSyncRuntimeActive && !globalSyncCenterVisible.value) return globalSyncProgress;
+          const requestGeneration = ++globalSyncStatusRequestGeneration;
+          try {
+            const json = await globalSyncApi('getConfigSyncStatus');
+            if (requestGeneration !== globalSyncStatusRequestGeneration) return globalSyncProgress;
+            if (Number(json.code) !== 200) throw new Error(json.message || '读取同步状态失败');
+            globalSyncStatusSupported.value = true;
+            applyGlobalSyncSnapshot(json.data || json);
+          } catch (error) {
+            const endpointMissing = /(?:方法未定义|方法不存在|模块不存在|HTTP\s+404)/i.test(
+              globalSyncErrorMessage(error, '')
+            );
+            if (requestGeneration === globalSyncStatusRequestGeneration && endpointMissing) {
+              globalSyncStatusSupported.value = false;
+            }
+          } finally {
+            if (requestGeneration === globalSyncStatusRequestGeneration && globalSyncStatusSupported.value) {
+              scheduleGlobalSyncStatusPoll(globalSyncBusy.value ? 1000 : 5000);
+            }
+          }
+          return globalSyncProgress;
+        }
+
+        function openGlobalSyncCenter() {
+          globalSyncCenterVisible.value = true;
+          globalSyncStatusSupported.value = true;
+          refreshGlobalSyncStatus();
+        }
+
+        async function startGlobalConfigSync() {
+          if (globalSyncBusy.value) return;
+          globalSyncStarting.value = true;
+          globalSyncStatusSupported.value = true;
+          applyGlobalSyncSnapshot({
+            status: 'running', phase: 'sync', phase_label: '正在同步',
+            message: '全局配置同步已启动，请稍候…'
+          });
+          try {
+            let json = await globalSyncApi('startConfigSync');
+            if (Number(json.code) === 404) json = await globalSyncApi('pushAllConfigs');
+            if (Number(json.code) !== 200 && Number(json.code) !== 409) {
+              throw new Error(json.message || '同步失败');
+            }
+            const result = json.data || json;
+            applyGlobalSyncSnapshot(result);
+            const message = result.message || json.message || '已启动全局配置同步';
+            if (['partial_failure', 'failed'].includes(String(result.status || ''))) {
+              ElementPlus.ElMessage.warning(message);
+            } else {
+              ElementPlus.ElMessage.success(message);
+            }
+          } catch (error) {
+            applyGlobalSyncSnapshot({
+              status: 'failed', phase: 'done', phase_label: '同步失败',
+              message: globalSyncErrorMessage(error, '同步失败'), finished_at: new Date().toISOString()
+            });
+            ElementPlus.ElMessage.error(globalSyncErrorMessage(error, '同步失败'));
+          } finally {
+            globalSyncStarting.value = false;
+            scheduleGlobalSyncStatusPoll(500);
+          }
+        }
+
+        function startGlobalSyncRuntime() {
+          if (globalSyncRuntimeActive) return;
+          globalSyncRuntimeActive = true;
+          refreshGlobalSyncStatus();
+        }
+
+        function stopGlobalSyncRuntime() {
+          globalSyncRuntimeActive = false;
+          clearGlobalSyncStatusTimer();
+          globalSyncStatusRequestGeneration += 1;
+        }
 
 
 const vipDialogVisible = ref(false);
@@ -3033,6 +3640,7 @@ async function clearS3Config() {
           loadMenu();
           loadAdminInfo();
           loadUnreadCount();
+          startGlobalSyncRuntime();
           unreadTimer = window.setInterval(loadUnreadCount, 180000);
 
           // 弹出公告提示（只显示一次）
@@ -3084,6 +3692,7 @@ async function clearS3Config() {
           if (unreadTimer) {
             window.clearInterval(unreadTimer);
           }
+          stopGlobalSyncRuntime();
         });
 
         return {
@@ -3154,6 +3763,21 @@ async function clearS3Config() {
           loadVipPrice,
           openVipDialog,
           handleRecharge,
+          globalSyncCenterVisible,
+          globalSyncStarting,
+          globalSyncProgress,
+          globalSyncBusy,
+          globalSyncStatusLabel,
+          globalSyncStatusTagType,
+          globalSyncLauncherType,
+          globalSyncBadgeValue,
+          globalSyncTotal,
+          globalSyncCurrent,
+          globalSyncProgressPercent,
+          globalSyncStatusDotClass,
+          globalSyncFailureItems,
+          openGlobalSyncCenter,
+          startGlobalConfigSync,
           handleAndroidClick
         };
       }
