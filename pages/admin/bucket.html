@@ -330,14 +330,11 @@
       color: #fff !important;
       -webkit-text-fill-color: #fff;
     }
-    /* 统一修复 plain primary 按钮的主题覆盖：浅色底使用蓝字，悬浮/聚焦时改为蓝底白字。
-       某些后台外层主题会把 plain 按钮背景覆盖成蓝色，若只设置实心按钮会造成“文件/统计”等文字与底色相同。 */
+    /* 蓝色背景的 plain primary 按钮保留原有背景，只将文字和图标统一设为白色。 */
     .el-button.el-button--primary.is-plain:not(.is-link),
     .el-button.el-button--primary.is-plain:not(.is-link) * {
-      color: var(--el-color-primary) !important;
-      -webkit-text-fill-color: var(--el-color-primary);
-      background-color: var(--el-color-primary-light-9) !important;
-      border-color: var(--el-color-primary-light-5) !important;
+      color: #fff !important;
+      -webkit-text-fill-color: #fff;
     }
     .el-button.el-button--primary.is-plain:not(.is-link):hover,
     .el-button.el-button--primary.is-plain:not(.is-link):focus,
@@ -347,8 +344,6 @@
     .el-button.el-button--primary.is-plain:not(.is-link):active * {
       color: #fff !important;
       -webkit-text-fill-color: #fff;
-      background-color: var(--el-color-primary) !important;
-      border-color: var(--el-color-primary) !important;
     }
     /* 蓝色 primary 按钮与蓝底筛选按钮统一使用白字，避免主题覆盖造成低对比度。 */
     .config-sync-center__drawer .el-button--primary,
