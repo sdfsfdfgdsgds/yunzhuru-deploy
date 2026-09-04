@@ -85,6 +85,12 @@ function updateSetting(PDO $pdo, array $input) {
 
     $stmt = $pdo->prepare("UPDATE cainiao_system_setting SET key_value = :val WHERE key_name = :key");
     $dnsPoolChanged = array_key_exists('dns_pool', $input);
+    // debugip/push 会被 ConfigHelper 写入壳端下发 JSON，和 dns_pool 一样属于运行时配置。
+    // 其它系统设置只影响后台控制面，不应触发桶文件全量刷新。
+    $runtimeConfigChanged = $dnsPoolChanged
+        || array_key_exists('debugip', $input)
+        || array_key_exists('push', $input);
+    $syncResult = null;
 
     foreach ($input as $key => $val) {
         if (!is_string($key)) continue; // 忽略无效键名
@@ -94,18 +100,23 @@ function updateSetting(PDO $pdo, array $input) {
         ]);
     }
 
-    if ($dnsPoolChanged) {
+    if ($runtimeConfigChanged) {
         // 总开关与节点池共用同一失效链路：同时清 Redis DB0 配置键、
         // 磁盘 JSON 并去重触发全量桶同步，避免仅删磁盘后 Redis 继续下发旧开关。
         if (function_exists('configDeliveryInvalidateAndSync')) {
-            configDeliveryInvalidateAndSync($pdo);
+            $syncResult = configDeliveryInvalidateAndSync($pdo);
         } else {
             clearRemoteConfigCache();
             pushAllBucketConfigsAsync();
         }
     }
 
-    return ['message' => '设置已保存'];
+    $result = ['message' => '设置已保存'];
+    if (is_array($syncResult)) {
+        $result['sync_scheduled'] = !empty($syncResult['sync_started']) || !empty($syncResult['sync_joined']) ? 1 : 0;
+        $result['sync_job'] = $syncResult['sync_job'] ?? null;
+    }
+    return $result;
 }
 
 function clearTempFiles(PDO $pdo, array $input) {
