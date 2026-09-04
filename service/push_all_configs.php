@@ -30,12 +30,16 @@ try {
 } catch (Throwable $e) {
     try {
         $failedSnapshot = configSyncStateRead($pdo);
-        configSyncStateMarkFinished($pdo, [
-            'total' => (int)($failedSnapshot['expected_total'] ?? 0),
-            'success' => (int)($failedSnapshot['success'] ?? 0),
-            'fail' => max(1, (int)($failedSnapshot['fail'] ?? 0)),
-            'message' => $e->getMessage(),
-        ], $jobId, $e);
+        // 保留 worker 已经逐 APP 写入的公开结果；异常终态不能把此前成功
+        // 的桶对象明细覆盖成一条空错误。
+        $failureResult = is_array($failedSnapshot['result'] ?? null)
+            ? $failedSnapshot['result'] : [];
+        $failureResult['total'] = (int)($failedSnapshot['expected_total'] ?? 0);
+        $failureResult['success'] = (int)($failedSnapshot['success'] ?? 0);
+        $failureResult['fail'] = max(1, (int)($failedSnapshot['fail'] ?? 0));
+        $failureResult['message'] = $e->getMessage();
+        configSyncStateMarkFinished($pdo, $failureResult,
+            $jobId, $e);
     } catch (Throwable $ignored) {
         // 状态固化失败不覆盖原始同步异常；主日志仍保留具体原因。
     }

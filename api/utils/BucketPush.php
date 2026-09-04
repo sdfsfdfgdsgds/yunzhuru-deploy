@@ -87,7 +87,20 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3):
     // 确保 ConfigHelper 中的函数可用（fetchCol/fetchMap 依赖 global $pdo）
     $GLOBALS['pdo'] = $pdo;
     if (!bucketPushAppAvailable($pdo, $appId)) {
-        return ['code' => 410, 'message' => "应用 {$appId} 不存在或已删除，跳过推送"];
+        return [
+            'code' => 410,
+            'app_id' => $appId,
+            'config_scope' => '应用完整配置',
+            'object_key' => "config/{$appId}.enc",
+            // 应用已删除属于本轮没有可推送目标，和“无启用桶/无注入记录”统一
+            // 归为 skipped；保留 410 代码供调用方识别具体原因。
+            'status' => 'skipped',
+            'outcome' => 'skipped',
+            'bucket_total' => 0,
+            'bucket_success' => 0,
+            'bucket_fail' => 0,
+            'message' => "应用 {$appId} 不存在或已删除，跳过推送",
+        ];
     }
     $initialReuseStateToken = bucketPushReuseStateToken($pdo, $appId);
 
@@ -121,20 +134,54 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3):
     }
 
     if (empty($buckets)) {
-        return ['code' => 200, 'message' => '无启用的存储桶', 'results' => []];
+        return [
+            'code' => 200,
+            'app_id' => $appId,
+            'config_scope' => '应用完整配置',
+            'object_key' => "config/{$appId}.enc",
+            'status' => 'skipped',
+            'outcome' => 'skipped',
+            'bucket_total' => 0,
+            'bucket_success' => 0,
+            'bucket_fail' => 0,
+            'message' => '无启用的存储桶',
+            'results' => [],
+        ];
     }
 
     // 2. 检查应用是否有成功的注入记录（没注入过的应用无需推送配置）
     $injectCheck = $pdo->prepare("SELECT 1 FROM cainiao_inject_task WHERE apk_id = :id AND status_text = '编译成功' LIMIT 1");
     $injectCheck->execute([':id' => $appId]);
     if (!$injectCheck->fetchColumn()) {
-        return ['code' => 304, 'message' => "应用 {$appId} 无注入记录，跳过推送"];
+        return [
+            'code' => 304,
+            'app_id' => $appId,
+            'config_scope' => '应用完整配置',
+            'object_key' => "config/{$appId}.enc",
+            'status' => 'skipped',
+            'outcome' => 'skipped',
+            'bucket_total' => 0,
+            'bucket_success' => 0,
+            'bucket_fail' => 0,
+            'message' => "应用 {$appId} 无注入记录，跳过推送",
+        ];
     }
 
     // 3. 生成配置数据（和 shell.php 返回的一样）
     $response = getResponseData($pdo, $appId, 'bucket_push', false);
     if (!$response) {
-        return ['code' => 404, 'message' => "应用 {$appId} 配置不存在"];
+        return [
+            'code' => 404,
+            'app_id' => $appId,
+            'config_scope' => '应用完整配置',
+            'object_key' => "config/{$appId}.enc",
+            'status' => 'failed',
+            'outcome' => 'failed',
+            'bucket_total' => 0,
+            'bucket_success' => 0,
+            'bucket_fail' => 0,
+            'message' => "应用 {$appId} 配置不存在",
+        ];
     }
 
     // 4. 处理复用逻辑（config_mode=1 时合并被复用应用的配置）
@@ -220,7 +267,10 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3):
             if (bucketPushReuseStateToken($pdo, $appId) !== $initialReuseStateToken) {
                 $stateChanged = true;
                 $results[] = [
+                    'bucket_id' => (int)($b['id'] ?? 0),
                     'bucket' => $b['name'],
+                    'provider' => $b['provider'] ?? '',
+                    'object_key' => $objectKey,
                     'code' => 409,
                     'message' => '应用复用状态已变更，本轮快照整体作废',
                 ];
@@ -231,7 +281,10 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3):
             if (!bucketPushAppAvailable($pdo, $appId)) {
                 $stateChanged = true;
                 $results[] = [
+                    'bucket_id' => (int)($b['id'] ?? 0),
                     'bucket' => $b['name'],
+                    'provider' => $b['provider'] ?? '',
+                    'object_key' => $objectKey,
                     'code' => 410,
                     'message' => "应用 {$appId} 不存在或已删除，跳过推送",
                 ];
@@ -258,7 +311,10 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3):
             if (bucketPushReuseStateToken($pdo, $appId) !== $initialReuseStateToken) {
                 $stateChanged = true;
                 $results[] = [
+                    'bucket_id' => (int)($b['id'] ?? 0),
                     'bucket' => $b['name'],
+                    'provider' => $b['provider'] ?? '',
+                    'object_key' => $objectKey,
                     'code' => 409,
                     'message' => '应用复用状态在上传期间变更，本轮快照整体作废',
                 ];
@@ -270,7 +326,10 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3):
                 $stateChanged = true;
                 $cleanupResult = $client->deleteObject($objectKey);
                 $results[] = [
+                    'bucket_id' => (int)($b['id'] ?? 0),
                     'bucket' => $b['name'],
+                    'provider' => $b['provider'] ?? '',
+                    'object_key' => $objectKey,
                     'code' => (int)($cleanupResult['code'] ?? 500) === 200 ? 410 : 500,
                     'message' => (int)($cleanupResult['code'] ?? 500) === 200
                         ? "应用 {$appId} 已失效，刚上传的对象已回滚"
@@ -282,9 +341,14 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3):
             $results[] = [
                 'bucket_id' => (int)$b['id'],
                 'bucket' => $b['name'],
+                'provider' => $b['provider'] ?? '',
+                'object_key' => $objectKey,
                 'code' => $result['code'],
                 'message' => $result['message'],
             ];
+            if (array_key_exists('http_code', $result)) {
+                $results[count($results) - 1]['http_code'] = (int)$result['http_code'];
+            }
             recordBucketPushOutcome(
                 $pdo,
                 (int)$b['id'],
@@ -296,6 +360,8 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3):
             $results[] = [
                 'bucket_id' => (int)($b['id'] ?? 0),
                 'bucket' => $b['name'],
+                'provider' => $b['provider'] ?? '',
+                'object_key' => $objectKey,
                 'code' => 500,
                 'message' => $e->getMessage(),
             ];
@@ -326,28 +392,84 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3):
                 );
                 $cleanup = $cleanupClient->deleteObject($objectKey);
                 $cleanupResults[] = [
+                    'bucket_id' => (int)($b['id'] ?? 0),
                     'bucket' => $b['name'],
+                    'provider' => $b['provider'] ?? '',
+                    'object_key' => $objectKey,
                     'code' => (int)($cleanup['code'] ?? 500),
                     'message' => $cleanup['message'] ?? '快照清理完成',
                 ];
             } catch (\Throwable $e) {
-                $cleanupResults[] = ['bucket' => $b['name'], 'code' => 500, 'message' => $e->getMessage()];
+                $cleanupResults[] = [
+                    'bucket_id' => (int)($b['id'] ?? 0),
+                    'bucket' => $b['name'],
+                    'provider' => $b['provider'] ?? '',
+                    'object_key' => $objectKey,
+                    'code' => 500,
+                    'message' => $e->getMessage(),
+                ];
             }
         }
-        return [
+        // 这些 PUT 结果属于已经被作废的旧快照：即使当时返回 200，后续清理
+        // 也已删除对象，不能在最终明细里继续冒充当前有效的成功对象。
+        $discardedResults = [];
+        foreach ($results as $discardedItem) {
+            if (!is_array($discardedItem)) continue;
+            $originalCode = (int)($discardedItem['code'] ?? 500);
+            $discardedItem['phase'] = 'rollback';
+            $discardedItem['discarded'] = 1;
+            $discardedItem['original_code'] = $originalCode;
+            if ($originalCode === 200) {
+                $discardedItem['code'] = 409;
+                $discardedItem['message'] = '本轮上传结果已作废，旧对象已清理';
+            }
+            $discardedResults[] = $discardedItem;
+        }
+        $stateResult = [
             'code' => bucketPushAppAvailable($pdo, $appId) ? 409 : 410,
+            'app_id' => $appId,
+            'config_scope' => '应用完整配置',
+            'object_key' => $objectKey,
             'message' => '应用配置在推送期间持续变更，旧桶快照已执行清理',
-            'results' => $results,
+            'results' => $discardedResults,
+            // 原始结果只用于审计，不参与成功/失败统计。
+            'discarded_results' => $results,
             'cleanup_results' => $cleanupResults,
             'state_changed' => true,
         ];
+        if (function_exists('configSyncStateClassifyAppResult')) {
+            $stateOutcome = configSyncStateClassifyAppResult($stateResult);
+            $stateResult['status'] = $stateOutcome['status'];
+            $stateResult['outcome'] = $stateOutcome['status'];
+            $stateResult['bucket_total'] = $stateOutcome['bucket_total'];
+            $stateResult['bucket_success'] = $stateOutcome['bucket_success'];
+            $stateResult['bucket_fail'] = $stateOutcome['bucket_fail'];
+            $stateResult['has_successful_bucket'] = $stateOutcome['has_successful_bucket'];
+            $stateResult['has_failed_bucket'] = $stateOutcome['has_failed_bucket'];
+        }
+        return $stateResult;
     }
 
     $failed = array_filter($results, static function (array $item): bool {
         return (int)($item['code'] ?? 500) !== 200;
     });
+    $bucketSuccess = count($results) - count($failed);
+    $bucketFail = count($failed);
+    $appStatus = $bucketSuccess > 0 && $bucketFail > 0
+        ? 'partial'
+        : ($bucketFail > 0 ? 'failed' : 'success');
     return [
         'code' => empty($failed) ? 200 : 500,
+        'app_id' => $appId,
+        'config_scope' => '应用完整配置',
+        'object_key' => $objectKey,
+        'status' => $appStatus,
+        'outcome' => $appStatus,
+        'bucket_total' => count($results),
+        'bucket_success' => $bucketSuccess,
+        'bucket_fail' => $bucketFail,
+        'has_successful_bucket' => $bucketSuccess > 0 ? 1 : 0,
+        'has_failed_bucket' => $bucketFail > 0 ? 1 : 0,
         'message' => empty($failed)
             ? "应用 {$appId} 配置已推送到全部目标桶"
             : "应用 {$appId} 有 " . count($failed) . ' 个桶推送失败',
@@ -372,7 +494,15 @@ function pushConfigToBuckets(PDO $pdo, int $appId, int $stateRetry = 3): array {
     $stmt = $pdo->prepare('SELECT GET_LOCK(:lock_name, 600)');
     $stmt->execute([':lock_name' => $lockName]);
     if ((int)$stmt->fetchColumn() !== 1) {
-        return ['code' => 409, 'message' => "应用 {$appId} 配置正在推送，请稍后重试", 'results' => []];
+        return [
+            'code' => 409,
+            'status' => 'failed',
+            'outcome' => 'failed',
+            'app_id' => $appId,
+            'object_key' => "config/{$appId}.enc",
+            'message' => "应用 {$appId} 配置正在推送，请稍后重试",
+            'results' => [],
+        ];
     }
 
     try {
@@ -432,6 +562,74 @@ function pushConfigWithDependents(PDO $pdo, int $appId): array {
     return $result;
 }
 
+if (!function_exists('bucketPushLoadPublicAppMeta')) {
+    /** 批量读取同步明细所需的公开应用身份，不返回 app_key、路径或任何凭据。 */
+    function bucketPushLoadPublicAppMeta(PDO $pdo, array $appIds): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $appIds), static function (int $id): bool {
+            return $id > 0;
+        })));
+        if (!$ids) return [];
+        try {
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $stmt = $pdo->prepare("SELECT id, name AS app_name, `package` AS package_name
+                FROM cainiao_apk WHERE id IN ({$placeholders})");
+            $stmt->execute($ids);
+            $meta = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $id = (int)($row['id'] ?? 0);
+                if ($id <= 0) continue;
+                $meta[$id] = [
+                    'app_id' => $id,
+                    'app_name' => trim((string)($row['app_name'] ?? '')),
+                    'package_name' => trim((string)($row['package_name'] ?? '')),
+                ];
+            }
+            return $meta;
+        } catch (Throwable $ignored) {
+            // 应用身份只是展示增强；查询失败时仍保留 APPID 和对象键，不能阻断真实推送。
+            return [];
+        }
+    }
+}
+
+if (!function_exists('bucketPushAttachPublicAppMeta')) {
+    /** 给单个 APP 的推送结果附加统一的公开定位字段。 */
+    function bucketPushAttachPublicAppMeta(array $result, int $appId, array $meta = []): array
+    {
+        $objectKey = trim((string)($result['object_key'] ?? ''));
+        if ($objectKey === '' && $appId > 0) $objectKey = "config/{$appId}.enc";
+        $result['app_id'] = $appId;
+        $result['app_name'] = trim((string)($meta['app_name'] ?? ($result['app_name'] ?? '')));
+        $result['package_name'] = trim((string)($meta['package_name'] ?? ($result['package_name'] ?? '')));
+        $result['config_scope'] = trim((string)($result['config_scope'] ?? '应用完整配置')) ?: '应用完整配置';
+        $result['object_key'] = $objectKey;
+        // 保持历史 data[APPID] 结构，同时让新前端可以直接访问 app 身份对象。
+        $result['app'] = [
+            'id' => $appId,
+            'app_id' => $appId,
+            'app_name' => $result['app_name'],
+            'package_name' => $result['package_name'],
+        ];
+        // 将 APP 级状态与桶级计数一并写回结果。code=500 仍保持兼容，表示本轮
+        // 存在失败桶；status=partial 额外说明至少有一个桶已经成功，避免调用方
+        // 只能看到“失败”而误以为 B2 等正常桶也没有更新。
+        if (function_exists('configSyncStateClassifyAppResult')) {
+            $outcome = configSyncStateClassifyAppResult($result);
+            $result['status'] = $outcome['status'];
+            $result['outcome'] = $outcome['status'];
+            $result['bucket_total'] = $outcome['bucket_total'];
+            $result['bucket_success'] = $outcome['bucket_success'];
+            $result['bucket_fail'] = $outcome['bucket_fail'];
+            $result['has_successful_bucket'] = $outcome['has_successful_bucket'];
+            $result['has_failed_bucket'] = $outcome['has_failed_bucket'];
+            $result['successful_bucket_count'] = $outcome['bucket_success'];
+            $result['failed_bucket_count'] = $outcome['bucket_fail'];
+        }
+        return $result;
+    }
+}
+
 /**
  * 批量推送所有应用配置到桶（管理后台"一键同步"用）
  * @param PDO $pdo
@@ -448,8 +646,14 @@ function pushAllConfigsToBucketsUnlocked(PDO $pdo): array {
         WHERE d.apk_id IS NULL
     ")->fetchAll(PDO::FETCH_COLUMN);
     $results = [];
+    $appMeta = bucketPushLoadPublicAppMeta($pdo, $appIds);
     $success = 0;
+    $partial = 0;
     $fail = 0;
+    $skipped = 0;
+    $bucketSuccess = 0;
+    $bucketFail = 0;
+    $cleanupFail = 0;
 
     // 同步中心以同一份持久快照显示批量进度；状态写入失败时不阻断真实桶推送。
     $syncJobId = '';
@@ -464,6 +668,11 @@ function pushAllConfigsToBucketsUnlocked(PDO $pdo): array {
             'current_index' => 0,
             'success' => 0,
             'fail' => 0,
+            'partial' => 0,
+            'skipped' => 0,
+            'bucket_success' => 0,
+            'bucket_fail' => 0,
+            'cleanup_fail' => 0,
             'current_app_id' => 0,
         ], $syncJobId);
     } catch (Throwable $ignored) {
@@ -478,22 +687,39 @@ function pushAllConfigsToBucketsUnlocked(PDO $pdo): array {
                 configSyncStateMarkProgress($pdo, [
                     'phase' => 'sync',
                     'phase_label' => '正在同步',
-                    'message' => '正在同步应用 #' . (int)$appId . ' 的配置',
+                    'message' => '正在同步应用 #' . (int)$appId . (!empty($appMeta[(int)$appId]['app_name']) ? ' · ' . $appMeta[(int)$appId]['app_name'] : '') . ' 的配置',
                     'current_index' => $index - 1,
                     'current_app_id' => (int)$appId,
-                    'current_app' => '应用 #' . (int)$appId,
+                    'current_app' => '应用 #' . (int)$appId . (!empty($appMeta[(int)$appId]['app_name']) ? ' · ' . $appMeta[(int)$appId]['app_name'] : ''),
                     'current_bucket' => '全部启用配置桶',
                 ], $syncJobId);
             } catch (Throwable $ignored) {
                 // 单次状态更新失败不影响真实对象推送。
             }
         }
-        $result = pushConfigToBuckets($pdo, (int)$appId);
-        if ($result['code'] === 200) {
-            $success++;
-        } else {
-            $fail++;
+        $result = bucketPushAttachPublicAppMeta(
+            pushConfigToBuckets($pdo, (int)$appId),
+            (int)$appId,
+            $appMeta[(int)$appId] ?? []
+        );
+        $outcome = configSyncStateClassifyAppResult($result);
+        switch ((string)($outcome['status'] ?? 'failed')) {
+            case 'success':
+                $success++;
+                break;
+            case 'partial':
+                $partial++;
+                break;
+            case 'skipped':
+                $skipped++;
+                break;
+            default:
+                $fail++;
+                break;
         }
+        $bucketSuccess += (int)($outcome['bucket_success'] ?? 0);
+        $bucketFail += (int)($outcome['bucket_fail'] ?? 0);
+        $cleanupFail += (int)($outcome['cleanup_fail'] ?? 0);
         $results[$appId] = $result;
         if ($syncJobId !== '') {
             try {
@@ -501,9 +727,16 @@ function pushAllConfigsToBucketsUnlocked(PDO $pdo): array {
                     'current_index' => $index,
                     'success' => $success,
                     'fail' => $fail,
+                    'partial' => $partial,
+                    'skipped' => $skipped,
+                    'bucket_success' => $bucketSuccess,
+                    'bucket_fail' => $bucketFail,
+                    'cleanup_fail' => $cleanupFail,
                     'current_app_id' => (int)$appId,
-                    'current_app' => '应用 #' . (int)$appId,
+                    'current_app' => '应用 #' . (int)$appId . (!empty($appMeta[(int)$appId]['app_name']) ? ' · ' . $appMeta[(int)$appId]['app_name'] : ''),
                     'current_bucket' => '全部启用配置桶',
+                    // 每完成一个 APP 就把其公开结果写入状态，抽屉可实时列出已更新对象。
+                    'result' => ['data' => $results],
                 ], $syncJobId);
             } catch (Throwable $ignored) {
                 // 单次状态更新失败不影响下一应用及最终结果。
@@ -511,14 +744,42 @@ function pushAllConfigsToBucketsUnlocked(PDO $pdo): array {
         }
     }
 
-    return [
-        'code' => $fail === 0 ? 200 : 500,
-        'message' => "同步完成：成功 {$success}，失败 {$fail}，共 " . count($appIds) . " 个应用",
+    $hasBucketSuccess = $bucketSuccess > 0 || $success > 0;
+    $hasFailure = $bucketFail > 0 || $fail > 0 || $cleanupFail > 0;
+    $finalStatus = $hasFailure
+        ? ($hasBucketSuccess ? 'partial_failure' : 'failed')
+        : 'completed';
+    $finalResult = [
+        // 保留 code=500 作为“存在失败桶”的兼容信号；更细的 partial/failed
+        // 状态由 status 和 result_summary 提供，旧调用方仍可按 code 判断需重试。
+        'code' => $hasFailure ? 500 : 200,
+        'status' => $finalStatus,
+        'partial_failure' => $hasFailure ? 1 : 0,
+        'message' => "同步完成：全量成功 {$success}，部分成功 {$partial}，全部失败 {$fail}，跳过 {$skipped}，共 " . count($appIds) . " 个应用；桶对象成功 {$bucketSuccess}，失败 {$bucketFail}" . ($cleanupFail > 0 ? "，旧快照清理失败 {$cleanupFail}" : ''),
         'success' => $success,
+        'partial' => $partial,
         'fail' => $fail,
+        'skipped' => $skipped,
+        'bucket_success' => $bucketSuccess,
+        'bucket_fail' => $bucketFail,
+        'bucket_total' => $bucketSuccess + $bucketFail,
+        'cleanup_fail' => $cleanupFail,
         'total' => count($appIds),
         'data' => $results,
     ];
+    // 同步接口本身也返回同一份明细；后台 worker 之外的手工调用无需再等轮询。
+    $details = configSyncStateNormalizeResultSummary($finalResult);
+    $summary = $details['result_summary'] ?? [];
+    return array_merge($finalResult, $details, [
+        // 同时提供扁平计数，兼容旧版同步页和不读取 result_summary 的调用方。
+        'app_success_count' => (int)($summary['app_success_count'] ?? $success),
+        'app_partial_count' => (int)($summary['app_partial_count'] ?? $partial),
+        'app_failed_count' => (int)($summary['app_failed_count'] ?? $fail),
+        'app_skipped_count' => (int)($summary['app_skipped_count'] ?? $skipped),
+        'bucket_success_count' => (int)($summary['bucket_success_count'] ?? $bucketSuccess),
+        'bucket_failed_count' => (int)($summary['bucket_failed_count'] ?? $bucketFail),
+        'cleanup_failed_count' => (int)($summary['cleanup_failed_count'] ?? $cleanupFail),
+    ]);
 }
 
 /**

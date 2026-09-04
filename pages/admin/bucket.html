@@ -314,6 +314,21 @@
       height: 52px;
       padding: 0;
       line-height: 1;
+      color: #fff !important;
+    }
+    /* 蓝色 primary 按钮与蓝底筛选按钮统一使用白字，避免主题覆盖造成低对比度。 */
+    .config-sync-center__drawer .el-button--primary,
+    .config-sync-center__drawer .el-button--primary:hover,
+    .config-sync-center__drawer .el-button--primary:focus,
+    .config-sync-center__drawer .el-button--primary:active,
+    .config-sync-center__drawer .el-button--primary *,
+    .config-sync-center__badge .config-sync-center__launcher.el-button--primary,
+    .config-sync-center__badge .config-sync-center__launcher.el-button--primary:hover,
+    .config-sync-center__badge .config-sync-center__launcher.el-button--primary:focus,
+    .config-sync-center__badge .config-sync-center__launcher.el-button--primary:active,
+    .config-sync-center__badge .config-sync-center__launcher.el-button--primary * {
+      color: #fff !important;
+      -webkit-text-fill-color: #fff;
     }
     .config-sync-center__launcher.is-running,
     .config-sync-center__launcher.is-queued {
@@ -322,6 +337,10 @@
     .config-sync-center__launcher.is-partial_failure,
     .config-sync-center__launcher.is-failed {
       box-shadow: 0 8px 24px rgb(245 108 108 / 38%);
+    }
+    .config-sync-center__launcher.is-partial,
+    .config-sync-center__launcher.is-partial_success {
+      box-shadow: 0 8px 24px rgb(230 162 60 / 38%);
     }
     .config-sync-center__launcher-icon {
       display: inline-block;
@@ -406,6 +425,11 @@
       border-color: #fecaca;
       background: #fef2f2;
     }
+    .config-sync-center__summary.is-partial,
+    .config-sync-center__summary.is-partial_success {
+      border-color: #fcd34d;
+      background: #fffbeb;
+    }
     .config-sync-center__summary-message {
       margin-bottom: 10px;
       color: #334155;
@@ -447,6 +471,7 @@
       font-size: 11px;
     }
     .config-sync-center__metric.is-success strong { color: #15803d; }
+    .config-sync-center__metric.is-warning strong { color: #b45309; }
     .config-sync-center__metric.is-danger strong { color: #dc2626; }
     .config-sync-center__details {
       display: grid;
@@ -468,6 +493,25 @@
       text-align: right;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    .config-sync-center__reasons {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 5px;
+      margin-bottom: 12px;
+      color: #64748b;
+      font-size: 11px;
+    }
+    .config-sync-center__reason {
+      max-width: 100%;
+      padding: 3px 7px;
+      border: 1px solid #dbeafe;
+      border-radius: 999px;
+      background: #eff6ff;
+      color: #1e40af;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
     }
     .config-sync-center__failures-title {
       margin: 0 0 8px;
@@ -494,6 +538,48 @@
       font-size: 11px;
       word-break: break-all;
     }
+    .config-sync-center__results { margin-bottom: 14px; }
+    .config-sync-center__results-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .config-sync-center__results-title { color: #334155; font-size: 13px; font-weight: 700; white-space: nowrap; }
+    .config-sync-center__results-filters { display: flex; flex: 1 1 auto; justify-content: flex-end; gap: 4px; }
+    .config-sync-center__results-filter {
+      min-height: 26px;
+      padding: 4px 8px;
+      border: 1px solid #dbe3ee;
+      border-radius: 6px;
+      background: #fff;
+      color: #64748b;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .config-sync-center__results-filter.is-active {
+      border-color: #2563eb;
+      background: #2563eb;
+      color: #fff !important;
+      -webkit-text-fill-color: #fff;
+      font-weight: 700;
+    }
+    .config-sync-center__results-search { margin-bottom: 8px; }
+    .config-sync-center__results-summary { margin-bottom: 8px; color: #94a3b8; font-size: 11px; line-height: 1.5; }
+    .config-sync-center__results-list { display: grid; max-height: 430px; gap: 8px; overflow-y: auto; padding-right: 2px; }
+    .config-sync-center__result-card { padding: 10px; border: 1px solid #dbeafe; border-radius: 9px; background: #f8fbff; }
+    .config-sync-center__result-card.is-failure { border-color: #fecaca; background: #fff7f7; }
+    .config-sync-center__result-card.is-partial { border-color: #fcd34d; background: #fffbeb; }
+    .config-sync-center__result-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .config-sync-center__result-card-title { min-width: 0; color: #1f2937; font-size: 12px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+    .config-sync-center__result-card-subtitle { margin-top: 2px; color: #64748b; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+    .config-sync-center__result-card-meta { display: grid; gap: 2px; margin-top: 7px; color: #475569; font-size: 11px; line-height: 1.45; }
+    .config-sync-center__result-card-meta strong { color: #334155; font-weight: 600; }
+    .config-sync-center__result-card-message { margin: 7px 0 0; color: #475569; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+    .config-sync-center__result-card.is-failure .config-sync-center__result-card-message { color: #991b1b; }
+    .config-sync-center__result-card.is-partial .config-sync-center__result-card-message { color: #92400e; }
+    .config-sync-center__results-empty { padding: 16px 10px; border: 1px dashed #cbd5e1; border-radius: 8px; color: #94a3b8; font-size: 12px; text-align: center; }
     .config-sync-center__meta {
       display: grid;
       gap: 3px;
@@ -606,6 +692,8 @@
       .stats-filter-grid { grid-template-columns: minmax(0, 1fr); }
       .stats-filter-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .stats-filter-actions .el-button { width: 100%; margin-left: 0; }
+      .config-sync-center__results-toolbar { align-items: flex-start; flex-direction: column; }
+      .config-sync-center__results-filters { justify-content: flex-start; width: 100%; flex-wrap: wrap; }
       .stats-detail-dialog {
         width: calc(100vw - 16px) !important;
         max-width: none;
@@ -1479,6 +1567,7 @@
 
   <!-- 全局配置同步中心：与崩溃系统一致，入口固定在右下角并在抽屉内展示权威进度。 -->
   <el-badge
+    v-if="!syncHostedByGlobalCenter"
     class="config-sync-center__badge"
     :value="syncBadgeValue"
     :hidden="syncBadgeValue === 0"
@@ -1496,6 +1585,7 @@
   </el-badge>
 
   <el-drawer
+    v-if="!syncHostedByGlobalCenter"
     v-model="syncCenterVisible"
     class="config-sync-center__drawer"
     modal-class="config-sync-center__overlay"
@@ -1527,7 +1617,7 @@
           :stroke-width="9"
           :indeterminate="syncBusy && syncTotal === 0"
           :duration="2"
-          :status="syncProgress.status === 'completed' ? 'success' : (['partial_failure', 'failed'].includes(syncProgress.status) ? 'exception' : undefined)">
+          :status="syncProgress.status === 'completed' ? 'success' : (['partial_failure', 'failed'].includes(syncProgress.status) ? 'exception' : (['partial', 'partial_success'].includes(syncProgress.status) ? 'warning' : undefined))">
         </el-progress>
       </section>
 
@@ -1537,16 +1627,38 @@
           <strong>{{ formatNumber(syncProgress.total || syncProgress.expected_total || 0) }}</strong>
         </div>
         <div class="config-sync-center__metric config-sync-metric">
-          <span>当前进度</span>
+          <span>已处理应用</span>
           <strong>{{ formatNumber(syncCurrent) }} / {{ formatNumber(syncTotal) }}</strong>
         </div>
         <div class="config-sync-center__metric config-sync-metric is-success">
-          <span>同步成功</span>
-          <strong>{{ formatNumber(syncProgress.success || syncProgress.success_count || 0) }}</strong>
+          <span>全成功应用</span>
+          <strong>{{ formatNumber(syncResultSummary.appSuccess) }}</strong>
+          <small>全部目标桶成功</small>
+        </div>
+        <div class="config-sync-center__metric config-sync-metric is-warning">
+          <span>部分成功应用</span>
+          <strong>{{ formatNumber(syncResultSummary.appPartial) }}</strong>
+          <small>成功与失败桶并存</small>
         </div>
         <div class="config-sync-center__metric config-sync-metric is-danger">
-          <span>同步失败</span>
-          <strong>{{ formatNumber(syncProgress.fail || syncProgress.fail_count || 0) }}</strong>
+          <span>失败应用</span>
+          <strong>{{ formatNumber(syncResultSummary.appFailed) }}</strong>
+          <small>无成功桶或应用级错误</small>
+        </div>
+        <div class="config-sync-center__metric config-sync-metric is-success">
+          <span>成功桶对象</span>
+          <strong>{{ formatNumber(syncResultSummary.bucketSuccess) }}</strong>
+          <small>实际上传成功</small>
+        </div>
+        <div class="config-sync-center__metric config-sync-metric is-danger">
+          <span>失败桶对象</span>
+          <strong>{{ formatNumber(syncResultSummary.bucketFailed) }}</strong>
+          <small>需要检查连接</small>
+        </div>
+        <div class="config-sync-center__metric config-sync-metric">
+          <span>桶对象总数</span>
+          <strong>{{ formatNumber(syncResultSummary.bucketTotal) }}</strong>
+          <small>成功 + 失败</small>
         </div>
       </div>
 
@@ -1560,18 +1672,66 @@
           <strong :title="syncProgress.current_bucket || '-'">{{ syncProgress.current_bucket || '-' }}</strong>
         </div>
         <div class="config-sync-center__details-row config-sync-details__row">
+          <span>当前配置对象</span>
+          <strong :title="syncCurrentObject || '-'">{{ syncCurrentObject || '-' }}</strong>
+        </div>
+        <div class="config-sync-center__details-row config-sync-details__row">
           <span>任务编号</span>
           <strong class="mono" :title="syncProgress.job_id || '-'">{{ syncProgress.job_id || '-' }}</strong>
         </div>
       </section>
 
-      <section v-if="syncFailureItems.length" class="config-sync-center__failures config-sync-failures">
-        <div class="config-sync-center__failures-title config-sync-failures__title">失败明细</div>
-        <article v-for="(item, index) in syncFailureItems" :key="(item.bucket_id || item.bucket || index) + '-' + index" class="config-sync-center__failure config-sync-failure-card">
-          <strong>{{ item.bucket || item.bucket_name || '未知配置桶' }}</strong>
-          <code v-if="item.object_key">{{ item.object_key }}</code>
-          <div>{{ item.message || '配置同步失败' }}</div>
-        </article>
+      <section v-if="syncReasons.length" class="config-sync-center__reasons">
+        <span>触发原因：</span>
+        <span
+          v-for="(reason, index) in syncReasons"
+          :key="'sync-reason-' + index"
+          class="config-sync-center__reason"
+        >{{ reason }}</span>
+      </section>
+
+      <section v-if="syncHasResultData" class="config-sync-center__results">
+        <div class="config-sync-center__results-toolbar">
+          <div class="config-sync-center__results-title">同步操作明细</div>
+          <div class="config-sync-center__results-filters" role="tablist" aria-label="同步结果筛选">
+            <button type="button" class="config-sync-center__results-filter" :class="{ 'is-active': syncResultFilter === 'all' }" @click="syncResultFilter = 'all'">全部 {{ syncResultItems.length }}</button>
+            <button type="button" class="config-sync-center__results-filter" :class="{ 'is-active': syncResultFilter === 'success' }" @click="syncResultFilter = 'success'">成功项 {{ syncSuccessItems.length }}</button>
+            <button type="button" class="config-sync-center__results-filter" :class="{ 'is-active': syncResultFilter === 'failed' }" @click="syncResultFilter = 'failed'">失败项 {{ syncFailureItems.length }}</button>
+            <button v-if="syncPartialApps.length" type="button" class="config-sync-center__results-filter" :class="{ 'is-active': syncResultFilter === 'partial' }" @click="syncResultFilter = 'partial'">部分成功应用 {{ syncPartialApps.length }}</button>
+            <button v-if="syncSkippedItems.length" type="button" class="config-sync-center__results-filter" :class="{ 'is-active': syncResultFilter === 'skipped' }" @click="syncResultFilter = 'skipped'">跳过项 {{ syncSkippedItems.length }}</button>
+          </div>
+        </div>
+        <el-input v-model="syncResultQuery" class="config-sync-center__results-search" size="small" clearable placeholder="筛选应用、桶、对象或错误信息"></el-input>
+        <div class="config-sync-center__results-summary">
+          应用：全成功 {{ syncResultSummary.appSuccess }}、部分成功 {{ syncResultSummary.appPartial }}、可用成功 {{ syncResultSummary.appSuccessful }}、失败 {{ syncResultSummary.appFailed }}、跳过 {{ syncResultSummary.appSkipped }}；
+          桶对象：成功 {{ syncResultSummary.bucketSuccess }}、失败 {{ syncResultSummary.bucketFailed }}、合计 {{ syncResultSummary.bucketTotal }}
+          <span v-if="syncResultSummary.itemSkipped">、跳过 {{ syncResultSummary.itemSkipped }}</span>
+          · 当前筛选显示 {{ syncVisibleResultItems.length }} 条
+        </div>
+        <div v-if="syncVisibleResultItems.length" class="config-sync-center__results-list">
+          <article v-for="(item, index) in syncVisibleResultItems" :key="[item.app_id, item.bucket_id, item.object_key, item.code, item.item_kind, index].join('-')" class="config-sync-center__result-card" :class="{ 'is-failure': item.is_failure, 'is-partial': item.is_partial }">
+            <div class="config-sync-center__result-card-header">
+              <div class="config-sync-center__result-card-title">{{ item.app_label }}</div>
+              <el-tag size="small" effect="light" :type="item.item_kind === 'cleanup' ? 'info' : (item.is_success ? 'success' : (item.is_failure ? 'danger' : (item.is_partial ? 'warning' : 'info')))">{{ item.item_kind === 'cleanup' ? '已清理' : (item.is_success ? '成功' : (item.is_failure ? '失败' : (item.is_partial ? '部分成功' : (item.is_skipped ? '跳过' : '已记录')))) }}</el-tag>
+            </div>
+            <div v-if="item.app_id !== '' || item.package_name" class="config-sync-center__result-card-subtitle">
+              <span v-if="item.app_id !== ''">APPID {{ item.app_id }}</span><span v-if="item.package_name"> · {{ item.package_name }}</span>
+            </div>
+            <div class="config-sync-center__result-card-meta">
+              <div v-if="item.phase">处理阶段：<strong>{{ syncPhaseLabel(item.phase) }}</strong></div>
+              <div v-if="item.item_kind === 'app' && (item.bucket_total !== '' || item.bucket_success !== '' || item.bucket_failed !== '')">桶对象：<strong>成功 {{ item.bucket_success || 0 }} / 失败 {{ item.bucket_failed || 0 }} / 合计 {{ item.bucket_total || 0 }}</strong></div>
+              <div v-if="item.bucket_name">配置桶：<strong>{{ item.bucket_name }}</strong><span v-if="item.provider"> · {{ item.provider }}</span></div>
+              <div v-if="item.config_scope">配置项：<strong>{{ item.config_scope }}</strong></div>
+              <div v-if="item.object_key">配置对象：<strong>{{ item.object_key }}</strong></div>
+              <div v-if="item.code !== null">结果码：<strong>{{ item.code }}</strong></div>
+            </div>
+            <p class="config-sync-center__result-card-message">{{ item.display_message }}</p>
+          </article>
+        </div>
+        <div v-else class="config-sync-center__results-empty">当前筛选条件没有匹配项；切换“全部”或清空筛选后查看完整结果。</div>
+      </section>
+      <section v-else-if="syncBusy" class="config-sync-center__results-empty">
+        同步进行中，应用和配置桶完成后会在这里逐项列出结果。
       </section>
 
       <section class="config-sync-center__meta config-sync-meta">
@@ -1584,11 +1744,11 @@
     <template #footer>
       <div class="config-sync-center__footer">
         <el-button
-          type="warning"
+          type="primary"
           :loading="syncBusy"
           :disabled="syncBusy"
           @click="pushAll(false, true)">
-          {{ ['partial_failure', 'failed'].includes(syncProgress.status) ? '重新全量同步' : '同步全部配置' }}
+          {{ ['partial_failure', 'partial', 'partial_success', 'failed'].includes(syncProgress.status) ? '重新全量同步' : '同步全部配置' }}
         </el-button>
       </div>
     </template>
@@ -1622,67 +1782,511 @@ createApp({
     const syncStatusSupported = ref(true);
     const syncProgress = reactive({
       job_id: '', status: 'idle', phase: 'idle', phase_label: '待命',
-      message: '等待配置变更', total: 0, expected_total: 0,
-      current: 0, processed: 0, success: 0, fail: 0,
-      success_count: 0, fail_count: 0, current_app: '', current_bucket: '',
-      failed_items: [], started_at: '', updated_at: '', finished_at: '',
+      message: '等待配置变更', total: 0, expected_total: 0, expected_document_total: 0,
+      current: 0, current_index: 0, processed: 0, success: 0, fail: 0,
+      success_count: 0, fail_count: 0, skipped: 0, app_success_count: 0, app_successful_count: 0,
+      app_failed_count: 0, app_skipped_count: 0, partial: 0, partial_success: 0, app_partial_count: 0,
+      bucket_success: 0, bucket_fail: 0, bucket_total: 0,
+      bucket_success_count: 0, bucket_failed_count: 0, bucket_fail_count: 0,
+      current_app_id: 0, current_app: '', current_bucket: '',
+      reasons: [], result: {}, results: {}, result_summary: {},
+      app_results: [], partial_apps: [], partial_items: [], cleanup_items: [], success_items: [], successful_items: [], failed_items: [], skipped_items: [], sync_items: [],
+      started_at: '', updated_at: '', finished_at: ''
     });
+    // 存储桶页既可独立打开，也会嵌套在 console 的业务 iframe 中。若顶层
+    // 已经挂载全局同步中心，则子页只负责业务操作，避免重复入口和重复轮询；
+    // 直接访问本页或没有该外壳的旧环境仍保留自己的同步中心。
+    const syncHostedByGlobalCenter = (() => {
+      try {
+        return !!(
+          window.top
+          && window.top !== window
+          && window.top.document
+          && window.top.document.querySelector('.global-config-sync__badge')
+        );
+      } catch (error) {
+        // 跨域父页不能读取 DOM 时，保留本页入口，不影响独立使用。
+        return false;
+      }
+    })();
     let syncStatusTimer = null;
     let syncStatusRequestGeneration = 0;
     let syncRuntimeActive = false;
 
-    const syncBusy = computed(function () {
-      return syncStarting.value || ['queued', 'running'].includes(String(syncProgress.status || ''));
-    });
-    const syncStatusLabel = computed(function () {
-      return {
-        queued: '排队中', running: '同步中', completed: '已完成',
-        partial_failure: '部分失败', failed: '同步失败', idle: '待命',
-      }[String(syncProgress.status || 'idle')] || '待命';
-    });
-    const syncStatusTagType = computed(function () {
-      return {
-        queued: 'warning', running: 'warning', completed: 'success',
-        partial_failure: 'danger', failed: 'danger', idle: 'info',
-      }[String(syncProgress.status || 'idle')] || 'info';
-    });
-    const syncLauncherType = computed(function () {
-      return {
-        queued: 'warning', running: 'warning', completed: 'success',
-        partial_failure: 'danger', failed: 'danger', idle: 'primary',
-      }[String(syncProgress.status || 'idle')] || 'primary';
-    });
-    const syncBadgeValue = computed(function () {
+    const syncBusy = computed(() => (
+      syncStarting.value
+      || ['queued', 'running'].includes(String(syncProgress.status || ''))
+    ));
+    const syncStatusLabel = computed(() => ({
+      queued: '排队中', running: '同步中', completed: '已完成',
+      partial_failure: '部分失败', partial: '部分成功', partial_success: '部分成功',
+      failed: '同步失败', idle: '待命'
+    }[String(syncProgress.status || 'idle')] || '待命'));
+    const syncStatusTagType = computed(() => ({
+      queued: 'warning', running: 'warning', completed: 'success',
+      partial_failure: 'danger', partial: 'warning', partial_success: 'warning',
+      failed: 'danger', idle: 'info'
+    }[String(syncProgress.status || 'idle')] || 'info'));
+    const syncLauncherType = computed(() => ({
+      queued: 'warning', running: 'warning', completed: 'success',
+      partial_failure: 'danger', partial: 'warning', partial_success: 'warning',
+      failed: 'danger', idle: 'primary'
+    }[String(syncProgress.status || 'idle')] || 'primary'));
+    const syncBadgeValue = computed(() => {
       if (syncBusy.value) return 1;
-      if (['partial_failure', 'failed'].includes(String(syncProgress.status || ''))) {
-        return Math.max(1, Number(syncProgress.fail || syncProgress.fail_count || 0));
+      const status = String(syncProgress.status || '');
+      const partialCount = Number(syncProgress.app_partial_count || syncProgress.partial || syncProgress.partial_success || 0);
+      if (['partial_failure', 'partial', 'partial_success', 'failed'].includes(status)
+        || (status === 'completed' && partialCount > 0)) {
+        return Math.max(
+          1,
+          Number(syncProgress.fail || syncProgress.fail_count || 0),
+          partialCount,
+          Number(syncProgress.bucket_fail || syncProgress.bucket_failed_count || 0)
+        );
       }
       return 0;
     });
-    const syncTotal = computed(function () {
-      return Math.max(0, Number(syncProgress.total || syncProgress.expected_total || 0));
-    });
-    const syncCurrent = computed(function () {
-      return Math.max(0, Number(
-        syncProgress.current || syncProgress.processed ||
-        Number(syncProgress.success || syncProgress.success_count || 0)
+    const syncTotal = computed(() => Math.max(
+      0,
+      Number(syncProgress.total || syncProgress.expected_total || 0)
+    ));
+    const syncCurrent = computed(() => Math.max(
+      0,
+      Number(
+        syncProgress.current || syncProgress.processed
+        || Number(syncProgress.success || syncProgress.success_count || 0)
           + Number(syncProgress.fail || syncProgress.fail_count || 0)
-      ));
-    });
-    const syncProgressPercent = computed(function () {
-      if (syncTotal.value > 0) return Math.min(100, Math.round((syncCurrent.value / syncTotal.value) * 100));
+          + Number(syncProgress.partial || syncProgress.partial_success || syncProgress.app_partial_count || 0)
+          + Number(syncProgress.skipped || 0)
+      )
+    ));
+    const syncProgressPercent = computed(() => {
+      if (syncTotal.value > 0) {
+        return Math.min(100, Math.round((syncCurrent.value / syncTotal.value) * 100));
+      }
       return syncProgress.status === 'completed' ? 100 : 0;
     });
-    const syncStatusDotClass = computed(function () {
+    const syncStatusDotClass = computed(() => {
       const status = String(syncProgress.status || 'idle');
-      if (['completed'].includes(status)) return 'is-success';
-      if (['queued', 'running'].includes(status)) return 'is-warning';
+      if (status === 'completed') return 'is-success';
+      if (['queued', 'running', 'partial', 'partial_success'].includes(status)) return 'is-warning';
       if (['partial_failure', 'failed'].includes(status)) return 'is-danger';
       return 'is-idle';
     });
-    const syncFailureItems = computed(function () {
-      return Array.isArray(syncProgress.failed_items) ? syncProgress.failed_items : [];
+    const syncResultFilter = ref('all');
+    const syncResultQuery = ref('');
+
+    /** 从多版本接口字段中取第一个有效值，兼容旧的字符串和新的对象结构。 */
+    function firstSyncValue(...values) {
+      for (const value of values) {
+        if (value === undefined || value === null) continue;
+        if (typeof value === 'number' && Number.isFinite(value)) return value;
+        if (String(value).trim() !== '') return value;
+      }
+      return '';
+    }
+
+    /** 将接口状态码/状态词统一成成功、失败或未知，列表筛选只依赖该结果。 */
+    function syncOutcomeCode(item) {
+      if (!item || typeof item !== 'object') return null;
+      const rawCode = firstSyncValue(item.code, item.status_code, item.http_code);
+      if (rawCode !== '' && Number.isFinite(Number(rawCode))) return Number(rawCode);
+      const status = String(firstSyncValue(item.status, item.state, item.result) || '').toLowerCase();
+      if (/success|completed|complete|ok|converged|done|成功|完成/.test(status)) return 200;
+      if (/fail|failed|failure|error|exception|unsynced|失败|异常/.test(status)) return 500;
+      return null;
+    }
+
+    /** 将 APP、配置桶和对象名称展开为扁平字段，避免模板里判断多套后端返回格式。 */
+    function normalizeSyncResultItem(raw, context = {}) {
+      const source = raw && typeof raw === 'object' ? raw : { message: String(raw || '') };
+      const app = source.app && typeof source.app === 'object'
+        ? source.app
+        : (source.application && typeof source.application === 'object' ? source.application : {});
+      const appId = firstSyncValue(
+        source.app_id, source.apk_id, source.application_id,
+        app.app_id, app.apk_id, app.id, context.app_id, context.apk_id
+      );
+      const appName = firstSyncValue(
+        source.app_name, source.apk_name, source.application_name,
+        app.app_name, app.apk_name, app.name, context.app_name
+      );
+      const appKey = firstSyncValue(source.app_key, source.appKey, app.app_key, app.appKey, context.app_key);
+      const packageName = firstSyncValue(
+        source.package_name, source.package, source.pkg,
+        app.package_name, app.package, app.pkg, context.package_name
+      );
+      const bucket = source.bucket && typeof source.bucket === 'object' ? source.bucket : {};
+      const bucketId = firstSyncValue(
+        source.bucket_id, source.bucketId, bucket.bucket_id, bucket.id, context.bucket_id
+      );
+      const bucketName = firstSyncValue(
+        source.bucket_name, bucket.name, typeof source.bucket === 'string' ? source.bucket : '',
+        context.bucket_name
+      );
+      const provider = firstSyncValue(source.provider, bucket.provider, context.provider);
+    const objectKey = firstSyncValue(
+        source.object_key, source.objectKey, source.config_key, source.configKey,
+        source.key, context.object_key
+      );
+      // 服务端对象键固定为 config/{APPID}.enc；旧版别名缺少 app_id 时可由
+      // 对象键恢复归属，避免同名桶跨应用折叠。
+      const objectAppMatch = String(objectKey || '').match(/^config\/(\d+)\.enc(?:$|[?#])/i);
+      const resolvedAppId = appId !== '' ? appId : (objectAppMatch ? objectAppMatch[1] : '');
+      const configScope = firstSyncValue(
+        source.config_scope, source.configScope, source.scope, context.config_scope
+      );
+      const bucketTotal = firstSyncValue(
+        source.bucket_total, source.bucket_count, source.total_buckets,
+        source.total_bucket_count, source.total_object_count, context.bucket_total
+      );
+      const bucketSuccess = firstSyncValue(
+        source.bucket_success, source.bucket_success_count, source.success_buckets,
+        source.success_bucket_count, source.success_object_count, context.bucket_success
+      );
+      const bucketFailed = firstSyncValue(
+        source.bucket_fail, source.bucket_failed, source.bucket_failed_count, source.failed_buckets,
+        source.failed_bucket_count, source.failed_object_count, context.bucket_failed
+      );
+      // 清理旧快照虽然返回 200，但不是本轮上传成功；phase=cleanup 优先于父级默认桶类型。
+      const phaseHint = String(firstSyncValue(source.phase, context.phase, '') || '').toLowerCase();
+      const itemKind = firstSyncValue(
+        source.item_kind, source.kind,
+        phaseHint === 'cleanup' ? 'cleanup' : (context.item_kind || 'bucket')
+      );
+      // 没有显式阶段的旧桶结果统一视为 sync；这样来自 success_items、
+      // app_results 和 sync_items 的同一对象可以稳定去重。
+      const phase = phaseHint || (itemKind === 'app' ? 'app' : (itemKind === 'task' ? 'task' : 'sync'));
+      const isAppLevel = itemKind === 'app'
+        || (bucketId === '' && bucketName === '' && (resolvedAppId !== '' || source.app_id !== undefined || context.app_id !== undefined));
+      const code = syncOutcomeCode(source);
+      const rawStatus = String(firstSyncValue(source.status, source.state) || '').toLowerCase();
+      const resultKind = String(firstSyncValue(
+        source.result_kind, source.outcome, context.result_kind
+      ) || '').toLowerCase();
+      const messageText = String(firstSyncValue(source.message, source.error, source.detail) || '');
+      const isPartial = isAppLevel && !/skip|skipped|跳过/.test(rawStatus)
+        && (resultKind === 'partial' || resultKind === 'partial_success'
+          || source.partial === true || Number(source.partial) === 1
+          || /partial|partially|部分成功|部分失败/.test(rawStatus)
+          || (Number(bucketSuccess) > 0 && Number(bucketFailed) > 0));
+      const isSkipped = resultKind === 'skipped'
+        || /skip|skipped|跳过/.test(rawStatus)
+        || /无启用|无需推送|无注入记录/.test(messageText);
+      const isSuccess = !isSkipped && !isPartial
+        && (code === 200 || /success|completed|complete|ok|converged|done|成功|完成/.test(rawStatus));
+      const isFailure = !isSkipped && !isPartial
+        && (code !== null ? code !== 200 : /fail|failed|failure|error|exception|unsynced|失败|异常/.test(rawStatus));
+      const appLabel = appName || appKey || (resolvedAppId !== '' ? '应用 #' + resolvedAppId : '全局配置');
+      return {
+        app_id: resolvedAppId,
+        app_name: appName,
+        app_key: appKey,
+        package_name: packageName,
+        app_label: appLabel,
+        bucket_id: bucketId,
+        bucket_name: bucketName || (bucketId !== '' ? '配置桶 #' + bucketId : '全部配置桶'),
+        provider,
+        object_key: objectKey,
+        config_scope: configScope,
+        bucket_total: bucketTotal,
+        bucket_success: bucketSuccess,
+        bucket_failed: bucketFailed,
+        code,
+        phase: phase,
+        item_kind: itemKind,
+        status: isSkipped ? 'skipped' : (isPartial ? 'partial' : (isSuccess ? 'success' : (isFailure ? 'failed' : 'unknown'))),
+        is_success: isSuccess,
+        is_failure: isFailure,
+        is_skipped: isSkipped,
+        is_partial: isPartial,
+        status_text: rawStatus,
+        display_message: firstSyncValue(source.message, source.error, source.detail, '同步结果已记录')
+      };
+    }
+
+    /** 判断对象是否已经是一条 APP/桶/对象结果，而不是外层 result/data 包装。 */
+    function looksLikeSyncOutcome(item, context = {}) {
+      if (!item || typeof item !== 'object') return false;
+      const hasCode = item.code !== undefined || item.status !== undefined
+        || item.state !== undefined || item.status_code !== undefined || item.http_code !== undefined;
+      const hasTarget = item.bucket !== undefined || item.bucket_id !== undefined
+        || item.bucket_name !== undefined || item.object_key !== undefined
+        || item.objectKey !== undefined || item.key !== undefined
+        || item.app_id !== undefined || item.apk_id !== undefined
+        || context.app_id !== undefined || context.apk_id !== undefined;
+      return hasTarget && (hasCode || item.message !== undefined || item.error !== undefined);
+    }
+
+    /** 兼容旧版 result.data、按 APPID 分组 results，以及新版扁平结果列表。 */
+    function collectSyncResultItems() {
+      const items = [];
+      const seen = new Set();
+      const add = (raw, context = {}) => {
+        if (!raw || typeof raw !== 'object') return;
+        const normalized = normalizeSyncResultItem(raw, context);
+        // 多个兼容字段会重复指向同一条结果；APPID、对象键/桶标识、阶段和
+        // 结果码构成稳定主键，避免不同来源把同一对象重复列出。
+        const target = normalized.bucket_id || normalized.bucket_name || normalized.item_kind;
+      const baseIdentity = [
+        target, normalized.object_key, normalized.phase,
+        normalized.code
+      ].join('|');
+        // APPID 始终参与去重：旧快照的桶结果经常只有桶名称，没有对象路径，
+        // 若省略 APPID，会把多个应用的同名桶错误折叠成一张卡片。
+        const identity = [normalized.app_id, baseIdentity].join('|');
+        if (seen.has(identity)) return;
+        seen.add(identity);
+        items.push(normalized);
+      };
+      const visit = (value, context = {}, options = {}) => {
+        if (Array.isArray(value)) {
+          value.forEach(item => visit(item, context, options));
+          return;
+        }
+        if (!value || typeof value !== 'object') return;
+        const ownContext = { ...context };
+        const ownAppId = firstSyncValue(value.app_id, value.apk_id, value.application_id);
+        if (ownAppId !== '') ownContext.app_id = ownAppId;
+        const ownApp = value.app && typeof value.app === 'object' ? value.app : {};
+        if (!ownContext.app_name) ownContext.app_name = firstSyncValue(value.app_name, value.apk_name, ownApp.name, ownApp.app_name);
+        if (!ownContext.app_key) ownContext.app_key = firstSyncValue(value.app_key, ownApp.app_key);
+        if (!ownContext.package_name) ownContext.package_name = firstSyncValue(value.package_name, value.package, ownApp.package_name);
+        if (!ownContext.config_scope) ownContext.config_scope = firstSyncValue(value.config_scope, value.configScope, value.scope);
+        if (!ownContext.object_key) ownContext.object_key = firstSyncValue(value.object_key, value.objectKey, value.config_key);
+        if (!ownContext.bucket_total) ownContext.bucket_total = firstSyncValue(value.bucket_total, value.bucket_count, value.total_buckets);
+        if (!ownContext.bucket_success) ownContext.bucket_success = firstSyncValue(value.bucket_success, value.bucket_success_count, value.success_buckets);
+        if (!ownContext.bucket_failed) ownContext.bucket_failed = firstSyncValue(value.bucket_fail, value.bucket_failed, value.bucket_failed_count, value.failed_buckets);
+
+        // APP 级 partial 结果保留一张摘要卡，桶级成功/失败仍在后面展开为明细行。
+        const valueStatus = String(firstSyncValue(value.status, value.state) || '').toLowerCase();
+        const valueKind = String(firstSyncValue(value.result_kind, value.outcome, context.result_kind) || '').toLowerCase();
+        const hasBucketIdentity = value.bucket_id !== undefined || value.bucket_name !== undefined
+          || (typeof value.bucket === 'string') || (value.bucket && typeof value.bucket === 'object');
+        const legacyBucketValues = value.buckets !== undefined
+          ? value.buckets
+          : (value.results !== undefined ? value.results : []);
+        const legacyBucketList = Array.isArray(legacyBucketValues)
+          ? legacyBucketValues
+          : (legacyBucketValues && typeof legacyBucketValues === 'object'
+            ? Object.values(legacyBucketValues) : []);
+        const legacyBucketSuccess = legacyBucketList.filter(item => syncOutcomeCode(item) === 200).length;
+        const legacyBucketFailed = legacyBucketList.filter(item => {
+          const itemCode = syncOutcomeCode(item);
+          return itemCode !== null && itemCode !== 200;
+        }).length;
+        const isAppPartial = !hasBucketIdentity
+          && (valueKind === 'partial' || valueKind === 'partial_success'
+            || /partial|partially|部分成功|部分失败/.test(valueStatus)
+            || (Number(value.bucket_success || value.bucket_success_count || 0) > 0
+              && Number(value.bucket_fail || value.bucket_failed || value.bucket_failed_count || 0) > 0)
+            || (legacyBucketSuccess > 0 && legacyBucketFailed > 0));
+        if (isAppPartial && (value.buckets !== undefined || value.results !== undefined
+            || value.app_id !== undefined || ownContext.app_id !== undefined
+            || ownContext.item_kind === 'app')) {
+          add(value, {
+            ...ownContext,
+            result_kind: 'partial',
+            item_kind: 'app',
+            bucket_success: legacyBucketSuccess || ownContext.bucket_success,
+            bucket_failed: legacyBucketFailed || ownContext.bucket_failed,
+            bucket_total: (legacyBucketSuccess + legacyBucketFailed) || ownContext.bucket_total
+          });
+        }
+
+        let childCount = 0;
+        const visitChildren = (child, childContext = ownContext) => {
+          if (child === undefined || child === null) return;
+          if (Array.isArray(child)) childCount += child.length;
+          else if (child && typeof child === 'object') childCount += Object.keys(child).length;
+          visit(child, childContext, options);
+        };
+        const bucketContext = (base, itemKind = 'bucket') => ({
+          ...base,
+          item_kind: itemKind,
+          result_kind: '',
+          bucket_total: undefined,
+          bucket_success: undefined,
+          bucket_failed: undefined
+        });
+        if (value.success_items !== undefined) visitChildren(value.success_items, bucketContext(ownContext, 'bucket'));
+        if (value.successful_items !== undefined) visitChildren(value.successful_items, bucketContext(ownContext, 'bucket'));
+        if (value.failed_items !== undefined) visitChildren(value.failed_items, bucketContext(ownContext, 'bucket'));
+        if (value.skipped_items !== undefined) visitChildren(value.skipped_items, bucketContext(ownContext, 'bucket'));
+        if (value.partial_apps !== undefined) visitChildren(value.partial_apps, { ...ownContext, result_kind: 'partial', item_kind: 'app' });
+        if (value.partial_items !== undefined) visitChildren(value.partial_items, bucketContext(ownContext, 'bucket'));
+        if (value.cleanup_items !== undefined) visitChildren(value.cleanup_items, bucketContext(ownContext, 'cleanup'));
+        if (value.cleanup_results !== undefined) visitChildren(value.cleanup_results, bucketContext(ownContext, 'cleanup'));
+        if (value.sync_items !== undefined) visitChildren(value.sync_items, bucketContext(ownContext, 'bucket'));
+        if (value.items !== undefined) visitChildren(value.items, bucketContext(ownContext, 'bucket'));
+        if (value.app_results !== undefined) visitChildren(value.app_results, ownContext);
+        if (value.buckets !== undefined) visitChildren(value.buckets, bucketContext(ownContext, 'bucket'));
+        if (value.results !== undefined) {
+          const results = value.results;
+          if (Array.isArray(results)) {
+            results.forEach(item => visit(item, bucketContext(ownContext, 'bucket'), options));
+            childCount += results.length;
+          } else if (results && typeof results === 'object') {
+            Object.entries(results).forEach(([key, item]) => {
+              const nextContext = { ...ownContext };
+              if (nextContext.app_id === undefined || nextContext.app_id === '') nextContext.app_id = key;
+              visit(item, nextContext, options);
+            });
+            childCount += Object.keys(results).length;
+          }
+        }
+        if (value.data !== undefined && value.data !== value) {
+          const data = value.data;
+          if (Array.isArray(data)) {
+            data.forEach(item => visit(item, ownContext, options));
+            childCount += data.length;
+          } else if (data && typeof data === 'object') {
+            Object.entries(data).forEach(([key, item]) => {
+              const nextContext = { ...ownContext };
+              if (nextContext.app_id === undefined || nextContext.app_id === '') nextContext.app_id = key;
+              visit(item, nextContext, options);
+            });
+            childCount += Object.keys(data).length;
+          }
+        }
+        // 外层 APP 结果没有桶级 results（例如无注入记录、应用已删除）时仍显示一条 APP 级结果。
+        if (childCount === 0 && looksLikeSyncOutcome(value, ownContext)) add(value, ownContext);
+      };
+
+      // 新合同优先，旧 result_json 作为回退；所有来源通过 identity 去重。
+      visit(syncProgress.success_items, { result_kind: 'success' });
+      visit(syncProgress.successful_items, { result_kind: 'success' });
+      visit(syncProgress.failed_items, { result_kind: 'failed' });
+      visit(syncProgress.skipped_items, { result_kind: 'skipped' });
+      visit(syncProgress.partial_apps, { result_kind: 'partial', item_kind: 'app' });
+      visit(syncProgress.partial_items, { result_kind: 'partial' });
+      visit(syncProgress.sync_items);
+      visit(syncProgress.app_results);
+      visit(syncProgress.result_summary);
+      visit(syncProgress.result);
+      visit(syncProgress.results);
+      return items;
+    }
+
+    const syncResultItems = computed(() => collectSyncResultItems());
+    const syncSuccessItems = computed(() => syncResultItems.value.filter(
+      item => item.is_success && item.item_kind !== 'cleanup' && item.phase !== 'cleanup'
+    ));
+    const syncFailureItems = computed(() => syncResultItems.value.filter(item => item.is_failure));
+    const syncPartialItems = computed(() => syncResultItems.value.filter(item => item.is_partial));
+    const syncPartialApps = computed(() => syncPartialItems.value.filter(item => item.item_kind === 'app'));
+    const syncSkippedItems = computed(() => syncResultItems.value.filter(item => item.is_skipped));
+    const syncResultSummary = computed(() => {
+      const summary = syncProgress.result_summary && typeof syncProgress.result_summary === 'object'
+        ? syncProgress.result_summary : {};
+      const summaryCount = (keys, fallback) => {
+        for (const key of keys) {
+          if (!Object.prototype.hasOwnProperty.call(summary, key)) continue;
+          const number = Number(summary[key]);
+          if (Number.isFinite(number) && number >= 0) return number;
+        }
+        return fallback;
+      };
+      // 旧快照的桶结果只带名称、不带 bucket_id；按阶段排除 APP/任务占位项，
+      // 才能让历史 B2 成功项也进入桶对象统计。
+      const isPrimaryBucketItem = item => !['cleanup', 'app', 'task'].includes(String(item.phase || '').toLowerCase())
+        && item.item_kind !== 'app';
+      const derivedBucketSuccess = syncSuccessItems.value.filter(isPrimaryBucketItem).length;
+      const derivedBucketFailed = syncFailureItems.value.filter(isPrimaryBucketItem).length;
+      const derivedPartialApps = syncPartialApps.value.length;
+      // 归一化摘要是新合同的权威计数；只有旧接口没有该字段时才回退
+      // 到进度标量或由列表推导，避免旧 success=桶数把 APP 数再次误报。
+      const appSuccess = summaryCount(
+        ['app_success_count', 'app_success'],
+        Number(syncProgress.success || 0)
+      );
+      const appPartial = summaryCount(
+        ['app_partial_count', 'app_partial', 'partial_count'],
+        Number(syncProgress.app_partial_count || syncProgress.partial || syncProgress.partial_success || derivedPartialApps)
+      );
+      const appFailed = summaryCount(
+        ['app_failed_count', 'app_failed'],
+        Number(syncProgress.fail || 0)
+      );
+      const appSkipped = summaryCount(
+        ['app_skipped_count', 'app_skipped'],
+        Number(syncProgress.skipped || syncSkippedItems.value.length)
+      );
+      const appSuccessful = summaryCount(
+        ['app_successful_count', 'successful_app_count'],
+        appSuccess + appPartial
+      );
+      const bucketSuccess = summaryCount(
+        ['bucket_success_count', 'bucket_success'],
+        Number(syncProgress.bucket_success_count || syncProgress.bucket_success || derivedBucketSuccess)
+      );
+      const bucketFailed = summaryCount(
+        ['bucket_failed_count', 'bucket_fail_count', 'bucket_fail', 'bucket_failed'],
+        Number(syncProgress.bucket_failed_count || syncProgress.bucket_fail || derivedBucketFailed)
+      );
+      const bucketTotal = summaryCount(
+        ['bucket_total'],
+        Math.max(bucketSuccess + bucketFailed, Number(syncProgress.bucket_total || 0))
+      );
+      return {
+        appTotal: summaryCount(['app_total'], syncTotal.value),
+        appSuccess,
+        appPartial,
+        appSuccessful,
+        appFailed,
+        appSkipped,
+        itemTotal: summaryCount(['item_total'], syncResultItems.value.length),
+        itemSuccess: summaryCount(['success_item_count'], syncSuccessItems.value.length),
+        itemFailed: summaryCount(['failed_item_count'], syncFailureItems.value.length),
+        itemPartial: summaryCount(['partial_item_count'], syncPartialItems.value.length),
+        itemSkipped: summaryCount(['skipped_item_count'], syncSkippedItems.value.length),
+        bucketTotal,
+        bucketSuccess,
+        bucketFailed
+      };
     });
+    const syncCurrentObject = computed(() => {
+      const currentAppId = Number(syncProgress.current_app_id || 0);
+      if (currentAppId > 0) return 'config/' + currentAppId + '.enc';
+      if (!syncBusy.value) return '';
+      return '';
+    });
+    const syncPhaseLabel = phase => ({
+      sync: '桶上传', cleanup: '旧快照清理', app: '应用检查', task: '任务级'
+    }[String(phase || '')] || '同步处理');
+    const syncReasons = computed(() => (
+      Array.isArray(syncProgress.reasons)
+        ? syncProgress.reasons.filter(reason => String(reason || '').trim() !== '')
+        : []
+    ));
+    const syncResultQueryText = computed(() => String(syncResultQuery.value || '').trim().toLowerCase());
+    const syncVisibleResultItems = computed(() => {
+      const filter = String(syncResultFilter.value || 'all');
+      const query = syncResultQueryText.value;
+      return syncResultItems.value.filter(item => {
+        if (filter === 'success' && !item.is_success) return false;
+        if (filter === 'failed' && !item.is_failure) return false;
+        if (filter === 'partial' && !(item.is_partial && item.item_kind === 'app')) return false;
+        if (filter === 'skipped' && !item.is_skipped) return false;
+        if (!query) return true;
+        const haystack = [
+          item.app_label, item.app_id, item.app_key, item.package_name,
+          item.bucket_name, item.provider, item.config_scope, item.object_key, item.display_message
+        ].join(' ').toLowerCase();
+        return haystack.includes(query);
+      });
+    });
+    const syncHasResultData = computed(() => (
+      syncResultItems.value.length > 0
+      || Number(syncProgress.success || 0) > 0
+      || Number(syncProgress.fail || 0) > 0
+      || Number(syncProgress.partial || syncProgress.partial_success || syncProgress.app_partial_count || 0) > 0
+      || Number(syncProgress.bucket_success || syncProgress.bucket_success_count || 0) > 0
+      || Number(syncProgress.bucket_fail || syncProgress.bucket_failed_count || syncProgress.bucket_fail_count || 0) > 0
+      || syncSkippedItems.value.length > 0
+    ));
+
 
     // 统计详情状态与桶资料管理解耦：统计接口异常时，桶列表仍可独立使用。
     const statsVisible = ref(false);
@@ -2185,71 +2789,146 @@ createApp({
       return json;
     }
 
-    /** 将异步同步接口、旧版同步响应和页面写入响应归一为同一份快照。 */
+    /** 将状态接口响应归一成全局同步中心使用的最小快照。 */
     function applySyncSnapshot(source) {
-      let data = source && typeof source === 'object' ? source : {};
-      if (data.sync_job && typeof data.sync_job === 'object') data = data.sync_job;
-      // 部分 PHP 响应使用 {code,message,data:{...}} 外壳，进度对象优先取内层 data。
+      const sourceRoot = source && typeof source === 'object' ? source : {};
+      let data = sourceRoot;
+      // 配置分发页的写接口把同步任务放在 data.invalidate.sync_job；
+      // 先展开该层，保证外壳和桶页看到同一份任务快照。
+      if (data.invalidate && typeof data.invalidate === 'object') {
+        data = data.invalidate.sync_job && typeof data.invalidate.sync_job === 'object'
+          ? data.invalidate.sync_job : data.invalidate;
+      }
       if (data.data && typeof data.data === 'object' && (
-        data.data.status || data.data.job_id || data.data.sync_job ||
-        data.data.total !== undefined || data.data.expected_total !== undefined
+        data.data.status || data.data.job_id || data.data.sync_job
+        || data.data.total !== undefined || data.data.expected_total !== undefined
       )) {
-        data = data.data.sync_job && typeof data.data.sync_job === 'object' ? data.data.sync_job : data.data;
+        data = data.data.sync_job && typeof data.data.sync_job === 'object'
+          ? data.data.sync_job : data.data;
+      }
+      if (data.sync_job && typeof data.sync_job === 'object') {
+        data = data.sync_job;
       }
       const incomingJobId = String(data.job_id || '').trim();
       if (incomingJobId && incomingJobId !== String(syncProgress.job_id || '').trim()) {
-        // 新任务切换时清掉旧一轮失败明细，避免抽屉把历史失败误标为当前失败。
         syncProgress.failed_items = [];
         syncProgress.current = 0;
+        syncProgress.current_index = 0;
         syncProgress.processed = 0;
         syncProgress.total = 0;
         syncProgress.expected_total = 0;
+        syncProgress.expected_document_total = 0;
         syncProgress.current_app = '';
+        syncProgress.current_app_id = 0;
         syncProgress.current_bucket = '';
         syncProgress.success = 0;
         syncProgress.fail = 0;
+        syncProgress.skipped = 0;
+        syncProgress.app_success_count = 0;
+        syncProgress.app_successful_count = 0;
+        syncProgress.app_failed_count = 0;
+        syncProgress.app_skipped_count = 0;
+        syncProgress.partial = 0;
+        syncProgress.partial_success = 0;
+        syncProgress.app_partial_count = 0;
+        syncProgress.bucket_success = 0;
+        syncProgress.bucket_fail = 0;
+        syncProgress.bucket_total = 0;
+        syncProgress.bucket_success_count = 0;
+        syncProgress.bucket_failed_count = 0;
+        syncProgress.bucket_fail_count = 0;
+        syncProgress.reasons = [];
+        syncProgress.result = {};
+        syncProgress.results = {};
+        syncProgress.result_summary = {};
+        syncProgress.app_results = [];
+        syncProgress.partial_apps = [];
+        syncProgress.partial_items = [];
+        syncProgress.cleanup_items = [];
+        syncProgress.success_items = [];
+        syncProgress.successful_items = [];
+        syncProgress.failed_items = [];
+        syncProgress.skipped_items = [];
+        syncProgress.sync_items = [];
+        syncResultFilter.value = 'all';
+        syncResultQuery.value = '';
       }
       const status = String(data.status || data.state || '').trim();
-      const resultItems = data.results && typeof data.results === 'object'
-        ? (Array.isArray(data.results) ? data.results : Object.values(data.results)) : [];
+      const summary = data.result_summary && typeof data.result_summary === 'object'
+        ? data.result_summary : {};
+      // 旧接口把按 APPID 的结果放在 data.data；新接口使用 results/app_results。
+      // 这里仅用于推导缺失的标量，真正的明细会在下方写入 result/results。
+      const fallbackResultMap = data.results && typeof data.results === 'object'
+        ? data.results
+        : (data.data && typeof data.data === 'object' && !data.data.status && !data.data.job_id
+          ? data.data : {});
+      const resultItems = Array.isArray(fallbackResultMap)
+        ? fallbackResultMap
+        : (fallbackResultMap && typeof fallbackResultMap === 'object' ? Object.values(fallbackResultMap) : []);
       const success = Number.isFinite(Number(data.success)) ? Number(data.success)
-        : Number.isFinite(Number(data.success_count)) ? Number(data.success_count)
-          : resultItems.filter(function (item) { return Number(item && item.code) === 200; }).length;
+        : Number.isFinite(Number(data.app_success_count)) ? Number(data.app_success_count)
+          : Number.isFinite(Number(summary.app_success_count)) ? Number(summary.app_success_count)
+            : Number.isFinite(Number(data.success_count)) ? Number(data.success_count)
+              : resultItems.filter(item => Number(item && item.code) === 200).length;
       const fail = Number.isFinite(Number(data.fail)) ? Number(data.fail)
-        : Number.isFinite(Number(data.fail_count)) ? Number(data.fail_count)
-          : resultItems.filter(function (item) { return Number(item && item.code) !== 200; }).length;
+        : Number.isFinite(Number(data.app_failed_count)) ? Number(data.app_failed_count)
+          : Number.isFinite(Number(summary.app_failed_count)) ? Number(summary.app_failed_count)
+            : Number.isFinite(Number(data.fail_count)) ? Number(data.fail_count)
+              : resultItems.filter(item => Number(item && item.code) !== 200).length;
+      const partialFlag = Number(
+        data.partial || data.partial_success || data.app_partial_count
+          || summary.partial || summary.partial_success || summary.app_partial_count || 0
+      ) > 0;
       const inferredStatus = status || (
         data.code !== undefined
-          ? (Number(data.code) === 200 && fail === 0 ? 'completed' : 'partial_failure')
+          ? (partialFlag ? (fail > 0 ? 'partial_failure' : 'partial')
+            : (Number(data.code) === 200 && fail === 0 ? 'completed' : 'partial_failure'))
           : ''
       );
       if (inferredStatus) syncProgress.status = inferredStatus;
-      if (data.job_id !== undefined) syncProgress.job_id = String(data.job_id || '');
-      if (data.phase !== undefined) syncProgress.phase = String(data.phase || '');
-      if (data.phase_label !== undefined) syncProgress.phase_label = String(data.phase_label || '');
-      if (data.message !== undefined) syncProgress.message = String(data.message || '');
-      if (data.total !== undefined) syncProgress.total = Number(data.total) || 0;
-      if (data.expected_total !== undefined) syncProgress.expected_total = Number(data.expected_total) || 0;
-      if (data.expected_document_total !== undefined) syncProgress.expected_total = Number(data.expected_document_total) || 0;
-      if (data.current !== undefined) syncProgress.current = Number(data.current) || 0;
-      if (data.current_index !== undefined) syncProgress.current = Number(data.current_index) || 0;
-      if (data.processed !== undefined) syncProgress.processed = Number(data.processed) || 0;
+      ['job_id', 'phase', 'phase_label', 'message', 'current_app', 'current_bucket',
+        'started_at', 'updated_at', 'finished_at'].forEach(field => {
+        if (data[field] !== undefined) syncProgress[field] = String(data[field] || '');
+      });
+      ['total', 'expected_total', 'current', 'processed', 'skipped', 'app_success_count', 'app_successful_count',
+        'app_failed_count', 'app_skipped_count', 'partial', 'partial_success', 'app_partial_count',
+        'bucket_success', 'bucket_fail', 'bucket_total', 'bucket_success_count',
+        'bucket_failed_count', 'bucket_fail_count', 'current_app_id'].forEach(field => {
+        if (data[field] !== undefined) syncProgress[field] = Number(data[field]) || 0;
+      });
+      if (Array.isArray(data.reasons)) syncProgress.reasons = data.reasons;
+      ['result', 'results', 'result_summary'].forEach(field => {
+        if (data[field] && typeof data[field] === 'object') syncProgress[field] = data[field];
+      });
+      ['app_results', 'partial_apps', 'partial_items', 'cleanup_items', 'success_items', 'successful_items', 'failed_items', 'skipped_items', 'sync_items', 'items'].forEach(field => {
+        if (Array.isArray(data[field])) syncProgress[field] = data[field];
+      });
+      if (data.expected_document_total !== undefined) {
+        syncProgress.expected_document_total = Number(data.expected_document_total) || 0;
+        if (data.expected_total === undefined && data.total === undefined) {
+          syncProgress.expected_total = syncProgress.expected_document_total;
+        }
+      }
+      if (data.current_index !== undefined) {
+        syncProgress.current_index = Number(data.current_index) || 0;
+        if (data.current === undefined) syncProgress.current = syncProgress.current_index;
+      }
+      // 旧版 pushAllConfigs 的 data.data 没有 result 字段；保留该映射才能在同步中心
+      // 显示每个 APP/桶的成功与失败，而不是只有顶部数字。
+      if (!data.result && !data.results && !data.app_results
+        && fallbackResultMap && typeof fallbackResultMap === 'object'
+        && Object.keys(fallbackResultMap).length) {
+        syncProgress.result = fallbackResultMap;
+        syncProgress.results = fallbackResultMap;
+      }
       syncProgress.success = success;
       syncProgress.fail = fail;
       syncProgress.success_count = success;
       syncProgress.fail_count = fail;
-      if (data.current_app !== undefined) syncProgress.current_app = String(data.current_app || '');
-      if (data.current_app_id !== undefined && !syncProgress.current_app) {
-        syncProgress.current_app = Number(data.current_app_id) > 0 ? '应用 #' + Number(data.current_app_id) : '';
-      }
-      if (data.current_bucket !== undefined) syncProgress.current_bucket = String(data.current_bucket || '');
       if (Array.isArray(data.failed_items)) syncProgress.failed_items = data.failed_items;
       else if (resultItems.length && fail > 0) {
-        syncProgress.failed_items = resultItems.filter(function (item) { return Number(item && item.code) !== 200; });
+        syncProgress.failed_items = resultItems.filter(item => Number(item && item.code) !== 200);
       }
-      ['started_at', 'updated_at', 'finished_at'].forEach(function (field) {
-        if (data[field] !== undefined) syncProgress[field] = String(data[field] || '');
-      });
       return syncProgress;
     }
 
@@ -3034,7 +3713,12 @@ createApp({
         const asyncStatus = String(result.status || '');
         const asyncStarted = Number(result.started || result.sync_scheduled || 0) === 1
           || ['queued', 'running'].includes(asyncStatus);
-        if (['partial_failure'].includes(asyncStatus) || (failCount > 0 && successCount > 0)) {
+        const partialCount = Number(result.partial || result.partial_success || result.app_partial_count || 0);
+        const bucketSuccessCount = Number(result.bucket_success || result.bucket_success_count || 0);
+        const bucketFailCount = Number(result.bucket_fail || result.bucket_failed_count || result.bucket_fail_count || 0);
+        if (['partial_failure', 'partial', 'partial_success'].includes(asyncStatus)
+          || partialCount > 0 || bucketFailCount > 0
+          || (failCount > 0 && (successCount > 0 || bucketSuccessCount > 0))) {
           ElementPlus.ElMessage.warning({ message: message, duration: 8000, showClose: true });
         } else if (['failed'].includes(asyncStatus) || failCount > 0 || innerCode !== 200) {
           ElementPlus.ElMessage.error({ message: message, duration: 8000, showClose: true });
@@ -3114,17 +3798,23 @@ createApp({
 
     onMounted(function () {
       refreshPage();
-      startSyncRuntime();
+      if (!syncHostedByGlobalCenter) startSyncRuntime();
     });
-    if (typeof onBeforeUnmount === 'function') onBeforeUnmount(stopSyncRuntime);
+    if (typeof onBeforeUnmount === 'function') onBeforeUnmount(function () {
+      if (!syncHostedByGlobalCenter) stopSyncRuntime();
+    });
 
     return {
       buckets, loading, dialogVisible, isEdit, submitting, pushing, formTesting,
       filesVisible, filesLoading, filesLoaded, fileSearch, activeBucket, fileData,
       filePage, missingFilePage, filePageSize,
       syncCenterVisible, syncStarting, syncProgress, syncBusy, syncTotal, syncCurrent,
+      syncHostedByGlobalCenter,
       syncProgressPercent, syncStatusLabel, syncStatusTagType, syncLauncherType,
-      syncBadgeValue, syncStatusDotClass, syncFailureItems, openSyncCenter, refreshSyncStatus,
+      syncBadgeValue, syncStatusDotClass, syncFailureItems, syncResultItems, syncSuccessItems,
+      syncPartialItems, syncPartialApps, syncSkippedItems, syncResultSummary,
+      syncResultFilter, syncResultQuery, syncVisibleResultItems, syncHasResultData,
+      syncCurrentObject, syncPhaseLabel, syncReasons, openSyncCenter, refreshSyncStatus,
       overviewLoading, overviewError, statsOverview,
       statsVisible, statsLoading, statsLoaded, statsError, statsActiveTab,
       statsRangeOptions, statsFilters, statsData,

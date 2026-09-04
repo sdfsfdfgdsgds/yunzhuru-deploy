@@ -732,7 +732,27 @@
       flex: 0 0 52px;
       border: 0;
       border-radius: 50%;
+      color: #fff !important;
       box-shadow: 0 8px 24px rgb(64 158 255 / 35%);
+    }
+
+    /* 主题样式可能把 primary 按钮继承为蓝色文字；蓝底按钮统一使用白字保证对比度。 */
+    .global-config-sync__drawer .el-button--primary,
+    .global-config-sync__drawer .el-button--primary:hover,
+    .global-config-sync__drawer .el-button--primary:focus,
+    .global-config-sync__drawer .el-button--primary:active,
+    .global-config-sync__drawer .el-button--primary span,
+    .global-config-sync__drawer .el-button--primary i,
+    .global-config-sync__drawer .el-button--primary *,
+    .global-config-sync__badge .global-config-sync__launcher.el-button--primary,
+    .global-config-sync__badge .global-config-sync__launcher.el-button--primary:hover,
+    .global-config-sync__badge .global-config-sync__launcher.el-button--primary:focus,
+    .global-config-sync__badge .global-config-sync__launcher.el-button--primary:active,
+    .global-config-sync__badge .global-config-sync__launcher.el-button--primary span,
+    .global-config-sync__badge .global-config-sync__launcher.el-button--primary i,
+    .global-config-sync__badge .global-config-sync__launcher.el-button--primary * {
+      color: #fff !important;
+      -webkit-text-fill-color: #fff;
     }
 
     .global-config-sync__launcher.is-queued,
@@ -833,6 +853,8 @@
     }
 
     .global-config-sync__summary.is-partial_failure,
+    .global-config-sync__summary.is-partial,
+    .global-config-sync__summary.is-partial_success,
     .global-config-sync__summary.is-failed {
       border-color: #fecaca;
       background: #fef2f2;
@@ -877,7 +899,19 @@
     }
 
     .global-config-sync__metric.is-success strong { color: #15803d; }
+    .global-config-sync__metric.is-warning strong { color: #b45309; }
     .global-config-sync__metric.is-danger strong { color: #dc2626; }
+
+    .global-config-sync__metric small {
+      display: block;
+      margin-top: 3px;
+      overflow: hidden;
+      color: #94a3b8;
+      font-size: 10px;
+      line-height: 1.35;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
 
     .global-config-sync__details {
       display: grid;
@@ -904,6 +938,172 @@
       color: #991b1b;
       font-size: 12px;
       font-weight: 700;
+    }
+
+    /* 同步结果列表：成功项和失败项共用同一行合同，避免只展示失败而看不全完整范围。 */
+    .global-config-sync__results {
+      margin-bottom: 14px;
+      padding-top: 2px;
+    }
+
+    .global-config-sync__results-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .global-config-sync__results-title {
+      color: #334155;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .global-config-sync__results-filters {
+      display: flex;
+      flex: 1 1 auto;
+      justify-content: flex-end;
+      gap: 4px;
+    }
+
+    .global-config-sync__results-filter {
+      min-height: 26px;
+      padding: 4px 8px;
+      border: 1px solid #dbe3ee;
+      border-radius: 6px;
+      background: #fff;
+      color: #64748b;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .global-config-sync__results-filter.is-active {
+      border-color: #2563eb;
+      background: #2563eb;
+      color: #fff !important;
+      -webkit-text-fill-color: #fff;
+      font-weight: 700;
+    }
+
+    .global-config-sync__results-search {
+      margin-bottom: 8px;
+    }
+
+    .global-config-sync__results-summary {
+      margin-bottom: 8px;
+      color: #94a3b8;
+      font-size: 11px;
+    }
+
+    .global-config-sync__results-list {
+      display: grid;
+      max-height: 430px;
+      gap: 8px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+
+    .global-config-sync__result-card {
+      padding: 10px;
+      border: 1px solid #dbeafe;
+      border-radius: 9px;
+      background: #f8fbff;
+    }
+
+    .global-config-sync__result-card.is-failure {
+      border-color: #fecaca;
+      background: #fff7f7;
+    }
+
+    .global-config-sync__result-card.is-partial {
+      border-color: #fcd34d;
+      background: #fffbeb;
+    }
+
+    .global-config-sync__result-card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .global-config-sync__result-card-title {
+      min-width: 0;
+      color: #1f2937;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
+    .global-config-sync__result-card-subtitle {
+      margin-top: 2px;
+      color: #64748b;
+      font-size: 11px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .global-config-sync__result-card-meta {
+      display: grid;
+      gap: 2px;
+      margin-top: 7px;
+      color: #475569;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .global-config-sync__result-card-meta strong {
+      color: #334155;
+      font-weight: 600;
+    }
+
+    .global-config-sync__result-card-message {
+      margin: 7px 0 0;
+      color: #475569;
+      font-size: 11px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
+    .global-config-sync__result-card.is-failure .global-config-sync__result-card-message {
+      color: #991b1b;
+    }
+
+    .global-config-sync__result-card.is-partial .global-config-sync__result-card-message {
+      color: #92400e;
+    }
+
+    .global-config-sync__results-empty {
+      padding: 16px 10px;
+      border: 1px dashed #cbd5e1;
+      border-radius: 8px;
+      color: #94a3b8;
+      font-size: 12px;
+      text-align: center;
+    }
+
+    .global-config-sync__reasons {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 5px;
+      margin-bottom: 12px;
+      color: #64748b;
+      font-size: 11px;
+    }
+
+    .global-config-sync__reason {
+      max-width: 100%;
+      padding: 3px 7px;
+      border: 1px solid #dbeafe;
+      border-radius: 999px;
+      background: #eff6ff;
+      color: #1e40af;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
     }
 
     .global-config-sync__failure {
@@ -944,6 +1144,17 @@
         height: 48px;
         min-width: 48px;
         flex-basis: 48px;
+      }
+      .global-config-sync__results-toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .global-config-sync__results-filters {
+        justify-content: flex-start;
+        width: 100%;
+      }
+      .global-config-sync__metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
     }
 
@@ -1376,7 +1587,7 @@
             :stroke-width="9"
             :indeterminate="globalSyncBusy && globalSyncTotal === 0"
             :duration="2"
-            :status="globalSyncProgress.status === 'completed' ? 'success' : (['partial_failure', 'failed'].includes(globalSyncProgress.status) ? 'exception' : undefined)"
+            :status="globalSyncProgress.status === 'completed' ? 'success' : (['partial_failure', 'failed'].includes(globalSyncProgress.status) ? 'exception' : (['partial', 'partial_success'].includes(globalSyncProgress.status) ? 'warning' : undefined))"
           ></el-progress>
         </section>
 
@@ -1386,16 +1597,38 @@
             <strong>{{ globalSyncTotal }}</strong>
           </div>
           <div class="global-config-sync__metric">
-            <span>当前进度</span>
+            <span>已处理应用</span>
             <strong>{{ globalSyncCurrent }}</strong>
           </div>
           <div class="global-config-sync__metric is-success">
-            <span>成功</span>
-            <strong>{{ globalSyncProgress.success || globalSyncProgress.success_count || 0 }}</strong>
+            <span>全成功应用</span>
+            <strong>{{ globalSyncResultSummary.appSuccess }}</strong>
+            <small>全部目标桶成功</small>
+          </div>
+          <div class="global-config-sync__metric is-warning">
+            <span>部分成功应用</span>
+            <strong>{{ globalSyncResultSummary.appPartial }}</strong>
+            <small>成功与失败桶并存</small>
           </div>
           <div class="global-config-sync__metric is-danger">
-            <span>失败</span>
-            <strong>{{ globalSyncProgress.fail || globalSyncProgress.fail_count || 0 }}</strong>
+            <span>失败应用</span>
+            <strong>{{ globalSyncResultSummary.appFailed }}</strong>
+            <small>没有成功桶对象</small>
+          </div>
+          <div class="global-config-sync__metric is-success">
+            <span>成功桶对象</span>
+            <strong>{{ globalSyncResultSummary.bucketSuccess }}</strong>
+            <small>实际上传成功</small>
+          </div>
+          <div class="global-config-sync__metric is-danger">
+            <span>失败桶对象</span>
+            <strong>{{ globalSyncResultSummary.bucketFailed }}</strong>
+            <small>需要检查连接</small>
+          </div>
+          <div class="global-config-sync__metric">
+            <span>桶对象总数</span>
+            <strong>{{ globalSyncResultSummary.bucketTotal }}</strong>
+            <small>成功 + 失败</small>
           </div>
         </div>
 
@@ -1413,6 +1646,12 @@
             </strong>
           </div>
           <div class="global-config-sync__details-row">
+            <span>当前配置对象</span>
+            <strong :title="globalSyncCurrentObject || '-'">
+              {{ globalSyncCurrentObject || '-' }}
+            </strong>
+          </div>
+          <div class="global-config-sync__details-row">
             <span>任务编号</span>
             <strong :title="globalSyncProgress.job_id || '-'">
               {{ globalSyncProgress.job_id || '-' }}
@@ -1420,17 +1659,104 @@
           </div>
         </section>
 
-        <section v-if="globalSyncFailureItems.length">
-          <div class="global-config-sync__failures-title">失败明细</div>
-          <article
-            v-for="(item, index) in globalSyncFailureItems"
-            :key="(item.bucket_id || item.bucket || index) + '-' + index"
-            class="global-config-sync__failure"
-          >
-            <strong>{{ item.bucket || item.bucket_name || '未知配置桶' }}</strong>
-            <div>{{ item.message || item.error || '同步失败' }}</div>
-            <code v-if="item.key || item.object_key">{{ item.key || item.object_key }}</code>
-          </article>
+        <section v-if="globalSyncReasons.length" class="global-config-sync__reasons">
+          <span>触发原因：</span>
+          <span
+            v-for="(reason, index) in globalSyncReasons"
+            :key="'sync-reason-' + index"
+            class="global-config-sync__reason"
+          >{{ reason }}</span>
+        </section>
+
+        <section v-if="globalSyncHasResultData" class="global-config-sync__results">
+          <div class="global-config-sync__results-toolbar">
+            <div class="global-config-sync__results-title">同步操作明细</div>
+            <div class="global-config-sync__results-filters" role="tablist" aria-label="同步结果筛选">
+              <button
+                type="button"
+                class="global-config-sync__results-filter"
+                :class="{ 'is-active': globalSyncResultFilter === 'all' }"
+                @click="globalSyncResultFilter = 'all'"
+              >全部 {{ globalSyncResultItems.length }}</button>
+              <button
+                type="button"
+                class="global-config-sync__results-filter"
+                :class="{ 'is-active': globalSyncResultFilter === 'success' }"
+                @click="globalSyncResultFilter = 'success'"
+              >成功项 {{ globalSyncSuccessItems.length }}</button>
+              <button
+                type="button"
+                class="global-config-sync__results-filter"
+                :class="{ 'is-active': globalSyncResultFilter === 'failed' }"
+                @click="globalSyncResultFilter = 'failed'"
+              >失败项 {{ globalSyncFailureItems.length }}</button>
+              <button
+                v-if="globalSyncPartialApps.length"
+                type="button"
+                class="global-config-sync__results-filter"
+                :class="{ 'is-active': globalSyncResultFilter === 'partial' }"
+                @click="globalSyncResultFilter = 'partial'"
+              >部分成功应用 {{ globalSyncPartialApps.length }}</button>
+              <button
+                v-if="globalSyncSkippedItems.length"
+                type="button"
+                class="global-config-sync__results-filter"
+                :class="{ 'is-active': globalSyncResultFilter === 'skipped' }"
+                @click="globalSyncResultFilter = 'skipped'"
+              >跳过项 {{ globalSyncSkippedItems.length }}</button>
+            </div>
+          </div>
+          <el-input
+            v-model="globalSyncResultQuery"
+            class="global-config-sync__results-search"
+            size="small"
+            clearable
+            placeholder="筛选应用、桶、对象或错误信息"
+          ></el-input>
+          <div class="global-config-sync__results-summary">
+            应用：全成功 {{ globalSyncResultSummary.appSuccess }}、部分成功 {{ globalSyncResultSummary.appPartial }}、可用成功 {{ globalSyncResultSummary.appSuccessful }}、失败 {{ globalSyncResultSummary.appFailed }}、跳过 {{ globalSyncResultSummary.appSkipped }}；
+            桶对象：成功 {{ globalSyncResultSummary.bucketSuccess }}、失败 {{ globalSyncResultSummary.bucketFailed }}、合计 {{ globalSyncResultSummary.bucketTotal }}
+            <span v-if="globalSyncResultSummary.itemSkipped">、跳过 {{ globalSyncResultSummary.itemSkipped }}</span>
+            · 当前筛选显示 {{ globalSyncVisibleResultItems.length }} 条
+          </div>
+          <div v-if="globalSyncVisibleResultItems.length" class="global-config-sync__results-list">
+            <article
+              v-for="(item, index) in globalSyncVisibleResultItems"
+              :key="[item.app_id, item.bucket_id, item.object_key, item.code, index].join('-')"
+              class="global-config-sync__result-card"
+              :class="{ 'is-failure': item.is_failure, 'is-partial': item.is_partial }"
+            >
+              <div class="global-config-sync__result-card-header">
+                <div class="global-config-sync__result-card-title">{{ item.app_label }}</div>
+                <el-tag
+                  size="small"
+                  effect="light"
+                  :type="item.is_success ? 'success' : (item.is_failure ? 'danger' : (item.is_partial ? 'warning' : 'info'))"
+                >{{ item.is_success ? '成功' : (item.is_failure ? '失败' : (item.is_partial ? '部分成功' : (item.is_skipped ? '跳过' : '已记录'))) }}</el-tag>
+              </div>
+              <div v-if="item.app_id !== '' || item.package_name" class="global-config-sync__result-card-subtitle">
+                <span v-if="item.app_id !== ''">APPID {{ item.app_id }}</span>
+                <span v-if="item.package_name"> · {{ item.package_name }}</span>
+              </div>
+              <div class="global-config-sync__result-card-meta">
+                <div v-if="item.phase">处理阶段：<strong>{{ globalSyncPhaseLabel(item.phase) }}</strong></div>
+                <div v-if="item.item_kind === 'app' && (item.bucket_total !== '' || item.bucket_success !== '' || item.bucket_failed !== '')">
+                  桶对象：<strong>成功 {{ item.bucket_success || 0 }} / 失败 {{ item.bucket_failed || 0 }} / 合计 {{ item.bucket_total || 0 }}</strong>
+                </div>
+                <div v-if="item.bucket_name">配置桶：<strong>{{ item.bucket_name }}</strong><span v-if="item.provider"> · {{ item.provider }}</span></div>
+                <div v-if="item.config_scope">配置项：<strong>{{ item.config_scope }}</strong></div>
+                <div v-if="item.object_key">配置对象：<strong>{{ item.object_key }}</strong></div>
+                <div v-if="item.code !== null">结果码：<strong>{{ item.code }}</strong></div>
+              </div>
+              <p class="global-config-sync__result-card-message">{{ item.display_message }}</p>
+            </article>
+          </div>
+          <div v-else class="global-config-sync__results-empty">
+            当前筛选条件没有匹配项；切换“全部”或清空筛选后查看完整结果。
+          </div>
+        </section>
+        <section v-else-if="globalSyncBusy" class="global-config-sync__results-empty">
+          同步进行中，应用和配置桶完成后会在这里逐项列出结果。
         </section>
 
         <div class="global-config-sync__meta">
@@ -1449,7 +1775,7 @@
             :disabled="globalSyncBusy"
             @click="startGlobalConfigSync"
           >
-            {{ ['partial_failure', 'failed'].includes(globalSyncProgress.status) ? '重新全量同步' : '同步全部配置' }}
+            {{ ['partial_failure', 'partial', 'partial_success', 'failed'].includes(globalSyncProgress.status) ? '重新全量同步' : '同步全部配置' }}
           </el-button>
         </div>
       </template>
@@ -2178,8 +2504,14 @@
           job_id: '', status: 'idle', phase: 'idle', phase_label: '待命',
           message: '等待配置变更', total: 0, expected_total: 0,
           current: 0, processed: 0, success: 0, fail: 0,
-          success_count: 0, fail_count: 0, current_app: '', current_bucket: '',
-          failed_items: [], started_at: '', updated_at: '', finished_at: ''
+          success_count: 0, fail_count: 0, skipped: 0, app_success_count: 0, app_successful_count: 0,
+          app_failed_count: 0, app_skipped_count: 0, partial: 0, partial_success: 0, app_partial_count: 0,
+          bucket_success: 0, bucket_fail: 0, bucket_total: 0,
+          bucket_success_count: 0, bucket_failed_count: 0, bucket_fail_count: 0,
+          current_app_id: 0, current_app: '', current_bucket: '',
+          reasons: [], result: {}, results: {}, result_summary: {},
+          app_results: [], partial_apps: [], partial_items: [], cleanup_items: [], success_items: [], successful_items: [], failed_items: [], skipped_items: [], sync_items: [],
+          started_at: '', updated_at: '', finished_at: ''
         });
         let globalSyncStatusTimer = null;
         let globalSyncStatusRequestGeneration = 0;
@@ -2191,20 +2523,31 @@
         ));
         const globalSyncStatusLabel = computed(() => ({
           queued: '排队中', running: '同步中', completed: '已完成',
-          partial_failure: '部分失败', failed: '同步失败', idle: '待命'
+          partial_failure: '部分失败', partial: '部分成功', partial_success: '部分成功',
+          failed: '同步失败', idle: '待命'
         }[String(globalSyncProgress.status || 'idle')] || '待命'));
         const globalSyncStatusTagType = computed(() => ({
           queued: 'warning', running: 'warning', completed: 'success',
-          partial_failure: 'danger', failed: 'danger', idle: 'info'
+          partial_failure: 'danger', partial: 'warning', partial_success: 'warning',
+          failed: 'danger', idle: 'info'
         }[String(globalSyncProgress.status || 'idle')] || 'info'));
         const globalSyncLauncherType = computed(() => ({
           queued: 'warning', running: 'warning', completed: 'success',
-          partial_failure: 'danger', failed: 'danger', idle: 'primary'
+          partial_failure: 'danger', partial: 'warning', partial_success: 'warning',
+          failed: 'danger', idle: 'primary'
         }[String(globalSyncProgress.status || 'idle')] || 'primary'));
         const globalSyncBadgeValue = computed(() => {
           if (globalSyncBusy.value) return 1;
-          if (['partial_failure', 'failed'].includes(String(globalSyncProgress.status || ''))) {
-            return Math.max(1, Number(globalSyncProgress.fail || globalSyncProgress.fail_count || 0));
+          const status = String(globalSyncProgress.status || '');
+          const partialCount = Number(globalSyncProgress.app_partial_count || globalSyncProgress.partial || globalSyncProgress.partial_success || 0);
+          if (['partial_failure', 'partial', 'partial_success', 'failed'].includes(status)
+            || (status === 'completed' && partialCount > 0)) {
+            return Math.max(
+              1,
+              Number(globalSyncProgress.fail || globalSyncProgress.fail_count || 0),
+              partialCount,
+              Number(globalSyncProgress.bucket_fail || globalSyncProgress.bucket_failed_count || 0)
+            );
           }
           return 0;
         });
@@ -2218,6 +2561,8 @@
             globalSyncProgress.current || globalSyncProgress.processed
             || Number(globalSyncProgress.success || globalSyncProgress.success_count || 0)
               + Number(globalSyncProgress.fail || globalSyncProgress.fail_count || 0)
+              + Number(globalSyncProgress.partial || globalSyncProgress.partial_success || globalSyncProgress.app_partial_count || 0)
+              + Number(globalSyncProgress.skipped || 0)
           )
         ));
         const globalSyncProgressPercent = computed(() => {
@@ -2229,12 +2574,422 @@
         const globalSyncStatusDotClass = computed(() => {
           const status = String(globalSyncProgress.status || 'idle');
           if (status === 'completed') return 'is-success';
-          if (['queued', 'running'].includes(status)) return 'is-warning';
+          if (['queued', 'running', 'partial', 'partial_success'].includes(status)) return 'is-warning';
           if (['partial_failure', 'failed'].includes(status)) return 'is-danger';
           return 'is-idle';
         });
-        const globalSyncFailureItems = computed(() => (
-          Array.isArray(globalSyncProgress.failed_items) ? globalSyncProgress.failed_items : []
+        const globalSyncResultFilter = ref('all');
+        const globalSyncResultQuery = ref('');
+
+        /** 从多版本接口字段中取第一个有效值，兼容旧的字符串和新的对象结构。 */
+        function firstGlobalSyncValue(...values) {
+          for (const value of values) {
+            if (value === undefined || value === null) continue;
+            if (typeof value === 'number' && Number.isFinite(value)) return value;
+            if (String(value).trim() !== '') return value;
+          }
+          return '';
+        }
+
+        /** 将接口状态码/状态词统一成成功、失败或未知，列表筛选只依赖该结果。 */
+        function globalSyncOutcomeCode(item) {
+          if (!item || typeof item !== 'object') return null;
+          const rawCode = firstGlobalSyncValue(item.code, item.status_code, item.http_code);
+          if (rawCode !== '' && Number.isFinite(Number(rawCode))) return Number(rawCode);
+          const status = String(firstGlobalSyncValue(item.status, item.state, item.result) || '').toLowerCase();
+          if (/success|completed|complete|ok|converged|done|成功|完成/.test(status)) return 200;
+          if (/fail|failed|failure|error|exception|unsynced|失败|异常/.test(status)) return 500;
+          return null;
+        }
+
+        /** 将 APP、配置桶和对象名称展开为扁平字段，避免模板里判断多套后端返回格式。 */
+        function normalizeGlobalSyncResultItem(raw, context = {}) {
+          const source = raw && typeof raw === 'object' ? raw : { message: String(raw || '') };
+          const app = source.app && typeof source.app === 'object'
+            ? source.app
+            : (source.application && typeof source.application === 'object' ? source.application : {});
+          const appId = firstGlobalSyncValue(
+            source.app_id, source.apk_id, source.application_id,
+            app.app_id, app.apk_id, app.id, context.app_id, context.apk_id
+          );
+          const appName = firstGlobalSyncValue(
+            source.app_name, source.apk_name, source.application_name,
+            app.app_name, app.apk_name, app.name, context.app_name
+          );
+          const appKey = firstGlobalSyncValue(source.app_key, source.appKey, app.app_key, app.appKey, context.app_key);
+          const packageName = firstGlobalSyncValue(
+            source.package_name, source.package, source.pkg,
+            app.package_name, app.package, app.pkg, context.package_name
+          );
+          const bucket = source.bucket && typeof source.bucket === 'object' ? source.bucket : {};
+          const bucketId = firstGlobalSyncValue(
+            source.bucket_id, source.bucketId, bucket.bucket_id, bucket.id, context.bucket_id
+          );
+          const bucketName = firstGlobalSyncValue(
+            source.bucket_name, bucket.name, typeof source.bucket === 'string' ? source.bucket : '',
+            context.bucket_name
+          );
+          const provider = firstGlobalSyncValue(source.provider, bucket.provider, context.provider);
+          const objectKey = firstGlobalSyncValue(
+            source.object_key, source.objectKey, source.config_key, source.configKey,
+            source.key, context.object_key
+          );
+          // 服务端对象键固定为 config/{APPID}.enc；旧版成功/失败别名有时不带
+          // app_id，但带有该对象键时可以安全恢复归属，避免同名桶跨应用合并。
+          const objectAppMatch = String(objectKey || '').match(/^config\/(\d+)\.enc(?:$|[?#])/i);
+          const resolvedAppId = appId !== '' ? appId : (objectAppMatch ? objectAppMatch[1] : '');
+          const configScope = firstGlobalSyncValue(
+            source.config_scope, source.configScope, source.scope, context.config_scope
+          );
+          const bucketTotal = firstGlobalSyncValue(
+            source.bucket_total, source.bucket_count, source.total_buckets,
+            source.total_bucket_count, source.total_object_count, context.bucket_total
+          );
+          const bucketSuccess = firstGlobalSyncValue(
+            source.bucket_success, source.bucket_success_count, source.success_buckets,
+            source.success_bucket_count, source.success_object_count, context.bucket_success
+          );
+          const bucketFailed = firstGlobalSyncValue(
+            source.bucket_fail, source.bucket_failed, source.bucket_failed_count, source.failed_buckets,
+            source.failed_bucket_count, source.failed_object_count, context.bucket_failed
+          );
+          // cleanup 阶段优先按清理项处理，即使旧快照通过 sync_items 传入了
+          // item_kind=bucket，也不能把删除旧对象算成本轮上传成功。
+          const phaseHint = String(firstGlobalSyncValue(source.phase, context.phase, '') || '').toLowerCase();
+          const itemKind = phaseHint === 'cleanup'
+            ? 'cleanup'
+            : firstGlobalSyncValue(source.item_kind, source.kind, context.item_kind, 'bucket');
+          // 没有显式阶段的旧桶结果统一视为 sync；这样来自 success_items、
+          // app_results 和 sync_items 的同一对象可以稳定去重。
+          const phase = phaseHint || (itemKind === 'app' ? 'app' : (itemKind === 'task' ? 'task' : 'sync'));
+          const isAppLevel = itemKind === 'app'
+            || (bucketId === '' && bucketName === '' && (resolvedAppId !== '' || source.app_id !== undefined || context.app_id !== undefined));
+          const code = globalSyncOutcomeCode(source);
+          const rawStatus = String(firstGlobalSyncValue(source.status, source.state) || '').toLowerCase();
+          const resultKind = String(firstGlobalSyncValue(
+            source.result_kind, source.outcome, context.result_kind
+          ) || '').toLowerCase();
+          const messageText = String(firstGlobalSyncValue(source.message, source.error, source.detail) || '');
+          const isPartial = isAppLevel && !/skip|skipped|跳过/.test(rawStatus)
+            && (resultKind === 'partial' || resultKind === 'partial_success'
+              || source.partial === true || Number(source.partial) === 1
+              || /partial|partially|部分成功|部分失败/.test(rawStatus)
+              || (Number(bucketSuccess) > 0 && Number(bucketFailed) > 0));
+          const isSkipped = resultKind === 'skipped'
+            || /skip|skipped|跳过/.test(rawStatus)
+            || /无启用|无需推送|无注入记录/.test(messageText);
+          const isSuccess = !isSkipped && !isPartial
+            && (code === 200 || /success|completed|complete|ok|converged|done|成功|完成/.test(rawStatus));
+          const isFailure = !isSkipped && !isPartial
+            && (code !== null ? code !== 200 : /fail|failed|failure|error|exception|unsynced|失败|异常/.test(rawStatus));
+          const appLabel = appName || appKey || (resolvedAppId !== '' ? '应用 #' + resolvedAppId : '全局配置');
+          return {
+            app_id: resolvedAppId,
+            app_name: appName,
+            app_key: appKey,
+            package_name: packageName,
+            app_label: appLabel,
+            bucket_id: bucketId,
+            bucket_name: bucketName || (bucketId !== '' ? '配置桶 #' + bucketId : '全部配置桶'),
+            provider,
+            object_key: objectKey,
+            config_scope: configScope,
+            bucket_total: bucketTotal,
+            bucket_success: bucketSuccess,
+            bucket_failed: bucketFailed,
+            code,
+            phase: phase,
+            item_kind: itemKind,
+            status: isSkipped ? 'skipped' : (isPartial ? 'partial' : (isSuccess ? 'success' : (isFailure ? 'failed' : 'unknown'))),
+            is_success: isSuccess,
+            is_failure: isFailure,
+            is_skipped: isSkipped,
+            is_partial: isPartial,
+            status_text: rawStatus,
+            display_message: firstGlobalSyncValue(source.message, source.error, source.detail, '同步结果已记录')
+          };
+        }
+
+        /** 判断对象是否已经是一条 APP/桶/对象结果，而不是外层 result/data 包装。 */
+        function looksLikeGlobalSyncOutcome(item, context = {}) {
+          if (!item || typeof item !== 'object') return false;
+          const hasCode = item.code !== undefined || item.status !== undefined
+            || item.state !== undefined || item.status_code !== undefined || item.http_code !== undefined;
+          const hasTarget = item.bucket !== undefined || item.bucket_id !== undefined
+            || item.bucket_name !== undefined || item.object_key !== undefined
+            || item.objectKey !== undefined || item.key !== undefined
+            || item.app_id !== undefined || item.apk_id !== undefined
+            || context.app_id !== undefined || context.apk_id !== undefined;
+          return hasTarget && (hasCode || item.message !== undefined || item.error !== undefined);
+        }
+
+        /** 兼容旧版 result.data、按 APPID 分组 results，以及新版扁平结果列表。 */
+        function collectGlobalSyncResultItems() {
+          const items = [];
+          const seen = new Set();
+          const add = (raw, context = {}) => {
+            if (!raw || typeof raw !== 'object') return;
+            const normalized = normalizeGlobalSyncResultItem(raw, context);
+            // 多个兼容字段会重复指向同一条结果；APPID、对象键/桶标识、阶段和
+            // 结果码构成稳定主键，避免不同来源把同一对象重复列出。
+            const target = normalized.bucket_id || normalized.bucket_name || normalized.item_kind;
+            const baseIdentity = [
+              target, normalized.object_key, normalized.phase,
+              normalized.code
+            ].join('|');
+            // APPID 始终参与去重：旧快照的桶结果经常只有桶名称，没有对象路径，
+            // 若省略 APPID，会把 128 个应用同名 B2 桶错误折叠成一张卡片。
+            // 同一应用的别名来源会先由 visit 继承 APPID，再稳定合并。
+            const identity = [normalized.app_id, baseIdentity].join('|');
+            if (seen.has(identity)) return;
+            seen.add(identity);
+            items.push(normalized);
+          };
+          const visit = (value, context = {}, options = {}) => {
+            if (Array.isArray(value)) {
+              value.forEach(item => visit(item, context, options));
+              return;
+            }
+            if (!value || typeof value !== 'object') return;
+            const ownContext = { ...context };
+            const ownAppId = firstGlobalSyncValue(value.app_id, value.apk_id, value.application_id);
+            if (ownAppId !== '') ownContext.app_id = ownAppId;
+            const ownApp = value.app && typeof value.app === 'object' ? value.app : {};
+            if (!ownContext.app_name) ownContext.app_name = firstGlobalSyncValue(value.app_name, value.apk_name, ownApp.name, ownApp.app_name);
+            if (!ownContext.app_key) ownContext.app_key = firstGlobalSyncValue(value.app_key, ownApp.app_key);
+            if (!ownContext.package_name) ownContext.package_name = firstGlobalSyncValue(value.package_name, value.package, ownApp.package_name);
+            if (!ownContext.config_scope) ownContext.config_scope = firstGlobalSyncValue(value.config_scope, value.configScope, value.scope);
+            if (!ownContext.object_key) ownContext.object_key = firstGlobalSyncValue(value.object_key, value.objectKey, value.config_key);
+            if (!ownContext.bucket_total) ownContext.bucket_total = firstGlobalSyncValue(value.bucket_total, value.bucket_count, value.total_buckets);
+            if (!ownContext.bucket_success) ownContext.bucket_success = firstGlobalSyncValue(value.bucket_success, value.bucket_success_count, value.success_buckets);
+            if (!ownContext.bucket_failed) ownContext.bucket_failed = firstGlobalSyncValue(value.bucket_fail, value.bucket_failed, value.bucket_failed_count, value.failed_buckets);
+
+            // APP 级 partial 结果保留一张摘要卡，桶级成功/失败仍在后面展开为明细行。
+            const valueStatus = String(firstGlobalSyncValue(value.status, value.state) || '').toLowerCase();
+            const valueKind = String(firstGlobalSyncValue(value.result_kind, value.outcome, context.result_kind) || '').toLowerCase();
+            const hasBucketIdentity = value.bucket_id !== undefined || value.bucket_name !== undefined
+              || (typeof value.bucket === 'string') || (value.bucket && typeof value.bucket === 'object');
+            const legacyBucketValues = value.buckets !== undefined
+              ? value.buckets
+              : (value.results !== undefined ? value.results : []);
+            const legacyBucketList = Array.isArray(legacyBucketValues)
+              ? legacyBucketValues
+              : (legacyBucketValues && typeof legacyBucketValues === 'object'
+                ? Object.values(legacyBucketValues) : []);
+            const legacyBucketSuccess = legacyBucketList.filter(item => globalSyncOutcomeCode(item) === 200).length;
+            const legacyBucketFailed = legacyBucketList.filter(item => {
+              const itemCode = globalSyncOutcomeCode(item);
+              return itemCode !== null && itemCode !== 200;
+            }).length;
+            const isAppPartial = !hasBucketIdentity
+              && (valueKind === 'partial' || valueKind === 'partial_success'
+                || /partial|partially|部分成功|部分失败/.test(valueStatus)
+                || (Number(value.bucket_success || value.bucket_success_count || 0) > 0
+                  && Number(value.bucket_fail || value.bucket_failed || value.bucket_failed_count || 0) > 0)
+                || (legacyBucketSuccess > 0 && legacyBucketFailed > 0));
+            if (isAppPartial && (value.buckets !== undefined || value.results !== undefined
+                || value.app_id !== undefined || ownContext.app_id !== undefined
+                || ownContext.item_kind === 'app')) {
+              add(value, {
+                ...ownContext,
+                result_kind: 'partial',
+                item_kind: 'app',
+                bucket_success: legacyBucketSuccess || ownContext.bucket_success,
+                bucket_failed: legacyBucketFailed || ownContext.bucket_failed,
+                bucket_total: (legacyBucketSuccess + legacyBucketFailed) || ownContext.bucket_total
+              });
+            }
+
+            let childCount = 0;
+            const visitChildren = (child, childContext = ownContext) => {
+              if (child === undefined || child === null) return;
+              if (Array.isArray(child)) childCount += child.length;
+              else if (child && typeof child === 'object') childCount += Object.keys(child).length;
+              visit(child, childContext, options);
+            };
+            const bucketContext = (base, itemKind = 'bucket') => ({
+              ...base,
+              item_kind: itemKind,
+              result_kind: '',
+              bucket_total: undefined,
+              bucket_success: undefined,
+              bucket_failed: undefined
+            });
+            if (value.success_items !== undefined) visitChildren(value.success_items, bucketContext(ownContext, 'bucket'));
+            if (value.successful_items !== undefined) visitChildren(value.successful_items, bucketContext(ownContext, 'bucket'));
+            if (value.failed_items !== undefined) visitChildren(value.failed_items, bucketContext(ownContext, 'bucket'));
+            if (value.skipped_items !== undefined) visitChildren(value.skipped_items, bucketContext(ownContext, 'bucket'));
+            if (value.partial_apps !== undefined) visitChildren(value.partial_apps, { ...ownContext, result_kind: 'partial', item_kind: 'app' });
+            if (value.partial_items !== undefined) visitChildren(value.partial_items, bucketContext(ownContext, 'bucket'));
+            if (value.cleanup_items !== undefined) visitChildren(value.cleanup_items, bucketContext(ownContext, 'cleanup'));
+            if (value.cleanup_results !== undefined) visitChildren(value.cleanup_results, bucketContext(ownContext, 'cleanup'));
+            if (value.sync_items !== undefined) visitChildren(value.sync_items, bucketContext(ownContext, 'bucket'));
+            if (value.items !== undefined) visitChildren(value.items, bucketContext(ownContext, 'bucket'));
+            if (value.app_results !== undefined) visitChildren(value.app_results, ownContext);
+            if (value.buckets !== undefined) visitChildren(value.buckets, bucketContext(ownContext, 'bucket'));
+            if (value.results !== undefined) {
+              const results = value.results;
+              if (Array.isArray(results)) {
+                results.forEach(item => visit(item, bucketContext(ownContext, 'bucket'), options));
+                childCount += results.length;
+              } else if (results && typeof results === 'object') {
+                Object.entries(results).forEach(([key, item]) => {
+                  const nextContext = { ...ownContext };
+                  if (nextContext.app_id === undefined || nextContext.app_id === '') nextContext.app_id = key;
+                  visit(item, nextContext, options);
+                });
+                childCount += Object.keys(results).length;
+              }
+            }
+            if (value.data !== undefined && value.data !== value) {
+              const data = value.data;
+              if (Array.isArray(data)) {
+                data.forEach(item => visit(item, ownContext, options));
+                childCount += data.length;
+              } else if (data && typeof data === 'object') {
+                Object.entries(data).forEach(([key, item]) => {
+                  const nextContext = { ...ownContext };
+                  if (nextContext.app_id === undefined || nextContext.app_id === '') nextContext.app_id = key;
+                  visit(item, nextContext, options);
+                });
+                childCount += Object.keys(data).length;
+              }
+            }
+            // 外层 APP 结果没有桶级 results（例如无注入记录、应用已删除）时仍显示一条 APP 级结果。
+            if (childCount === 0 && looksLikeGlobalSyncOutcome(value, ownContext)) add(value, ownContext);
+          };
+
+          // 新合同优先，旧 result_json 作为回退；所有来源通过 identity 去重。
+          visit(globalSyncProgress.success_items, { result_kind: 'success' });
+          visit(globalSyncProgress.successful_items, { result_kind: 'success' });
+          visit(globalSyncProgress.failed_items, { result_kind: 'failed' });
+          visit(globalSyncProgress.skipped_items, { result_kind: 'skipped' });
+          visit(globalSyncProgress.partial_apps, { result_kind: 'partial', item_kind: 'app' });
+          visit(globalSyncProgress.partial_items, { result_kind: 'partial' });
+          visit(globalSyncProgress.sync_items);
+          visit(globalSyncProgress.app_results);
+          visit(globalSyncProgress.result_summary);
+          visit(globalSyncProgress.result);
+          visit(globalSyncProgress.results);
+          return items;
+        }
+
+        const globalSyncResultItems = computed(() => collectGlobalSyncResultItems());
+        const globalSyncSuccessItems = computed(() => globalSyncResultItems.value.filter(
+          item => item.is_success && item.item_kind !== 'cleanup' && item.phase !== 'cleanup'
+        ));
+        const globalSyncFailureItems = computed(() => globalSyncResultItems.value.filter(item => item.is_failure));
+        const globalSyncPartialItems = computed(() => globalSyncResultItems.value.filter(item => item.is_partial));
+        const globalSyncPartialApps = computed(() => globalSyncPartialItems.value.filter(item => item.item_kind === 'app'));
+        const globalSyncSkippedItems = computed(() => globalSyncResultItems.value.filter(item => item.is_skipped));
+        const globalSyncResultSummary = computed(() => {
+          const summary = globalSyncProgress.result_summary && typeof globalSyncProgress.result_summary === 'object'
+            ? globalSyncProgress.result_summary : {};
+          const summaryCount = (keys, fallback) => {
+            for (const key of keys) {
+              if (!Object.prototype.hasOwnProperty.call(summary, key)) continue;
+              const number = Number(summary[key]);
+              if (Number.isFinite(number) && number >= 0) return number;
+            }
+            return fallback;
+          };
+          // 旧快照的桶结果只带名称、不带 bucket_id；按阶段排除 APP/任务占位项，
+          // 才能让历史 B2 成功项也进入桶对象统计。
+          const isPrimaryBucketItem = item => !['cleanup', 'app', 'task'].includes(String(item.phase || '').toLowerCase())
+            && item.item_kind !== 'app';
+          const derivedBucketSuccess = globalSyncSuccessItems.value.filter(isPrimaryBucketItem).length;
+          const derivedBucketFailed = globalSyncFailureItems.value.filter(isPrimaryBucketItem).length;
+          const derivedPartialApps = globalSyncPartialApps.value.length;
+          // 归一化摘要是新合同的权威计数；只有旧接口没有该字段时才回退
+          // 到进度标量或由列表推导，避免旧 success=桶数把 APP 数再次误报。
+          const appSuccess = summaryCount(
+            ['app_success_count', 'app_success'],
+            Number(globalSyncProgress.success || 0)
+          );
+          const appPartial = summaryCount(
+            ['app_partial_count', 'app_partial', 'partial_count'],
+            Number(globalSyncProgress.app_partial_count || globalSyncProgress.partial || globalSyncProgress.partial_success || derivedPartialApps)
+          );
+          const appFailed = summaryCount(
+            ['app_failed_count', 'app_failed'],
+            Number(globalSyncProgress.fail || 0)
+          );
+          const appSkipped = summaryCount(
+            ['app_skipped_count', 'app_skipped'],
+            Number(globalSyncProgress.skipped || globalSyncSkippedItems.value.length)
+          );
+          const appSuccessful = summaryCount(
+            ['app_successful_count', 'successful_app_count'],
+            appSuccess + appPartial
+          );
+          const bucketSuccess = summaryCount(
+            ['bucket_success_count', 'bucket_success'],
+            Number(globalSyncProgress.bucket_success_count || globalSyncProgress.bucket_success || derivedBucketSuccess)
+          );
+          const bucketFailed = summaryCount(
+            ['bucket_failed_count', 'bucket_fail_count', 'bucket_fail', 'bucket_failed'],
+            Number(globalSyncProgress.bucket_failed_count || globalSyncProgress.bucket_fail || derivedBucketFailed)
+          );
+          const bucketTotal = summaryCount(
+            ['bucket_total'],
+            Math.max(bucketSuccess + bucketFailed, Number(globalSyncProgress.bucket_total || 0))
+          );
+          return {
+            appTotal: summaryCount(['app_total'], globalSyncTotal.value),
+            appSuccess,
+            appPartial,
+            appSuccessful,
+            appFailed,
+            appSkipped,
+            itemTotal: summaryCount(['item_total'], globalSyncResultItems.value.length),
+            itemSuccess: summaryCount(['success_item_count'], globalSyncSuccessItems.value.length),
+            itemFailed: summaryCount(['failed_item_count'], globalSyncFailureItems.value.length),
+            itemPartial: summaryCount(['partial_item_count'], globalSyncPartialItems.value.length),
+            itemSkipped: summaryCount(['skipped_item_count'], globalSyncSkippedItems.value.length),
+            bucketTotal,
+            bucketSuccess,
+            bucketFailed
+          };
+        });
+        const globalSyncCurrentObject = computed(() => {
+          if (!globalSyncBusy.value) return '';
+          const currentAppId = Number(globalSyncProgress.current_app_id || 0);
+          if (currentAppId > 0) return 'config/' + currentAppId + '.enc';
+          return '';
+        });
+        const globalSyncPhaseLabel = phase => ({
+          sync: '桶上传', cleanup: '旧快照清理', app: '应用检查', task: '任务级'
+        }[String(phase || '')] || '同步处理');
+        const globalSyncReasons = computed(() => (
+          Array.isArray(globalSyncProgress.reasons)
+            ? globalSyncProgress.reasons.filter(reason => String(reason || '').trim() !== '')
+            : []
+        ));
+        const globalSyncResultQueryText = computed(() => String(globalSyncResultQuery.value || '').trim().toLowerCase());
+        const globalSyncVisibleResultItems = computed(() => {
+          const filter = String(globalSyncResultFilter.value || 'all');
+          const query = globalSyncResultQueryText.value;
+          return globalSyncResultItems.value.filter(item => {
+            if (filter === 'success' && !item.is_success) return false;
+            if (filter === 'failed' && !item.is_failure) return false;
+            if (filter === 'partial' && !(item.is_partial && item.item_kind === 'app')) return false;
+            if (filter === 'skipped' && !item.is_skipped) return false;
+            if (!query) return true;
+            const haystack = [
+              item.app_label, item.app_id, item.app_key, item.package_name,
+              item.bucket_name, item.provider, item.config_scope, item.object_key, item.display_message
+            ].join(' ').toLowerCase();
+            return haystack.includes(query);
+          });
+        });
+        const globalSyncHasResultData = computed(() => (
+          globalSyncResultItems.value.length > 0
+          || Number(globalSyncProgress.success || 0) > 0
+          || Number(globalSyncProgress.fail || 0) > 0
+          || Number(globalSyncProgress.partial || globalSyncProgress.partial_success || globalSyncProgress.app_partial_count || 0) > 0
+          || Number(globalSyncProgress.bucket_success || globalSyncProgress.bucket_success_count || 0) > 0
+          || Number(globalSyncProgress.bucket_fail || globalSyncProgress.bucket_failed_count || globalSyncProgress.bucket_fail_count || 0) > 0
+          || globalSyncSkippedItems.value.length > 0
         ));
 
         function globalSyncErrorMessage(error, fallback) {
@@ -2288,22 +3043,62 @@
             globalSyncProgress.total = 0;
             globalSyncProgress.expected_total = 0;
             globalSyncProgress.current_app = '';
+            globalSyncProgress.current_app_id = 0;
             globalSyncProgress.current_bucket = '';
             globalSyncProgress.success = 0;
             globalSyncProgress.fail = 0;
+            globalSyncProgress.skipped = 0;
+            globalSyncProgress.app_success_count = 0;
+            globalSyncProgress.app_successful_count = 0;
+            globalSyncProgress.app_failed_count = 0;
+            globalSyncProgress.app_skipped_count = 0;
+            globalSyncProgress.partial = 0;
+            globalSyncProgress.partial_success = 0;
+            globalSyncProgress.app_partial_count = 0;
+            globalSyncProgress.bucket_success = 0;
+            globalSyncProgress.bucket_fail = 0;
+            globalSyncProgress.bucket_total = 0;
+            globalSyncProgress.bucket_success_count = 0;
+            globalSyncProgress.bucket_failed_count = 0;
+            globalSyncProgress.bucket_fail_count = 0;
+            globalSyncProgress.reasons = [];
+            globalSyncProgress.result = {};
+            globalSyncProgress.results = {};
+            globalSyncProgress.result_summary = {};
+            globalSyncProgress.app_results = [];
+            globalSyncProgress.partial_apps = [];
+            globalSyncProgress.partial_items = [];
+            globalSyncProgress.cleanup_items = [];
+            globalSyncProgress.success_items = [];
+            globalSyncProgress.successful_items = [];
+            globalSyncProgress.failed_items = [];
+            globalSyncProgress.skipped_items = [];
+            globalSyncProgress.sync_items = [];
+            globalSyncResultFilter.value = 'all';
+            globalSyncResultQuery.value = '';
           }
           const status = String(data.status || data.state || '').trim();
-          const resultItems = data.results && typeof data.results === 'object'
-            ? (Array.isArray(data.results) ? data.results : Object.values(data.results)) : [];
+          // 兼容旧版 pushAllConfigs 的 data.data[APPID] 结果地图；新状态快照
+          // 优先使用 results/app_results，避免把外层任务字段当作应用条目。
+          const fallbackResultMap = data.results && typeof data.results === 'object'
+            ? data.results
+            : (data.data && typeof data.data === 'object' && !data.data.status && !data.data.job_id
+              ? data.data : {});
+          const resultItems = Array.isArray(fallbackResultMap)
+            ? fallbackResultMap
+            : (fallbackResultMap && typeof fallbackResultMap === 'object' ? Object.values(fallbackResultMap) : []);
           const success = Number.isFinite(Number(data.success)) ? Number(data.success)
-            : Number.isFinite(Number(data.success_count)) ? Number(data.success_count)
+            : Number.isFinite(Number(data.app_success_count)) ? Number(data.app_success_count)
+              : Number.isFinite(Number(data.success_count)) ? Number(data.success_count)
               : resultItems.filter(item => Number(item && item.code) === 200).length;
           const fail = Number.isFinite(Number(data.fail)) ? Number(data.fail)
-            : Number.isFinite(Number(data.fail_count)) ? Number(data.fail_count)
+            : Number.isFinite(Number(data.app_failed_count)) ? Number(data.app_failed_count)
+              : Number.isFinite(Number(data.fail_count)) ? Number(data.fail_count)
               : resultItems.filter(item => Number(item && item.code) !== 200).length;
+          const partialFlag = Number(data.partial || data.partial_success || data.app_partial_count || 0) > 0;
           const inferredStatus = status || (
             data.code !== undefined
-              ? (Number(data.code) === 200 && fail === 0 ? 'completed' : 'partial_failure')
+              ? (Number(data.code) === 200 && fail === 0 && !partialFlag ? 'completed' : 'partial_failure')
               : ''
           );
           if (inferredStatus) globalSyncProgress.status = inferredStatus;
@@ -2311,9 +3106,24 @@
             'started_at', 'updated_at', 'finished_at'].forEach(field => {
             if (data[field] !== undefined) globalSyncProgress[field] = String(data[field] || '');
           });
-          ['total', 'expected_total', 'current', 'processed'].forEach(field => {
+          ['total', 'expected_total', 'current', 'processed', 'skipped', 'app_success_count', 'app_successful_count',
+            'app_failed_count', 'app_skipped_count', 'partial', 'partial_success', 'app_partial_count',
+            'bucket_success', 'bucket_fail', 'bucket_total', 'bucket_success_count',
+            'bucket_failed_count', 'bucket_fail_count', 'current_app_id'].forEach(field => {
             if (data[field] !== undefined) globalSyncProgress[field] = Number(data[field]) || 0;
           });
+          if (Array.isArray(data.reasons)) globalSyncProgress.reasons = data.reasons;
+          ['result', 'results', 'result_summary'].forEach(field => {
+            if (data[field] && typeof data[field] === 'object') globalSyncProgress[field] = data[field];
+          });
+          ['app_results', 'partial_apps', 'partial_items', 'cleanup_items', 'success_items', 'successful_items', 'failed_items', 'skipped_items', 'sync_items'].forEach(field => {
+            if (Array.isArray(data[field])) globalSyncProgress[field] = data[field];
+          });
+          if (!data.result && !data.results && !data.app_results && data.data
+            && typeof data.data === 'object' && !data.data.status && !data.data.job_id) {
+            globalSyncProgress.result = data.data;
+            globalSyncProgress.results = data.data;
+          }
           globalSyncProgress.success = success;
           globalSyncProgress.fail = fail;
           globalSyncProgress.success_count = success;
@@ -2419,8 +3229,10 @@
             const result = json.data || json;
             applyGlobalSyncSnapshot(result);
             const message = result.message || json.message || '已启动全局配置同步';
-            if (['partial_failure', 'failed'].includes(String(result.status || ''))) {
+            if (['partial_failure', 'partial', 'partial_success'].includes(String(result.status || ''))) {
               ElementPlus.ElMessage.warning(message);
+            } else if (String(result.status || '') === 'failed') {
+              ElementPlus.ElMessage.error(message);
             } else {
               ElementPlus.ElMessage.success(message);
             }
@@ -3876,7 +4688,20 @@ async function clearS3Config() {
           globalSyncCurrent,
           globalSyncProgressPercent,
           globalSyncStatusDotClass,
+          globalSyncResultFilter,
+          globalSyncResultQuery,
+          globalSyncResultItems,
+          globalSyncSuccessItems,
           globalSyncFailureItems,
+          globalSyncPartialItems,
+          globalSyncPartialApps,
+          globalSyncSkippedItems,
+          globalSyncResultSummary,
+          globalSyncCurrentObject,
+          globalSyncPhaseLabel,
+          globalSyncVisibleResultItems,
+          globalSyncReasons,
+          globalSyncHasResultData,
           openGlobalSyncCenter,
           startGlobalConfigSync,
           observeGlobalSyncMutation,

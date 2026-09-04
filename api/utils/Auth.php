@@ -277,9 +277,45 @@ class Auth
      * 以前这里仅启动 push_config.php（单 APPID worker），同步中心看不到该
      * 任务，且连续修改时每个入口各自推送。现在统一写入 ConfigSyncState 并由
      * push_all_configs.php 合并执行，弹窗、链接、跳转等调用方无需复制调度代码。
+     * 同步原因由调用模块自动归类，右下角列表可以直接说明是哪一类配置触发了更新。
      */
-    public static function afterConfigChange(PDO $pdo, int $apkId) {
+    public static function afterConfigChange(PDO $pdo, int $apkId, string $reason = '') {
         self::reset_redis($apkId);
+
+        // 老调用方只传 APPID；通过调用文件补齐稳定的模块标签，避免修改几十个
+        // 配置入口的函数签名。标签只用于状态摘要，不写入配置正文或敏感字段。
+        $reason = trim($reason);
+        if ($reason === '') {
+            $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2);
+            $callerFile = basename((string)($trace[1]['file'] ?? ''));
+            $moduleLabels = [
+                'config.php' => '基础开关',
+                'popup_image.php' => '图片弹窗',
+                'popup_message.php' => '文字弹窗',
+                'popup_input.php' => '输入框弹窗',
+                'popup_html.php' => 'HTML 弹窗',
+                'popup_kill.php' => '通杀拦截',
+                'keyword_block.php' => '关键词拦截',
+                'window_block.php' => '窗口拦截',
+                'sensitive.php' => '敏感应用',
+                'dex.php' => 'DEX 配置',
+                'view.php' => 'View 配置',
+                'newactivity.php' => 'Activity 配置',
+                'uri_hijack.php' => 'URI 劫持',
+                'sp_get.php' => 'SP 读取劫持',
+                'sp_put.php' => 'SP 写入劫持',
+                'sp_override.php' => 'SP 重写',
+                'redirect.php' => '跳转规则',
+                'click_param_asset.php' => '点击参数资源',
+                'popup_image_asset.php' => '图片资源',
+                'app.php' => '应用信息或复用关系',
+                'system_setting.php' => '系统运行开关',
+                'ApiDomainAutomation.php' => 'API 域名池',
+                'ConfigDelivery.php' => '全局分发配置',
+            ];
+            $label = $moduleLabels[$callerFile] ?? '运行时配置';
+            $reason = '应用 #' . (int)$apkId . ' · ' . $label;
+        }
 
         // API 总入口通常已经加载该工具；独立脚本/测试环境则按需加载。
         $statePath = __DIR__ . '/ConfigSyncState.php';
@@ -288,7 +324,7 @@ class Auth
         }
         if (function_exists('configSyncStateScheduleWorker')) {
             try {
-                $scheduled = configSyncStateScheduleWorker($pdo, '应用 #' . (int)$apkId . ' 配置变更');
+                $scheduled = configSyncStateScheduleWorker($pdo, $reason);
                 if (!empty($scheduled['scheduled'])) {
                     return $scheduled['snapshot'] ?? [];
                 }

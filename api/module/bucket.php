@@ -1055,7 +1055,7 @@ function getConfigSyncStatus(PDO $pdo, array $input) {
     $snapshot = configSyncStateRead($pdo);
     $snapshot['poll_after_ms'] = in_array((string)($snapshot['status'] ?? ''), ['queued', 'running'], true)
         ? 750 : 5000;
-    $snapshotCode = (string)($snapshot['status'] ?? 'idle') === 'partial_failure'
+    $snapshotCode = in_array((string)($snapshot['status'] ?? 'idle'), ['partial_failure', 'partial', 'partial_success'], true)
         ? 207 : (in_array((string)($snapshot['status'] ?? 'idle'), ['queued', 'running'], true)
             ? 202 : ((string)($snapshot['status'] ?? 'idle') === 'failed' ? 500 : 200));
     return $snapshot + [
@@ -1108,12 +1108,15 @@ function pushAllConfigs(PDO $pdo, array $input) {
     } catch (Throwable $e) {
         try {
             $failedSnapshot = configSyncStateRead($pdo);
-            configSyncStateMarkFinished($pdo, [
-                'total' => (int)($failedSnapshot['expected_total'] ?? 0),
-                'success' => (int)($failedSnapshot['success'] ?? 0),
-                'fail' => max(1, (int)($failedSnapshot['fail'] ?? 0)),
-                'message' => $e->getMessage(),
-            ], $jobId, $e);
+            // 保留异步 worker 已经写入的 APP/桶明细，异常响应只补充错误信息，
+            // 避免终态把此前成功的 B2 对象覆盖掉。
+            $failureResult = is_array($failedSnapshot['result'] ?? null)
+                ? $failedSnapshot['result'] : [];
+            $failureResult['total'] = (int)($failedSnapshot['expected_total'] ?? 0);
+            $failureResult['success'] = (int)($failedSnapshot['success'] ?? 0);
+            $failureResult['fail'] = max(1, (int)($failedSnapshot['fail'] ?? 0));
+            $failureResult['message'] = $e->getMessage();
+            configSyncStateMarkFinished($pdo, $failureResult, $jobId, $e);
         } catch (Throwable $ignored) {
             // 状态固化失败不覆盖真实同步异常。
         }
