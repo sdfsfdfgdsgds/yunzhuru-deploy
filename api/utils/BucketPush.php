@@ -582,7 +582,7 @@ if (!function_exists('bucketPushLoadPublicAppMeta')) {
                 $meta[$id] = [
                     'app_id' => $id,
                     // 名称为空时仍给出稳定的可读标签，避免同步中心只显示“应用 #30”。
-                    'app_name' => trim((string)($row['app_name'] ?? '')) ?: ('未命名应用 #' . $id),
+                    'app_name' => trim((string)($row['app_name'] ?? '')) ?: '未命名应用',
                     'package_name' => trim((string)($row['package_name'] ?? '')),
                 ];
             }
@@ -602,7 +602,7 @@ if (!function_exists('bucketPushAttachPublicAppMeta')) {
         if ($objectKey === '' && $appId > 0) $objectKey = "config/{$appId}.enc";
         $result['app_id'] = $appId;
         $result['app_name'] = trim((string)($meta['app_name'] ?? ($result['app_name'] ?? '')));
-        if ($result['app_name'] === '' && $appId > 0) $result['app_name'] = '未命名应用 #' . $appId;
+        if ($result['app_name'] === '' && $appId > 0) $result['app_name'] = '未命名应用';
         $result['package_name'] = trim((string)($meta['package_name'] ?? ($result['package_name'] ?? '')));
         $result['config_scope'] = trim((string)($result['config_scope'] ?? '应用完整配置')) ?: '应用完整配置';
         $result['object_key'] = $objectKey;
@@ -684,15 +684,17 @@ function pushAllConfigsToBucketsUnlocked(PDO $pdo): array {
     $index = 0;
     foreach ($appIds as $appId) {
         $index++;
+        $appDisplayName = trim((string)($appMeta[(int)$appId]['app_name'] ?? ''));
+        if ($appDisplayName === '') $appDisplayName = '未命名应用';
         if ($syncJobId !== '') {
             try {
                 configSyncStateMarkProgress($pdo, [
                     'phase' => 'sync',
                     'phase_label' => '正在同步',
-                    'message' => '正在同步应用 #' . (int)$appId . (!empty($appMeta[(int)$appId]['app_name']) ? ' · ' . $appMeta[(int)$appId]['app_name'] : '') . ' 的配置',
+                    'message' => '正在同步应用 #' . (int)$appId . ' · ' . $appDisplayName . ' 的配置',
                     'current_index' => $index - 1,
                     'current_app_id' => (int)$appId,
-                    'current_app' => '应用 #' . (int)$appId . (!empty($appMeta[(int)$appId]['app_name']) ? ' · ' . $appMeta[(int)$appId]['app_name'] : ''),
+                    'current_app' => '应用 #' . (int)$appId . ' · ' . $appDisplayName,
                     'current_bucket' => '全部启用配置桶',
                 ], $syncJobId);
             } catch (Throwable $ignored) {
@@ -735,7 +737,7 @@ function pushAllConfigsToBucketsUnlocked(PDO $pdo): array {
                     'bucket_fail' => $bucketFail,
                     'cleanup_fail' => $cleanupFail,
                     'current_app_id' => (int)$appId,
-                    'current_app' => '应用 #' . (int)$appId . (!empty($appMeta[(int)$appId]['app_name']) ? ' · ' . $appMeta[(int)$appId]['app_name'] : ''),
+                    'current_app' => '应用 #' . (int)$appId . ' · ' . $appDisplayName,
                     'current_bucket' => '全部启用配置桶',
                     // 每完成一个 APP 就把其公开结果写入状态，抽屉可实时列出已更新对象。
                     'result' => ['data' => $results],
