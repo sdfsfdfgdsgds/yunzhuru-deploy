@@ -287,6 +287,217 @@
       width: 60% !important;
       min-width: 720px;
     }
+
+    /* 全局配置同步中心沿用崩溃系统的右下角入口；按钮固定在当前业务页视口，
+       即使桶列表滚动或编辑弹窗打开也始终可见。 */
+    .config-sync-center__badge {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      z-index: 2000;
+    }
+    .config-sync-center__launcher {
+      width: 52px;
+      height: 52px;
+      border: 0;
+      border-radius: 50%;
+      box-shadow: 0 8px 24px rgb(64 158 255 / 35%);
+    }
+    .config-sync-center__launcher.is-running,
+    .config-sync-center__launcher.is-queued {
+      box-shadow: 0 8px 24px rgb(230 162 60 / 38%);
+    }
+    .config-sync-center__launcher.is-partial_failure,
+    .config-sync-center__launcher.is-failed {
+      box-shadow: 0 8px 24px rgb(245 108 108 / 38%);
+    }
+    .config-sync-center__launcher-icon {
+      display: inline-block;
+      font-size: 21px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .config-sync-center__launcher-icon.is-spinning {
+      animation: config-sync-rotate 1.1s linear infinite;
+    }
+    @keyframes config-sync-rotate {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .config-sync-center__drawer {
+      width: min(92vw, 440px) !important;
+    }
+    .config-sync-center__overlay {
+      background: rgb(15 23 42 / 56%);
+      backdrop-filter: blur(2px);
+      -webkit-backdrop-filter: blur(2px);
+    }
+    .config-sync-center__drawer .el-drawer__header {
+      margin-bottom: 0;
+      padding-bottom: 14px;
+      border-bottom: 1px solid #eef2f6;
+    }
+    .config-sync-center__drawer .el-drawer__body {
+      padding: 14px 18px 20px;
+      overflow-y: auto;
+    }
+    .config-sync-center__drawer .el-drawer__footer {
+      padding: 12px 18px 16px;
+      border-top: 1px solid #eef2f6;
+    }
+    .config-sync-center__header,
+    .config-sync-center__footer,
+    .config-sync-center__details-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .config-sync-center__title {
+      color: #1f2937;
+      font-size: 17px;
+      font-weight: 700;
+    }
+    .config-sync-center__subtitle {
+      display: flex;
+      align-items: center;
+      margin-top: 5px;
+      color: #6b7280;
+      font-size: 12px;
+    }
+    .config-sync-center__status-dot {
+      width: 7px;
+      height: 7px;
+      margin-right: 6px;
+      background: #cbd5e1;
+      border-radius: 50%;
+    }
+    .config-sync-center__status-dot.is-success { background: #22c55e; }
+    .config-sync-center__status-dot.is-warning {
+      background: #f59e0b;
+      animation: config-sync-pulse 1.2s ease-in-out infinite;
+    }
+    .config-sync-center__status-dot.is-danger { background: #ef4444; }
+    .config-sync-center__summary {
+      margin-bottom: 14px;
+      padding: 12px 13px;
+      border: 1px solid #dbeafe;
+      border-radius: 9px;
+      background: #eff6ff;
+    }
+    .config-sync-center__summary.is-completed {
+      border-color: #bbf7d0;
+      background: #f0fdf4;
+    }
+    .config-sync-center__summary.is-partial_failure,
+    .config-sync-center__summary.is-failed {
+      border-color: #fecaca;
+      background: #fef2f2;
+    }
+    .config-sync-center__summary-message {
+      margin-bottom: 10px;
+      color: #334155;
+      font-size: 13px;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+    .config-sync-center__metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px;
+      margin-bottom: 14px;
+    }
+    .config-sync-center__metric {
+      min-width: 0;
+      padding: 10px 11px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      background: #fafafa;
+    }
+    .config-sync-center__metric span,
+    .config-sync-center__details-row span {
+      color: #6b7280;
+      font-size: 12px;
+    }
+    .config-sync-center__metric strong {
+      display: block;
+      margin-top: 4px;
+      overflow: hidden;
+      color: #111827;
+      font-size: 18px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .config-sync-center__metric small {
+      display: block;
+      margin-top: 2px;
+      color: #94a3b8;
+      font-size: 11px;
+    }
+    .config-sync-center__metric.is-success strong { color: #15803d; }
+    .config-sync-center__metric.is-danger strong { color: #dc2626; }
+    .config-sync-center__details {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 14px;
+      padding: 11px 12px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+    }
+    .config-sync-center__details-row {
+      align-items: flex-start;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .config-sync-center__details-row strong {
+      max-width: 68%;
+      overflow: hidden;
+      color: #334155;
+      text-align: right;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .config-sync-center__failures-title {
+      margin: 0 0 8px;
+      color: #b91c1c;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .config-sync-center__failure {
+      margin-bottom: 8px;
+      padding: 9px 10px;
+      border: 1px solid #fecaca;
+      border-radius: 7px;
+      background: #fff7f7;
+      color: #7f1d1d;
+      font-size: 12px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+    .config-sync-center__failure strong { color: #991b1b; }
+    .config-sync-center__failure code {
+      display: block;
+      margin-top: 3px;
+      color: #9f1239;
+      font-size: 11px;
+      word-break: break-all;
+    }
+    .config-sync-center__meta {
+      display: grid;
+      gap: 3px;
+      color: #94a3b8;
+      font-size: 11px;
+    }
+    .config-sync-center__meta div {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .config-sync-center__meta strong { color: #64748b; font-weight: 500; }
+    @keyframes config-sync-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .35; }
+    }
     .drawer-body { padding: 0 4px 24px 0; }
     .drawer-header {
       display: flex;
@@ -394,6 +605,8 @@
       }
       .stats-tab-caption { align-items: flex-start; flex-direction: column; }
       .bucket-files-drawer { width: 90% !important; }
+      .config-sync-center__badge { right: 14px; bottom: 14px; }
+      .config-sync-center__launcher { width: 48px; height: 48px; }
       .dialog-switches {
         align-items: flex-start;
         flex-direction: column;
@@ -1243,10 +1456,127 @@
       <el-empty v-else-if="!filesLoading" description="尚未读取文件清单"></el-empty>
     </div>
   </el-drawer>
+
+  <!-- 全局配置同步中心：与崩溃系统一致，入口固定在右下角并在抽屉内展示权威进度。 -->
+  <el-badge
+    class="config-sync-center__badge"
+    :value="syncBadgeValue"
+    :hidden="syncBadgeValue === 0"
+    :max="99">
+    <el-button
+      class="config-sync-center__launcher"
+      :class="'is-' + (syncProgress.status || 'idle')"
+      :type="syncLauncherType"
+      circle
+      aria-label="打开全局配置同步中心"
+      title="打开全局配置同步中心"
+      @click="openSyncCenter">
+      <span class="config-sync-center__launcher-icon" :class="{ 'is-spinning': syncBusy }">↻</span>
+    </el-button>
+  </el-badge>
+
+  <el-drawer
+    v-model="syncCenterVisible"
+    class="config-sync-center__drawer"
+    modal-class="config-sync-center__overlay"
+    direction="rtl"
+    size="min(92vw, 440px)"
+    append-to-body
+    :destroy-on-close="false">
+    <template #header>
+      <div class="config-sync-center__header">
+        <div>
+          <div class="config-sync-center__title">全局配置同步</div>
+          <div class="config-sync-center__subtitle">
+            <span class="config-sync-center__status-dot" :class="syncStatusDotClass" aria-hidden="true"></span>
+            {{ syncProgress.phase_label || syncStatusLabel }}
+            <span v-if="syncBusy && syncTotal > 0"> · {{ syncCurrent }}/{{ syncTotal }}</span>
+          </div>
+        </div>
+        <el-tag :type="syncStatusTagType" size="small" effect="light">{{ syncStatusLabel }}</el-tag>
+      </div>
+    </template>
+
+    <div class="config-sync-center__body" aria-live="polite">
+      <section class="config-sync-center__summary config-sync-summary" :class="'is-' + (syncProgress.status || 'idle')">
+        <div class="config-sync-center__summary-message config-sync-summary__message">
+          {{ syncProgress.message || '等待配置变更' }}
+        </div>
+        <el-progress
+          :percentage="syncProgressPercent"
+          :stroke-width="9"
+          :indeterminate="syncBusy && syncTotal === 0"
+          :duration="2"
+          :status="syncProgress.status === 'completed' ? 'success' : (['partial_failure', 'failed'].includes(syncProgress.status) ? 'exception' : undefined)">
+        </el-progress>
+      </section>
+
+      <div class="config-sync-center__metrics">
+        <div class="config-sync-center__metric config-sync-metric">
+          <span>计划应用</span>
+          <strong>{{ formatNumber(syncProgress.total || syncProgress.expected_total || 0) }}</strong>
+        </div>
+        <div class="config-sync-center__metric config-sync-metric">
+          <span>当前进度</span>
+          <strong>{{ formatNumber(syncCurrent) }} / {{ formatNumber(syncTotal) }}</strong>
+        </div>
+        <div class="config-sync-center__metric config-sync-metric is-success">
+          <span>同步成功</span>
+          <strong>{{ formatNumber(syncProgress.success || syncProgress.success_count || 0) }}</strong>
+        </div>
+        <div class="config-sync-center__metric config-sync-metric is-danger">
+          <span>同步失败</span>
+          <strong>{{ formatNumber(syncProgress.fail || syncProgress.fail_count || 0) }}</strong>
+        </div>
+      </div>
+
+      <section class="config-sync-center__details config-sync-details">
+        <div class="config-sync-center__details-row config-sync-details__row">
+          <span>当前应用</span>
+          <strong :title="syncProgress.current_app || '-'">{{ syncProgress.current_app || '-' }}</strong>
+        </div>
+        <div class="config-sync-center__details-row config-sync-details__row">
+          <span>当前配置桶</span>
+          <strong :title="syncProgress.current_bucket || '-'">{{ syncProgress.current_bucket || '-' }}</strong>
+        </div>
+        <div class="config-sync-center__details-row config-sync-details__row">
+          <span>任务编号</span>
+          <strong class="mono" :title="syncProgress.job_id || '-'">{{ syncProgress.job_id || '-' }}</strong>
+        </div>
+      </section>
+
+      <section v-if="syncFailureItems.length" class="config-sync-center__failures config-sync-failures">
+        <div class="config-sync-center__failures-title config-sync-failures__title">失败明细</div>
+        <article v-for="(item, index) in syncFailureItems" :key="(item.bucket_id || item.bucket || index) + '-' + index" class="config-sync-center__failure config-sync-failure-card">
+          <strong>{{ item.bucket || item.bucket_name || '未知配置桶' }}</strong>
+          <code v-if="item.object_key">{{ item.object_key }}</code>
+          <div>{{ item.message || '配置同步失败' }}</div>
+        </article>
+      </section>
+
+      <section class="config-sync-center__meta config-sync-meta">
+        <div><span>开始</span><strong>{{ syncProgress.started_at ? formatTime(syncProgress.started_at) : '-' }}</strong></div>
+        <div><span>更新</span><strong>{{ syncProgress.updated_at ? formatTime(syncProgress.updated_at) : '-' }}</strong></div>
+        <div><span>完成</span><strong>{{ syncProgress.finished_at ? formatTime(syncProgress.finished_at) : '-' }}</strong></div>
+      </section>
+    </div>
+
+    <template #footer>
+      <div class="config-sync-center__footer">
+        <el-button
+          type="warning"
+          :loading="syncBusy"
+          :disabled="syncBusy"
+          @click="pushAll(false, true)">
+          {{ ['partial_failure', 'failed'].includes(syncProgress.status) ? '重新全量同步' : '同步全部配置' }}
+        </el-button>
+      </div>
+    </template>
+  </el-drawer>
 </div>
 
 <script>
-const { createApp, ref, reactive, computed, watch, onMounted } = Vue;
+const { createApp, ref, reactive, computed, watch, onMounted, onBeforeUnmount } = Vue;
 
 createApp({
   setup() {
@@ -1265,6 +1595,74 @@ createApp({
     const missingFilePage = ref(1);
     const filePageSize = 100;
     const activeBucket = reactive({});
+
+    // 同步中心只保存任务摘要，不缓存配置正文或任何桶凭据；服务端快照是唯一进度来源。
+    const syncCenterVisible = ref(false);
+    const syncStarting = ref(false);
+    const syncStatusSupported = ref(true);
+    const syncProgress = reactive({
+      job_id: '', status: 'idle', phase: 'idle', phase_label: '待命',
+      message: '等待配置变更', total: 0, expected_total: 0,
+      current: 0, processed: 0, success: 0, fail: 0,
+      success_count: 0, fail_count: 0, current_app: '', current_bucket: '',
+      failed_items: [], started_at: '', updated_at: '', finished_at: '',
+    });
+    let syncStatusTimer = null;
+    let syncStatusRequestGeneration = 0;
+    let syncRuntimeActive = false;
+
+    const syncBusy = computed(function () {
+      return syncStarting.value || ['queued', 'running'].includes(String(syncProgress.status || ''));
+    });
+    const syncStatusLabel = computed(function () {
+      return {
+        queued: '排队中', running: '同步中', completed: '已完成',
+        partial_failure: '部分失败', failed: '同步失败', idle: '待命',
+      }[String(syncProgress.status || 'idle')] || '待命';
+    });
+    const syncStatusTagType = computed(function () {
+      return {
+        queued: 'warning', running: 'warning', completed: 'success',
+        partial_failure: 'danger', failed: 'danger', idle: 'info',
+      }[String(syncProgress.status || 'idle')] || 'info';
+    });
+    const syncLauncherType = computed(function () {
+      return {
+        queued: 'warning', running: 'warning', completed: 'success',
+        partial_failure: 'danger', failed: 'danger', idle: 'primary',
+      }[String(syncProgress.status || 'idle')] || 'primary';
+    });
+    const syncBadgeValue = computed(function () {
+      if (syncBusy.value) return 1;
+      if (['partial_failure', 'failed'].includes(String(syncProgress.status || ''))) {
+        return Math.max(1, Number(syncProgress.fail || syncProgress.fail_count || 0));
+      }
+      return 0;
+    });
+    const syncTotal = computed(function () {
+      return Math.max(0, Number(syncProgress.total || syncProgress.expected_total || 0));
+    });
+    const syncCurrent = computed(function () {
+      return Math.max(0, Number(
+        syncProgress.current || syncProgress.processed ||
+        Number(syncProgress.success || syncProgress.success_count || 0)
+          + Number(syncProgress.fail || syncProgress.fail_count || 0)
+      ));
+    });
+    const syncProgressPercent = computed(function () {
+      if (syncTotal.value > 0) return Math.min(100, Math.round((syncCurrent.value / syncTotal.value) * 100));
+      return syncProgress.status === 'completed' ? 100 : 0;
+    });
+    const syncStatusDotClass = computed(function () {
+      const status = String(syncProgress.status || 'idle');
+      if (['completed'].includes(status)) return 'is-success';
+      if (['queued', 'running'].includes(status)) return 'is-warning';
+      if (['partial_failure', 'failed'].includes(status)) return 'is-danger';
+      return 'is-idle';
+    });
+    const syncFailureItems = computed(function () {
+      return Array.isArray(syncProgress.failed_items) ? syncProgress.failed_items : [];
+    });
 
     // 统计详情状态与桶资料管理解耦：统计接口异常时，桶列表仍可独立使用。
     const statsVisible = ref(false);
@@ -1744,6 +2142,132 @@ createApp({
         throw new Error(json.message || 'HTTP ' + response.status);
       }
       return json;
+    }
+
+    /** 将异步同步接口、旧版同步响应和页面写入响应归一为同一份快照。 */
+    function applySyncSnapshot(source) {
+      let data = source && typeof source === 'object' ? source : {};
+      if (data.sync_job && typeof data.sync_job === 'object') data = data.sync_job;
+      // 部分 PHP 响应使用 {code,message,data:{...}} 外壳，进度对象优先取内层 data。
+      if (data.data && typeof data.data === 'object' && (
+        data.data.status || data.data.job_id || data.data.sync_job ||
+        data.data.total !== undefined || data.data.expected_total !== undefined
+      )) {
+        data = data.data.sync_job && typeof data.data.sync_job === 'object' ? data.data.sync_job : data.data;
+      }
+      const incomingJobId = String(data.job_id || '').trim();
+      if (incomingJobId && incomingJobId !== String(syncProgress.job_id || '').trim()) {
+        // 新任务切换时清掉旧一轮失败明细，避免抽屉把历史失败误标为当前失败。
+        syncProgress.failed_items = [];
+        syncProgress.current = 0;
+        syncProgress.processed = 0;
+        syncProgress.total = 0;
+        syncProgress.expected_total = 0;
+        syncProgress.current_app = '';
+        syncProgress.current_bucket = '';
+        syncProgress.success = 0;
+        syncProgress.fail = 0;
+      }
+      const status = String(data.status || data.state || '').trim();
+      const resultItems = data.results && typeof data.results === 'object'
+        ? (Array.isArray(data.results) ? data.results : Object.values(data.results)) : [];
+      const success = Number.isFinite(Number(data.success)) ? Number(data.success)
+        : Number.isFinite(Number(data.success_count)) ? Number(data.success_count)
+          : resultItems.filter(function (item) { return Number(item && item.code) === 200; }).length;
+      const fail = Number.isFinite(Number(data.fail)) ? Number(data.fail)
+        : Number.isFinite(Number(data.fail_count)) ? Number(data.fail_count)
+          : resultItems.filter(function (item) { return Number(item && item.code) !== 200; }).length;
+      const inferredStatus = status || (
+        data.code !== undefined
+          ? (Number(data.code) === 200 && fail === 0 ? 'completed' : 'partial_failure')
+          : ''
+      );
+      if (inferredStatus) syncProgress.status = inferredStatus;
+      if (data.job_id !== undefined) syncProgress.job_id = String(data.job_id || '');
+      if (data.phase !== undefined) syncProgress.phase = String(data.phase || '');
+      if (data.phase_label !== undefined) syncProgress.phase_label = String(data.phase_label || '');
+      if (data.message !== undefined) syncProgress.message = String(data.message || '');
+      if (data.total !== undefined) syncProgress.total = Number(data.total) || 0;
+      if (data.expected_total !== undefined) syncProgress.expected_total = Number(data.expected_total) || 0;
+      if (data.expected_document_total !== undefined) syncProgress.expected_total = Number(data.expected_document_total) || 0;
+      if (data.current !== undefined) syncProgress.current = Number(data.current) || 0;
+      if (data.current_index !== undefined) syncProgress.current = Number(data.current_index) || 0;
+      if (data.processed !== undefined) syncProgress.processed = Number(data.processed) || 0;
+      syncProgress.success = success;
+      syncProgress.fail = fail;
+      syncProgress.success_count = success;
+      syncProgress.fail_count = fail;
+      if (data.current_app !== undefined) syncProgress.current_app = String(data.current_app || '');
+      if (data.current_app_id !== undefined && !syncProgress.current_app) {
+        syncProgress.current_app = Number(data.current_app_id) > 0 ? '应用 #' + Number(data.current_app_id) : '';
+      }
+      if (data.current_bucket !== undefined) syncProgress.current_bucket = String(data.current_bucket || '');
+      if (Array.isArray(data.failed_items)) syncProgress.failed_items = data.failed_items;
+      else if (resultItems.length && fail > 0) {
+        syncProgress.failed_items = resultItems.filter(function (item) { return Number(item && item.code) !== 200; });
+      }
+      ['started_at', 'updated_at', 'finished_at'].forEach(function (field) {
+        if (data[field] !== undefined) syncProgress[field] = String(data[field] || '');
+      });
+      return syncProgress;
+    }
+
+    function clearSyncStatusTimer() {
+      if (syncStatusTimer !== null) clearTimeout(syncStatusTimer);
+      syncStatusTimer = null;
+    }
+    function scheduleSyncStatusPoll(delay) {
+      clearSyncStatusTimer();
+      if (!syncRuntimeActive || !syncStatusSupported.value) return;
+      syncStatusTimer = setTimeout(function () {
+        syncStatusTimer = null;
+        refreshSyncStatus();
+      }, Math.max(0, Number(delay) || 0));
+    }
+
+    /** 轮询服务端任务快照；旧版本没有该方法时退化为手工同步结果展示。 */
+    async function refreshSyncStatus() {
+      if (!syncRuntimeActive && !syncCenterVisible.value) return syncProgress;
+      const requestGeneration = ++syncStatusRequestGeneration;
+      let pollAfterMs = 0;
+      try {
+        const json = await api('getConfigSyncStatus');
+        if (requestGeneration !== syncStatusRequestGeneration) return syncProgress;
+        if (Number(json.code) !== 200) throw new Error(json.message || '读取同步状态失败');
+        syncStatusSupported.value = true;
+        const snapshot = json.data || json;
+        applySyncSnapshot(snapshot);
+        pollAfterMs = Number(snapshot && snapshot.poll_after_ms) || 0;
+        return syncProgress;
+      } catch (error) {
+        // 状态接口尚未部署时不阻断桶编辑；手工同步仍会显示本轮结果。
+        const endpointMissing = /(?:方法未定义|方法不存在|模块不存在|HTTP\s+404)/i.test(
+          getErrorMessage(error, '')
+        );
+        if (requestGeneration === syncStatusRequestGeneration && endpointMissing) {
+          syncStatusSupported.value = false;
+        }
+        return syncProgress;
+      } finally {
+        if (requestGeneration === syncStatusRequestGeneration && syncStatusSupported.value) {
+          scheduleSyncStatusPoll(pollAfterMs > 0 ? pollAfterMs : (syncBusy.value ? 1000 : 5000));
+        }
+      }
+    }
+    function openSyncCenter() {
+      syncCenterVisible.value = true;
+      syncStatusSupported.value = true;
+      refreshSyncStatus();
+    }
+    function startSyncRuntime() {
+      if (syncRuntimeActive) return;
+      syncRuntimeActive = true;
+      refreshSyncStatus();
+    }
+    function stopSyncRuntime() {
+      syncRuntimeActive = false;
+      clearSyncStatusTimer();
+      syncStatusRequestGeneration += 1;
     }
 
     function normalizeBucket(row) {
@@ -2266,6 +2790,17 @@ createApp({
         const json = await api(isEdit.value ? 'updateBucket' : 'addBucket', formPayload());
         if (Number(json.code) !== 200) throw new Error(json.message || '保存失败');
         const result = json.data || {};
+        // 更新桶资料会触发后台全量同步；若服务端已返回任务快照，立即让右下角中心接管轮询。
+        if (result.sync_job || result.job_id || result.status) {
+          syncStatusSupported.value = true;
+          applySyncSnapshot(result);
+          scheduleSyncStatusPoll(0);
+        } else if (Number(result.sync_scheduled) === 1) {
+          // 兼容旧接口：先显示排队态，再尝试读取权威状态。
+          applySyncSnapshot({ status: 'queued', message: '桶配置已保存，等待全局配置同步' });
+          syncStatusSupported.value = true;
+          refreshSyncStatus();
+        }
         const message = result.message || json.message || '保存成功';
         if (Object.prototype.hasOwnProperty.call(result, 'sync_scheduled') && Number(result.sync_scheduled) !== 1) {
           ElementPlus.ElMessage.warning(message);
@@ -2334,6 +2869,15 @@ createApp({
         const result = json.data || {};
         const message = result.message || json.message || successText;
         const syncStatus = result.sync_scheduled;
+        if (result.sync_job || result.job_id || result.status) {
+          syncStatusSupported.value = true;
+          applySyncSnapshot(result);
+          scheduleSyncStatusPoll(0);
+        } else if (Number(syncStatus) === 1) {
+          applySyncSnapshot({ status: 'queued', message: '推送开关已更新，等待全局配置同步' });
+          syncStatusSupported.value = true;
+          refreshSyncStatus();
+        }
         // inject 开关不触发存量同步，后端用 null 表示“不适用”，不应误报调度失败。
         if (syncStatus !== null && syncStatus !== undefined && Number(syncStatus) !== 1) {
           ElementPlus.ElMessage.warning(message);
@@ -2388,18 +2932,38 @@ createApp({
      * 全量同步的业务结果位于 json.data：
      * json.data.message 为摘要，json.data.data 为按 APPID 组织的结果。
      */
-    async function pushAll(refreshFilesAfter) {
-      const confirmed = await ElementPlus.ElMessageBox.confirm(
-        '将所有成功注入应用的当前配置推送到对应存储桶，过程可能需要一段时间。',
-        '同步全部配置',
-        { type: 'info', confirmButtonText: '开始同步', cancelButtonText: '取消' }
-      ).catch(function () { return false; });
-      if (!confirmed) return;
+    async function pushAll(refreshFilesAfter, skipConfirm) {
+      // 页面顶部按钮保留确认步骤；右下角中心按崩溃系统习惯直接启动，避免重复确认。
+      if (!skipConfirm) {
+        const confirmed = await ElementPlus.ElMessageBox.confirm(
+          '将所有成功注入应用的当前配置推送到对应存储桶，过程可能需要一段时间。',
+          '同步全部配置',
+          { type: 'info', confirmButtonText: '开始同步', cancelButtonText: '取消' }
+        ).catch(function () { return false; });
+        if (!confirmed) return;
+      }
       pushing.value = true;
+      syncStarting.value = true;
+      syncStatusSupported.value = true;
+      applySyncSnapshot({
+        status: 'running',
+        phase: 'sync',
+        phase_label: '正在同步',
+        message: '全局配置同步已启动，请稍候…',
+      });
       try {
-        const json = await api('pushAllConfigs');
-        if (Number(json.code) !== 200) throw new Error(json.message || '同步失败');
+        // 新接口只负责排队并立即返回，实际桶写入由后台 worker 完成；旧部署没有该方法时
+        // 回退到原同步接口，保证页面仍可用。
+        let json = await api('startConfigSync');
+        if (Number(json.code) === 404) json = await api('pushAllConfigs');
+        if (Number(json.code) !== 200 && Number(json.code) !== 409) {
+          throw new Error(json.message || '同步失败');
+        }
         const result = json.data || {};
+        if (json.sync_job || result.sync_job || result.status || result.job_id) {
+          applySyncSnapshot(json.sync_job || result.sync_job || result);
+          scheduleSyncStatusPoll(Number(result.poll_after_ms) || 0);
+        }
         const appResults = result.data && typeof result.data === 'object' ? result.data : {};
         const resultItems = Object.values(appResults);
         const derivedSuccess = resultItems.filter(function (item) { return Number(item && item.code) === 200; }).length;
@@ -2410,19 +2974,42 @@ createApp({
         const message = result.message || json.message || (
           '同步完成：成功 ' + successCount + '，失败 ' + failCount + '，共 ' + resultItems.length + ' 个应用'
         );
-        if (failCount > 0 && successCount > 0) {
+        // 旧版接口直接返回整轮结果；异步接口则由状态轮询持续更新，避免提前覆盖“同步中”。
+        if (!(json.sync_job || result.sync_job || result.status || result.job_id)) {
+          applySyncSnapshot({
+            status: failCount > 0 ? (successCount > 0 ? 'partial_failure' : 'failed') : 'completed',
+            phase: 'done', phase_label: failCount > 0 ? '同步完成（有失败）' : '同步完成',
+            message: message, total: Number(result.total) || resultItems.length,
+            current: Number(result.total) || resultItems.length,
+            success: successCount, fail: failCount, results: resultItems,
+            finished_at: new Date().toISOString(),
+          });
+        }
+        const asyncStatus = String(result.status || '');
+        const asyncStarted = Number(result.started || result.sync_scheduled || 0) === 1
+          || ['queued', 'running'].includes(asyncStatus);
+        if (['partial_failure'].includes(asyncStatus) || (failCount > 0 && successCount > 0)) {
           ElementPlus.ElMessage.warning({ message: message, duration: 8000, showClose: true });
-        } else if (failCount > 0 || innerCode !== 200) {
+        } else if (['failed'].includes(asyncStatus) || failCount > 0 || innerCode !== 200) {
           ElementPlus.ElMessage.error({ message: message, duration: 8000, showClose: true });
+        } else if (asyncStarted) {
+          ElementPlus.ElMessage.info(message || '已启动全局配置同步');
         } else {
           ElementPlus.ElMessage.success(message);
         }
         await loadBuckets();
         if (refreshFilesAfter && filesVisible.value) await loadBucketFiles();
       } catch (error) {
+        applySyncSnapshot({
+          status: 'failed', phase: 'done', phase_label: '同步失败',
+          message: getErrorMessage(error, '同步失败'),
+          finished_at: new Date().toISOString(),
+        });
         ElementPlus.ElMessage.error(getErrorMessage(error, '同步失败'));
       } finally {
         pushing.value = false;
+        syncStarting.value = false;
+        if (syncStatusSupported.value) scheduleSyncStatusPoll(1000);
       }
     }
 
@@ -2479,12 +3066,19 @@ createApp({
       }
     }
 
-    onMounted(refreshPage);
+    onMounted(function () {
+      refreshPage();
+      startSyncRuntime();
+    });
+    if (typeof onBeforeUnmount === 'function') onBeforeUnmount(stopSyncRuntime);
 
     return {
       buckets, loading, dialogVisible, isEdit, submitting, pushing, formTesting,
       filesVisible, filesLoading, filesLoaded, fileSearch, activeBucket, fileData,
       filePage, missingFilePage, filePageSize,
+      syncCenterVisible, syncStarting, syncProgress, syncBusy, syncTotal, syncCurrent,
+      syncProgressPercent, syncStatusLabel, syncStatusTagType, syncLauncherType,
+      syncBadgeValue, syncStatusDotClass, syncFailureItems, openSyncCenter, refreshSyncStatus,
       overviewLoading, overviewError, statsOverview,
       statsVisible, statsLoading, statsLoaded, statsError, statsActiveTab,
       statsRangeOptions, statsFilters, statsData,

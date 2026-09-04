@@ -10,6 +10,34 @@ CREATE TABLE IF NOT EXISTS `cainiao_config_delivery_meta` (
   PRIMARY KEY (`key_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='配置分发迁移状态';
 
+-- 全局配置同步中心的单行任务快照；桶对象推送仍由独立 worker 执行。
+CREATE TABLE IF NOT EXISTS `cainiao_config_sync_state` (
+  `id` tinyint unsigned NOT NULL,
+  `status` varchar(32) NOT NULL DEFAULT 'idle',
+  `job_id` varchar(80) NOT NULL DEFAULT '',
+  `phase` varchar(32) NOT NULL DEFAULT 'idle',
+  `phase_label` varchar(64) NOT NULL DEFAULT '待命',
+  `message` varchar(255) NOT NULL DEFAULT '尚未执行配置桶全量同步',
+  `expected_total` int unsigned NOT NULL DEFAULT 0,
+  `current_index` int unsigned NOT NULL DEFAULT 0,
+  `success` int unsigned NOT NULL DEFAULT 0,
+  `fail` int unsigned NOT NULL DEFAULT 0,
+  `current_app_id` int unsigned NOT NULL DEFAULT 0,
+  `current_app` varchar(255) NOT NULL DEFAULT '',
+  `current_bucket` varchar(255) NOT NULL DEFAULT '',
+  `started_at` datetime NULL,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `finished_at` datetime NULL,
+  `reasons` text NULL,
+  `result_json` longtext NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_config_sync_status` (`status`,`updated_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='配置桶全局同步状态';
+
+INSERT IGNORE INTO `cainiao_config_sync_state`
+  (`id`,`status`,`phase`,`phase_label`,`message`,`reasons`,`result_json`)
+VALUES (1,'idle','idle','待命','尚未执行配置桶全量同步','[]','{}');
+
 CREATE TABLE IF NOT EXISTS `cainiao_api_domain_pool` (
   `id` int unsigned NOT NULL AUTO_INCREMENT,
   `name` varchar(100) NOT NULL,

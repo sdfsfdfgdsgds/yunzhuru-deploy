@@ -8,6 +8,7 @@
 
 require_once __DIR__ . '/../utils/BucketFeature.php';
 require_once __DIR__ . '/../utils/S3Client.php';
+require_once __DIR__ . '/../utils/ConfigSyncState.php';
 
 /** 管理员鉴权并确保桶功能表结构已经就绪。 */
 function bucketRequireAdmin(PDO $pdo): array {
@@ -63,13 +64,63 @@ function bucketSanitizeRow(array $row, bool $includeCredentialDisplays = false):
 }
 
 /** 启动全量配置后台同步；启动失败不影响桶资料事务。 */
-function bucketScheduleFullSync(): bool {
+function bucketScheduleFullSync(PDO $pdo, string $reason = '配置桶变更'): bool {
     $script = realpath(__DIR__ . '/../../service/push_all_configs.php');
-    if (!$script || !function_exists('exec')) return false;
+    $alreadyActive = false;
+    $before = [];
+    try {
+        $before = configSyncStateRead($pdo);
+        $alreadyActive = in_array((string)($before['status'] ?? ''), ['queued', 'running'], true)
+            && (string)($before['job_id'] ?? '') !== '';
+    } catch (Throwable $ignored) {
+        // 状态表尚未迁移时继续走原有 worker 调度流程。
+    }
+    // 先落库排队快照，让右下角同步中心在 worker 启动前即可显示本次变更。
+    try {
+        $snapshot = configSyncStateMarkQueued($pdo, $reason);
+        // 重新核对 job_id，处理“读取旧状态后 worker 恰好完成”的竞态窗口。
+        if ($alreadyActive) {
+            $alreadyActive = in_array((string)($snapshot['status'] ?? ''), ['queued', 'running'], true)
+                && (string)($snapshot['job_id'] ?? '') !== ''
+                && (string)($snapshot['job_id'] ?? '') === (string)($before['job_id'] ?? '');
+        }
+    } catch (Throwable $ignored) {
+        // 状态表尚未迁移或只读时不阻断桶资料保存；worker 仍可按旧合同运行。
+        $snapshot = [];
+    }
+    if (!$script || !function_exists('exec')) {
+        if (!empty($snapshot)) {
+            try {
+                configSyncStateMarkFinished(
+                    $pdo,
+                    ['total' => 0, 'success' => 0, 'fail' => 0, 'message' => '后台同步脚本未启动'],
+                    (string)($snapshot['job_id'] ?? ''),
+                    new RuntimeException('后台同步脚本未启动')
+                );
+            } catch (Throwable $ignored) {}
+        }
+        return false;
+    }
+    // 已有任务会通过 distribution_dirty 吸收本次变更，不再额外创建等待 GET_LOCK 的进程。
+    if ($alreadyActive) return true;
     $output = [];
     $exitCode = 1;
-    @exec('php ' . escapeshellarg($script) . ' > /dev/null 2>&1 & echo $!', $output, $exitCode);
+    // 将任务代次传给 worker；旧 worker 即使晚于新任务拿到锁，也不会覆盖新快照。
+    $jobId = (string)($snapshot['job_id'] ?? '');
+    $command = 'php ' . escapeshellarg($script)
+        . ($jobId !== '' ? ' ' . escapeshellarg($jobId) : '')
+        . ' > /dev/null 2>&1 & echo $!';
+    @exec($command, $output, $exitCode);
     return $exitCode === 0 && !empty($output) && ctype_digit(trim((string)end($output)));
+}
+
+/** 尝试读取同步快照；状态表异常时返回空数组，不影响桶管理主流程。 */
+function bucketReadSyncStateSafe(PDO $pdo): array {
+    try {
+        return configSyncStateRead($pdo);
+    } catch (Throwable $ignored) {
+        return [];
+    }
 }
 
 /** 对一个具体对象做公开读取检查；该结果不计入壳端命中统计。 */
@@ -748,13 +799,14 @@ function addBucket(PDO $pdo, array $input) {
         ':inject' => $record['inject'],
     ]);
     $id = (int)$pdo->lastInsertId();
-    $scheduled = bucketScheduleFullSync();
+    $scheduled = bucketScheduleFullSync($pdo, '新增配置桶连接');
     return [
         'message' => $scheduled
             ? '存储桶已新增，已启动后台同步'
             : '存储桶已新增，后台同步未启动，请使用“同步全部配置”',
         'id' => $id,
         'sync_scheduled' => $scheduled ? 1 : 0,
+        'sync_job' => bucketReadSyncStateSafe($pdo),
     ];
 }
 
@@ -785,12 +837,13 @@ function updateBucket(PDO $pdo, array $input) {
         ':enabled' => $record['enabled'],
         ':inject' => $record['inject'],
     ]);
-    $scheduled = bucketScheduleFullSync();
+    $scheduled = bucketScheduleFullSync($pdo, '更新配置桶连接');
     return [
         'message' => $scheduled
             ? '存储桶已更新，已启动后台同步'
             : '存储桶已更新，后台同步未启动，请使用“同步全部配置”',
         'sync_scheduled' => $scheduled ? 1 : 0,
+        'sync_job' => bucketReadSyncStateSafe($pdo),
     ];
 }
 
@@ -809,7 +862,7 @@ function setBucketStatus(PDO $pdo, array $input) {
     $stmt = $pdo->prepare("UPDATE cainiao_s3_bucket SET `{$field}`=:value WHERE id=:id");
     $stmt->execute([':value' => $value, ':id' => $id]);
 
-    $scheduled = $field === 'enabled' ? bucketScheduleFullSync() : false;
+    $scheduled = $field === 'enabled' ? bucketScheduleFullSync($pdo, '更新配置桶推送开关') : false;
     return [
         'message' => $field === 'enabled'
             ? ($scheduled
@@ -819,6 +872,7 @@ function setBucketStatus(PDO $pdo, array $input) {
         'field' => $field,
         'value' => $value,
         'sync_scheduled' => $field === 'enabled' ? ($scheduled ? 1 : 0) : null,
+        'sync_job' => $field === 'enabled' ? bucketReadSyncStateSafe($pdo) : null,
     ];
 }
 
@@ -970,11 +1024,81 @@ function getBucketFiles(PDO $pdo, array $input) {
     ];
 }
 
-/** 一键同步所有有成功注入记录的应用配置。 */
+/**
+ * 读取右下角全局配置同步中心的持久快照。
+ *
+ * 该方法只返回状态表中的非敏感字段及摘要结果；桶凭据、对象正文和完整密钥
+ * 永远不会通过此接口输出。前端可按 status=queued/running 高频轮询，终态降频。
+ */
+function getConfigSyncStatus(PDO $pdo, array $input) {
+    bucketRequireAdmin($pdo);
+    $snapshot = configSyncStateRead($pdo);
+    $snapshot['poll_after_ms'] = in_array((string)($snapshot['status'] ?? ''), ['queued', 'running'], true)
+        ? 750 : 5000;
+    $snapshotCode = (string)($snapshot['status'] ?? 'idle') === 'partial_failure'
+        ? 207 : (in_array((string)($snapshot['status'] ?? 'idle'), ['queued', 'running'], true)
+            ? 202 : ((string)($snapshot['status'] ?? 'idle') === 'failed' ? 500 : 200));
+    return $snapshot + [
+        'code' => 200,
+        'result_code' => $snapshotCode,
+    ];
+}
+
+/** 兼容同步中心旧版前端命名；与 getConfigSyncStatus 共用同一状态合同。 */
+function getSyncStatus(PDO $pdo, array $input) {
+    return getConfigSyncStatus($pdo, $input);
+}
+
+/**
+ * 手工启动全局配置同步并立即返回排队快照。
+ *
+ * 实际写入由独立 worker 执行，避免同步中心按钮长时间占用管理请求；重复点击
+ * 会加入当前排队/运行中的代次，worker 通过 job_id CAS 忽略旧任务的晚到状态写入。
+ */
+function startConfigSync(PDO $pdo, array $input) {
+    bucketRequireAdmin($pdo);
+    $before = configSyncStateRead($pdo);
+    $alreadyActive = in_array((string)($before['status'] ?? ''), ['queued', 'running'], true);
+    $scheduled = bucketScheduleFullSync($pdo, '管理后台手工同步');
+    $snapshot = configSyncStateRead($pdo);
+    $snapshot['sync_scheduled'] = $scheduled ? 1 : 0;
+    $snapshot['started'] = $scheduled && !$alreadyActive ? 1 : 0;
+    $snapshot['joined'] = $scheduled && $alreadyActive ? 1 : 0;
+    $snapshot['poll_after_ms'] = $scheduled ? 750 : 5000;
+    return $snapshot;
+}
+
+/** 兼容同步中心旧版启动命名。 */
+function startSync(PDO $pdo, array $input) {
+    return startConfigSync($pdo, $input);
+}
+
+/** 一键同步所有有成功注入记录的应用配置（保留同步返回合同并更新全局状态）。 */
 function pushAllConfigs(PDO $pdo, array $input) {
     bucketRequireAdmin($pdo);
     require_once __DIR__ . '/../utils/BucketPush.php';
-    return pushAllConfigsToBuckets($pdo);
+    $queued = configSyncStateMarkQueued($pdo, '管理后台同步全部配置');
+    $jobId = (string)($queued['job_id'] ?? '');
+    configSyncStateMarkRunning($pdo, $jobId);
+    try {
+        $result = pushAllConfigsToBuckets($pdo);
+        $finished = configSyncStateMarkFinished($pdo, is_array($result) ? $result : [], $jobId);
+        if (is_array($result)) $result['sync_job'] = $finished;
+        return is_array($result) ? $result : ['message' => '同步完成', 'sync_job' => $finished];
+    } catch (Throwable $e) {
+        try {
+            $failedSnapshot = configSyncStateRead($pdo);
+            configSyncStateMarkFinished($pdo, [
+                'total' => (int)($failedSnapshot['expected_total'] ?? 0),
+                'success' => (int)($failedSnapshot['success'] ?? 0),
+                'fail' => max(1, (int)($failedSnapshot['fail'] ?? 0)),
+                'message' => $e->getMessage(),
+            ], $jobId, $e);
+        } catch (Throwable $ignored) {
+            // 状态固化失败不覆盖真实同步异常。
+        }
+        throw $e;
+    }
 }
 
 /** 注入器读取可写入新 APK 的桶公开域名。 */

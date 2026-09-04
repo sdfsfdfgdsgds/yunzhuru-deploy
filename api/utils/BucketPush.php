@@ -8,6 +8,7 @@ require_once __DIR__ . '/S3Client.php';
 require_once __DIR__ . '/Auth.php';
 require_once __DIR__ . '/DeletedApp.php';
 require_once __DIR__ . '/BucketFeature.php';
+require_once __DIR__ . '/ConfigSyncState.php';
 
 if (!function_exists('recordBucketPushOutcome')) {
     /** 保存单个桶最近一次真实 PUT 结果，供管理页直接识别失效凭据。 */
@@ -450,7 +451,43 @@ function pushAllConfigsToBucketsUnlocked(PDO $pdo): array {
     $success = 0;
     $fail = 0;
 
+    // 同步中心以同一份持久快照显示批量进度；状态写入失败时不阻断真实桶推送。
+    $syncJobId = '';
+    try {
+        $syncSnapshot = configSyncStateRead($pdo);
+        $syncJobId = (string)($syncSnapshot['job_id'] ?? '');
+        configSyncStateMarkProgress($pdo, [
+            'phase' => 'sync',
+            'phase_label' => '正在同步',
+            'message' => '正在同步全部应用配置',
+            'expected_total' => count($appIds),
+            'current_index' => 0,
+            'success' => 0,
+            'fail' => 0,
+            'current_app_id' => 0,
+        ], $syncJobId);
+    } catch (Throwable $ignored) {
+        $syncJobId = '';
+    }
+
+    $index = 0;
     foreach ($appIds as $appId) {
+        $index++;
+        if ($syncJobId !== '') {
+            try {
+                configSyncStateMarkProgress($pdo, [
+                    'phase' => 'sync',
+                    'phase_label' => '正在同步',
+                    'message' => '正在同步应用 #' . (int)$appId . ' 的配置',
+                    'current_index' => $index - 1,
+                    'current_app_id' => (int)$appId,
+                    'current_app' => '应用 #' . (int)$appId,
+                    'current_bucket' => '全部启用配置桶',
+                ], $syncJobId);
+            } catch (Throwable $ignored) {
+                // 单次状态更新失败不影响真实对象推送。
+            }
+        }
         $result = pushConfigToBuckets($pdo, (int)$appId);
         if ($result['code'] === 200) {
             $success++;
@@ -458,6 +495,20 @@ function pushAllConfigsToBucketsUnlocked(PDO $pdo): array {
             $fail++;
         }
         $results[$appId] = $result;
+        if ($syncJobId !== '') {
+            try {
+                configSyncStateMarkProgress($pdo, [
+                    'current_index' => $index,
+                    'success' => $success,
+                    'fail' => $fail,
+                    'current_app_id' => (int)$appId,
+                    'current_app' => '应用 #' . (int)$appId,
+                    'current_bucket' => '全部启用配置桶',
+                ], $syncJobId);
+            } catch (Throwable $ignored) {
+                // 单次状态更新失败不影响下一应用及最终结果。
+            }
+        }
     }
 
     return [

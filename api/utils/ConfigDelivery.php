@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . '/ConfigSyncState.php';
+
 /**
  * 配置分发的共享合同。
  *
@@ -626,8 +628,31 @@ if (!function_exists('configDeliveryInvalidateAndSync')) {
     function configDeliveryInvalidateAndSync(?PDO $pdo = null): array
     {
         $result = ['redis_cleared' => false, 'disk_deleted' => 0, 'sync_started' => false];
+        $syncState = null;
+        $alreadyActive = false;
         if ($pdo) {
+            // 先读取当前代次；连续保存节点时复用同一 worker，避免重复启动后台进程。
+            try {
+                $before = configSyncStateRead($pdo);
+                $alreadyActive = in_array((string)($before['status'] ?? ''), ['queued', 'running'], true)
+                    && (string)($before['job_id'] ?? '') !== '';
+            } catch (Throwable $ignored) {
+                $before = [];
+            }
             configDeliveryMarkDirty($pdo);
+            // 先落库排队状态，使右下角同步中心立即感知配置池变化。
+            try {
+                $syncState = configSyncStateMarkQueued($pdo, '全局配置变更');
+                // 重新核对 job_id，处理“读取旧状态后 worker 恰好完成”的竞态窗口。
+                if ($alreadyActive) {
+                    $alreadyActive = in_array((string)($syncState['status'] ?? ''), ['queued', 'running'], true)
+                        && (string)($syncState['job_id'] ?? '') !== ''
+                        && (string)($syncState['job_id'] ?? '') === (string)($before['job_id'] ?? '');
+                }
+            } catch (Throwable $ignored) {
+                // 状态表迁移异常不应回滚已保存的节点池配置。
+                $syncState = null;
+            }
         }
         $redis = null;
         try {
@@ -679,9 +704,39 @@ if (!function_exists('configDeliveryInvalidateAndSync')) {
         }
 
         $script = realpath(dirname(__DIR__, 2) . '/service/push_all_configs.php');
-        if ($script) {
-            exec('php ' . escapeshellarg($script) . ' > /dev/null 2>&1 &');
+        // 当前任务已在排队或执行时，直接加入同一代次；由 worker 读取 dirty 标记吸收本次变更。
+        if ($alreadyActive) {
             $result['sync_started'] = true;
+            $result['sync_joined'] = true;
+        } elseif ($script && function_exists('exec')) {
+            $jobId = (string)($syncState['job_id'] ?? '');
+            $command = 'php ' . escapeshellarg($script)
+                . ($jobId !== '' ? ' ' . escapeshellarg($jobId) : '')
+                . ' > /dev/null 2>&1 & echo $!';
+            $output = [];
+            $exitCode = 1;
+            @exec($command, $output, $exitCode);
+            // 只有拿到后台 PID 才报告已启动，避免右下角中心显示“同步中”但实际没有 worker。
+            $result['sync_started'] = $exitCode === 0
+                && !empty($output)
+                && ctype_digit(trim((string)end($output)));
+        }
+        if ($pdo) {
+            if (!$result['sync_started'] && $syncState) {
+                try {
+                    configSyncStateMarkFinished(
+                        $pdo,
+                        ['total' => 0, 'success' => 0, 'fail' => 0, 'message' => '后台同步脚本未启动'],
+                        (string)($syncState['job_id'] ?? ''),
+                        new RuntimeException('后台同步脚本未启动')
+                    );
+                } catch (Throwable $ignored) {}
+            }
+            try {
+                $result['sync_job'] = configSyncStateRead($pdo);
+            } catch (Throwable $ignored) {
+                $result['sync_job'] = null;
+            }
         }
         return $result;
     }
