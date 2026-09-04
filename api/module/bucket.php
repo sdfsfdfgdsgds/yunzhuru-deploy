@@ -29,6 +29,30 @@ function bucketFindById(PDO $pdo, int $bucketId): array {
 }
 
 /**
+ * 生成同步中心可读的桶连接定位信息。
+ * 这里只展示名称、服务商和公开端点/域名，不携带 AccessKey、SecretKey 等敏感字段，
+ * 让“触发原因”明确指出本次更新影响了哪一条连接。
+ */
+function bucketSyncConnectionReason(string $action, array $record, int $bucketId = 0): string {
+    $name = trim((string)($record['name'] ?? ''));
+    $provider = trim((string)($record['provider_label'] ?? $record['provider'] ?? ''));
+    $endpoint = trim((string)($record['endpoint'] ?? ''));
+    $domain = trim((string)($record['domain'] ?? ''));
+    $bucket = trim((string)($record['bucket'] ?? ''));
+    $parts = [];
+    if ($bucketId > 0) $parts[] = '桶 #' . $bucketId;
+    if ($name !== '') $parts[] = $name;
+    if ($provider !== '') $parts[] = $provider;
+    // Endpoint、domain、Bucket 是三类不同定位信息，全部保留并分别标注，
+    // 避免只改公开域名时同步中心仍显示旧的写入端点。
+    if ($endpoint !== '') $parts[] = '端点 ' . $endpoint;
+    if ($domain !== '') $parts[] = '域名 ' . $domain;
+    if ($bucket !== '') $parts[] = 'Bucket ' . $bucket;
+    $reason = trim($action . ($parts ? ' · ' . implode(' · ', $parts) : ''));
+    return function_exists('mb_substr') ? mb_substr($reason, 0, 240, 'UTF-8') : substr($reason, 0, 240);
+}
+
+/**
  * 返回不含原始敏感值的桶记录。
  * 凭据摘要只有编辑详情需要，列表和文件接口不解密也不返回任何凭据片段。
  */
@@ -809,7 +833,7 @@ function addBucket(PDO $pdo, array $input) {
         ':inject' => $record['inject'],
     ]);
     $id = (int)$pdo->lastInsertId();
-    $scheduled = bucketScheduleFullSync($pdo, '新增配置桶连接');
+    $scheduled = bucketScheduleFullSync($pdo, bucketSyncConnectionReason('新增配置桶连接', $record, $id));
     return [
         'message' => $scheduled
             ? '存储桶已新增，已启动后台同步'
@@ -847,7 +871,7 @@ function updateBucket(PDO $pdo, array $input) {
         ':enabled' => $record['enabled'],
         ':inject' => $record['inject'],
     ]);
-    $scheduled = bucketScheduleFullSync($pdo, '更新配置桶连接');
+    $scheduled = bucketScheduleFullSync($pdo, bucketSyncConnectionReason('更新配置桶连接', $record, $id));
     return [
         'message' => $scheduled
             ? '存储桶已更新，已启动后台同步'
@@ -863,7 +887,7 @@ function updateBucket(PDO $pdo, array $input) {
 function setBucketStatus(PDO $pdo, array $input) {
     bucketRequireAdmin($pdo);
     $id = (int)($input['id'] ?? 0);
-    bucketFindById($pdo, $id);
+    $existing = bucketFindById($pdo, $id);
     $field = strtolower(trim((string)($input['field'] ?? '')));
     if (!in_array($field, ['enabled', 'inject'], true)) {
         throw new InvalidArgumentException('桶开关字段错误');
@@ -872,7 +896,9 @@ function setBucketStatus(PDO $pdo, array $input) {
     $stmt = $pdo->prepare("UPDATE cainiao_s3_bucket SET `{$field}`=:value WHERE id=:id");
     $stmt->execute([':value' => $value, ':id' => $id]);
 
-    $scheduled = $field === 'enabled' ? bucketScheduleFullSync($pdo, '更新配置桶推送开关') : false;
+    $scheduled = $field === 'enabled'
+        ? bucketScheduleFullSync($pdo, bucketSyncConnectionReason('更新配置桶推送开关', $existing, $id))
+        : false;
     return [
         'message' => $field === 'enabled'
             ? ($scheduled
@@ -903,7 +929,7 @@ function deleteBucket(PDO $pdo, array $input) {
     }
     // 删除启用桶会改变所有应用的目标桶集合，事务提交后排队一次全量同步，
     // 让旧桶上的配置快照尽快收敛；云端 Bucket 与已有文件仍按原合同保留。
-    $scheduled = bucketScheduleFullSync($pdo, '删除配置桶管理记录');
+    $scheduled = bucketScheduleFullSync($pdo, bucketSyncConnectionReason('删除配置桶管理记录', $row, $id));
     return [
         'message' => $scheduled
             ? '存储桶管理记录已删除，已启动后台同步；云端 Bucket 和已有文件保持原状'

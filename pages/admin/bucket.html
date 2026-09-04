@@ -1978,7 +1978,10 @@ createApp({
         && (code === 200 || /success|completed|complete|ok|converged|done|成功|完成/.test(rawStatus));
       const isFailure = !isSkipped && !isPartial
         && (code !== null ? code !== 200 : /fail|failed|failure|error|exception|unsynced|失败|异常/.test(rawStatus));
-      const appLabel = appName || appKey || (resolvedAppId !== '' ? '应用 #' + resolvedAppId : '全局配置');
+      // 统一显示 APPID + 应用名称，方便从同步明细准确定位目标应用。
+      const appLabel = resolvedAppId !== ''
+        ? ('应用 #' + resolvedAppId + (appName ? ' · ' + appName : ''))
+        : (appName || appKey || '全局配置');
       return {
         app_id: resolvedAppId,
         app_name: appName,

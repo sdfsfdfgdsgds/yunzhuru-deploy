@@ -581,7 +581,8 @@ if (!function_exists('bucketPushLoadPublicAppMeta')) {
                 if ($id <= 0) continue;
                 $meta[$id] = [
                     'app_id' => $id,
-                    'app_name' => trim((string)($row['app_name'] ?? '')),
+                    // 名称为空时仍给出稳定的可读标签，避免同步中心只显示“应用 #30”。
+                    'app_name' => trim((string)($row['app_name'] ?? '')) ?: ('未命名应用 #' . $id),
                     'package_name' => trim((string)($row['package_name'] ?? '')),
                 ];
             }
@@ -601,6 +602,7 @@ if (!function_exists('bucketPushAttachPublicAppMeta')) {
         if ($objectKey === '' && $appId > 0) $objectKey = "config/{$appId}.enc";
         $result['app_id'] = $appId;
         $result['app_name'] = trim((string)($meta['app_name'] ?? ($result['app_name'] ?? '')));
+        if ($result['app_name'] === '' && $appId > 0) $result['app_name'] = '未命名应用 #' . $appId;
         $result['package_name'] = trim((string)($meta['package_name'] ?? ($result['package_name'] ?? '')));
         $result['config_scope'] = trim((string)($result['config_scope'] ?? '应用完整配置')) ?: '应用完整配置';
         $result['object_key'] = $objectKey;
