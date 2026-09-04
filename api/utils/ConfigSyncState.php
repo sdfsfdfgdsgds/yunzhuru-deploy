@@ -590,7 +590,10 @@ if (!function_exists('configSyncStateRead')) {
             'result' => $result,
             // 与旧版管理页的 results 命名保持兼容：优先暴露按 APPID 分组的结果，
             // 完整摘要仍保留在 result 字段，避免前端把 code/message 当作应用条目。
-            'results' => is_array($result['data'] ?? null) ? $result['data'] : $result,
+            'results' => (is_array($result['data'] ?? null) && $result['data'])
+                ? $result['data']
+                : ((is_array($result['app_results'] ?? null) && $result['app_results'])
+                    ? $result['app_results'] : $result),
         ];
     }
 }
