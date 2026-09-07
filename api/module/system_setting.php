@@ -1,5 +1,10 @@
 <?php
 
+// 该模块也可能被独立脚本直接加载，显式引入状态与配置分发 helper，
+// 使运行时设置始终完整执行 Redis/磁盘失效和延迟合并桶同步。
+require_once __DIR__ . '/../utils/ConfigSyncState.php';
+require_once __DIR__ . '/../utils/ConfigDelivery.php';
+
 function ensureSystemSetting(PDO $pdo, string $key, string $value, string $title, string $note, string $type) {
     $stmt = $pdo->prepare("SELECT id FROM cainiao_system_setting WHERE key_name = :key LIMIT 1");
     $stmt->execute([':key' => $key]);
@@ -58,11 +63,23 @@ function clearRemoteConfigCache() {
     }
 }
 
-function pushAllBucketConfigsAsync() {
-    $script = realpath(__DIR__ . '/../../service/push_all_configs.php');
-    if ($script) {
-        exec("php " . escapeshellarg($script) . " > /dev/null 2>&1 &");
+function pushAllBucketConfigsAsync(?PDO $pdo = null): bool {
+    if ($pdo && function_exists('configSyncStateScheduleWorker')) {
+        try {
+            $scheduled = configSyncStateScheduleWorker($pdo, '系统运行设置变更', false);
+            return !empty($scheduled['scheduled']);
+        } catch (Throwable $ignored) {
+            // 状态表尚未迁移时继续使用旧脚本兜底。
+        }
     }
+    $script = realpath(__DIR__ . '/../../service/push_all_configs.php');
+    if ($script && function_exists('exec')) {
+        $output = [];
+        $exitCode = 1;
+        @exec("php " . escapeshellarg($script) . " > /dev/null 2>&1 & echo $!", $output, $exitCode);
+        return $exitCode === 0 && !empty($output);
+    }
+    return false;
 }
 
 function getSettings(PDO $pdo, array $input) {
@@ -107,7 +124,7 @@ function updateSetting(PDO $pdo, array $input) {
             $syncResult = configDeliveryInvalidateAndSync($pdo);
         } else {
             clearRemoteConfigCache();
-            pushAllBucketConfigsAsync();
+            pushAllBucketConfigsAsync($pdo);
         }
     }
 

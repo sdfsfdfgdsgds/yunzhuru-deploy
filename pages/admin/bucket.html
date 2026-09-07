@@ -466,6 +466,12 @@
       line-height: 1.55;
       word-break: break-word;
     }
+    .config-sync-center__debounce-hint {
+      margin: -2px 0 10px;
+      color: #2563eb;
+      font-size: 12px;
+      line-height: 1.5;
+    }
     .config-sync-center__metrics {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1641,6 +1647,9 @@
         <div class="config-sync-center__summary-message config-sync-summary__message">
           {{ syncProgress.message || '等待配置变更' }}
         </div>
+        <div v-if="syncDebounceRemaining > 0" class="config-sync-center__debounce-hint">
+          {{ syncDebounceLabel }}（继续修改会重新计时）
+        </div>
         <el-progress
           :percentage="syncProgressPercent"
           :stroke-width="9"
@@ -1775,10 +1784,10 @@
       <div class="config-sync-center__footer">
         <el-button
           type="primary"
-          :loading="syncBusy"
-          :disabled="syncBusy"
+          :loading="syncStarting"
+          :disabled="syncManualDisabled"
           @click="pushAll(false, true)">
-          {{ ['partial_failure', 'partial', 'partial_success', 'failed'].includes(syncProgress.status) ? '重新全量同步' : '同步全部配置' }}
+          {{ syncProgress.status === 'queued' ? '立即同步' : (['partial_failure', 'partial', 'partial_success', 'failed'].includes(syncProgress.status) ? '重新全量同步' : '同步全部配置') }}
         </el-button>
       </div>
     </template>
@@ -1821,7 +1830,9 @@ createApp({
       current_app_id: 0, current_app: '', current_bucket: '',
       reasons: [], result: {}, results: {}, result_summary: {},
       app_results: [], partial_apps: [], partial_items: [], cleanup_items: [], success_items: [], successful_items: [], failed_items: [], skipped_items: [], sync_items: [],
-      started_at: '', updated_at: '', finished_at: ''
+      started_at: '', updated_at: '', finished_at: '',
+      debounce_until: '', next_sync_at: '', debounce_seconds: 60,
+      debounce_remaining_seconds: 0, is_debouncing: 0
     });
     // 存储桶页既可独立打开，也会嵌套在 console 的业务 iframe 中。若顶层
     // 已经挂载全局同步中心，则子页只负责业务操作，避免重复入口和重复轮询；
@@ -1847,11 +1858,23 @@ createApp({
       syncStarting.value
       || ['queued', 'running'].includes(String(syncProgress.status || ''))
     ));
+    const syncManualDisabled = computed(() => (
+      syncStarting.value || String(syncProgress.status || '') === 'running'
+    ));
     const syncStatusLabel = computed(() => ({
       queued: '排队中', running: '同步中', completed: '已完成',
       partial_failure: '部分失败', partial: '部分成功', partial_success: '部分成功',
       failed: '同步失败', idle: '待命'
     }[String(syncProgress.status || 'idle')] || '待命'));
+    const syncDebounceRemaining = computed(() => Math.max(
+      0, Number(syncProgress.debounce_remaining_seconds || 0)
+    ));
+    const syncDebounceLabel = computed(() => {
+      const remaining = syncDebounceRemaining.value;
+      if (remaining <= 0) return '';
+      const action = String(syncProgress.status || '') === 'running' ? '继续同步' : '开始同步';
+      return '修改已合并，' + remaining + ' 秒后' + action;
+    });
     const syncStatusTagType = computed(() => ({
       queued: 'warning', running: 'warning', completed: 'success',
       partial_failure: 'danger', partial: 'warning', partial_success: 'warning',
@@ -2864,6 +2887,10 @@ createApp({
         syncProgress.current_app = '';
         syncProgress.current_app_id = 0;
         syncProgress.current_bucket = '';
+        syncProgress.debounce_until = '';
+        syncProgress.next_sync_at = '';
+        syncProgress.debounce_remaining_seconds = 0;
+        syncProgress.is_debouncing = 0;
         syncProgress.success = 0;
         syncProgress.fail = 0;
         syncProgress.skipped = 0;
@@ -2930,13 +2957,16 @@ createApp({
       );
       if (inferredStatus) syncProgress.status = inferredStatus;
       ['job_id', 'phase', 'phase_label', 'message', 'current_app', 'current_bucket',
-        'started_at', 'updated_at', 'finished_at'].forEach(field => {
+        'started_at', 'updated_at', 'finished_at', 'debounce_until', 'next_sync_at'].forEach(field => {
         if (data[field] !== undefined) syncProgress[field] = String(data[field] || '');
       });
       ['total', 'expected_total', 'current', 'processed', 'skipped', 'app_success_count', 'app_successful_count',
         'app_failed_count', 'app_skipped_count', 'partial', 'partial_success', 'app_partial_count',
         'bucket_success', 'bucket_fail', 'bucket_total', 'bucket_success_count',
         'bucket_failed_count', 'bucket_fail_count', 'current_app_id'].forEach(field => {
+        if (data[field] !== undefined) syncProgress[field] = Number(data[field]) || 0;
+      });
+      ['debounce_seconds', 'debounce_remaining_seconds', 'is_debouncing'].forEach(field => {
         if (data[field] !== undefined) syncProgress[field] = Number(data[field]) || 0;
       });
       if (Array.isArray(data.reasons)) syncProgress.reasons = data.reasons;
@@ -3851,9 +3881,9 @@ createApp({
       buckets, loading, dialogVisible, isEdit, submitting, pushing, formTesting,
       filesVisible, filesLoading, filesLoaded, fileSearch, activeBucket, fileData,
       filePage, missingFilePage, filePageSize,
-      syncCenterVisible, syncStarting, syncProgress, syncBusy, syncTotal, syncCurrent,
+      syncCenterVisible, syncStarting, syncProgress, syncBusy, syncManualDisabled, syncTotal, syncCurrent,
       syncHostedByGlobalCenter,
-      syncProgressPercent, syncStatusLabel, syncStatusTagType, syncLauncherType,
+      syncProgressPercent, syncStatusLabel, syncDebounceRemaining, syncDebounceLabel, syncStatusTagType, syncLauncherType,
       syncBadgeValue, syncStatusDotClass, syncFailureItems, syncResultItems, syncSuccessItems,
       syncPartialItems, syncPartialApps, syncSkippedItems, syncResultSummary,
       syncResultFilter, syncResultQuery, syncVisibleResultItems, syncHasResultData,

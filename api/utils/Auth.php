@@ -275,8 +275,9 @@ class Auth
      * 配置变更后统一处理：清 Redis 缓存 + 进入全局配置同步任务。
      *
      * 以前这里仅启动 push_config.php（单 APPID worker），同步中心看不到该
-     * 任务，且连续修改时每个入口各自推送。现在统一写入 ConfigSyncState 并由
-     * push_all_configs.php 合并执行，弹窗、链接、跳转等调用方无需复制调度代码。
+     * 任务，且连续修改时每个入口各自推送。现在统一写入 ConfigSyncState，并由
+     * push_all_configs.php 在最后一次修改稳定 60 秒后合并执行，弹窗、链接、
+     * 跳转等调用方无需复制调度代码。
      * 同步原因由调用模块自动归类，右下角列表可以直接说明是哪一类配置触发了更新。
      */
     public static function afterConfigChange(PDO $pdo, int $apkId, string $reason = '') {

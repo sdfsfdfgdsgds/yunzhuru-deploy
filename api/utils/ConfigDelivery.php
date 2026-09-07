@@ -579,32 +579,58 @@ if (!function_exists('configDeliveryPublicPools')) {
     }
 }
 
+if (!function_exists('configDeliveryWriteChangeMeta')) {
+    /**
+     * 按需写入配置变更元数据，并尊重调用方已开启的事务。
+     *
+     * 只有本函数自建事务时才提交或回滚；嵌入业务事务时，所有写入由
+     * 外层一起提交。缺表补建也只在自建事务路径执行，避免 DDL 隐式
+     * 提交调用方的数据。
+     */
+    function configDeliveryWriteChangeMeta(PDO $pdo, bool $markDirty, bool $bumpVersion): void
+    {
+        $ownsTransaction = !$pdo->inTransaction();
+        try {
+            if ($ownsTransaction) $pdo->beginTransaction();
+            if ($markDirty) {
+                $stmt = $pdo->prepare("INSERT INTO cainiao_config_delivery_meta (key_name,key_value)
+                    VALUES ('distribution_dirty','1')
+                    ON DUPLICATE KEY UPDATE key_value='1'");
+                $stmt->execute();
+            }
+            if ($bumpVersion) {
+                $version = $pdo->prepare("INSERT INTO cainiao_config_delivery_meta (key_name,key_value)
+                    VALUES ('network_config_version','2')
+                    ON DUPLICATE KEY UPDATE key_value=CAST(key_value AS UNSIGNED)+1");
+                $version->execute();
+            }
+            if ($ownsTransaction) $pdo->commit();
+        } catch (PDOException $e) {
+            if ($ownsTransaction && $pdo->inTransaction()) $pdo->rollBack();
+            if (!$ownsTransaction || !configDeliveryIsMissingTableException($e)) throw $e;
+            // 滚动升级的首次保存可能早于显式 SQL 迁移；独立事务可先补表再重试。
+            ensureConfigDeliverySchema($pdo);
+            configDeliveryWriteChangeMeta($pdo, $markDirty, $bumpVersion);
+        }
+    }
+}
+
 if (!function_exists('configDeliveryMarkDirty')) {
-    /** 标记全局分发配置已变更，供全量桶同步工作者合并连续保存。 */
+    /** 标记全局分发配置已变更，并递增壳端网络配置版本。 */
     function configDeliveryMarkDirty(PDO $pdo): void
     {
-        try {
-            $pdo->beginTransaction();
-            $stmt = $pdo->prepare("INSERT INTO cainiao_config_delivery_meta (key_name,key_value)
-                VALUES ('distribution_dirty','1')
-                ON DUPLICATE KEY UPDATE key_value='1'");
-            $stmt->execute();
-            $version = $pdo->prepare("INSERT INTO cainiao_config_delivery_meta (key_name,key_value)
-                VALUES ('network_config_version','2')
-                ON DUPLICATE KEY UPDATE key_value=CAST(key_value AS UNSIGNED)+1");
-            $version->execute();
-            $pdo->commit();
-        } catch (PDOException $e) {
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
-            if (!configDeliveryIsMissingTableException($e)) {
-                throw $e;
-            }
-            // 滚动升级的首次保存可能早于显式 SQL 迁移，管理请求中允许补表。
-            ensureConfigDeliverySchema($pdo);
-            configDeliveryMarkDirty($pdo);
-        }
+        configDeliveryWriteChangeMeta($pdo, true, true);
+    }
+}
+
+if (!function_exists('configDeliveryBumpNetworkVersion')) {
+    /**
+     * 只递增网络配置版本。distribution_dirty 由 configSyncStateMarkQueued()
+     * 在状态行锁事务内连同 debounce_until 原子写入。
+     */
+    function configDeliveryBumpNetworkVersion(PDO $pdo): void
+    {
+        configDeliveryWriteChangeMeta($pdo, false, true);
     }
 }
 
@@ -624,35 +650,20 @@ if (!function_exists('configDeliveryInvalidateAndSync')) {
      * Redis DB0 当前主要存放远程配置，但这里仍只删除纯数字 APPID、
      * fallback 和禁用设备三类配置键，为后续的维护锁等非配置键留出空间。
      * APK 元数据所在 DB2 保持不变。
+     *
+     * 该方法会启动独立 worker，必须在业务配置事务提交后调用，保证新连接
+     * 读到的配置、防抖截止时间和 dirty 标记属于同一个已提交轮次。
      */
     function configDeliveryInvalidateAndSync(?PDO $pdo = null): array
     {
         $result = ['redis_cleared' => false, 'disk_deleted' => 0, 'sync_started' => false];
-        $syncState = null;
-        $alreadyActive = false;
         if ($pdo) {
-            // 先读取当前代次；连续保存节点时复用同一 worker，避免重复启动后台进程。
-            try {
-                $before = configSyncStateRead($pdo);
-                $alreadyActive = in_array((string)($before['status'] ?? ''), ['queued', 'running'], true)
-                    && (string)($before['job_id'] ?? '') !== '';
-            } catch (Throwable $ignored) {
-                $before = [];
+            if ($pdo->inTransaction()) {
+                throw new LogicException('配置失效与同步调度应在业务事务提交后执行');
             }
-            configDeliveryMarkDirty($pdo);
-            // 先落库排队状态，使右下角同步中心立即感知配置池变化。
-            try {
-                $syncState = configSyncStateMarkQueued($pdo, '全局配置变更');
-                // 重新核对 job_id，处理“读取旧状态后 worker 恰好完成”的竞态窗口。
-                if ($alreadyActive) {
-                    $alreadyActive = in_array((string)($syncState['status'] ?? ''), ['queued', 'running'], true)
-                        && (string)($syncState['job_id'] ?? '') !== ''
-                        && (string)($syncState['job_id'] ?? '') === (string)($before['job_id'] ?? '');
-                }
-            } catch (Throwable $ignored) {
-                // 状态表迁移异常不应回滚已保存的节点池配置。
-                $syncState = null;
-            }
+            // distribution_dirty 由后面的统一调度器与 debounce_until 原子写入；
+            // 这里只递增壳端配置版本，避免提前写 dirty 唤醒运行中的 worker。
+            configDeliveryBumpNetworkVersion($pdo);
         }
         $redis = null;
         try {
@@ -703,39 +714,28 @@ if (!function_exists('configDeliveryInvalidateAndSync')) {
             }
         }
 
-        $script = realpath(dirname(__DIR__, 2) . '/service/push_all_configs.php');
-        // 当前任务已在排队或执行时，直接加入同一代次；由 worker 读取 dirty 标记吸收本次变更。
-        if ($alreadyActive) {
-            $result['sync_started'] = true;
-            $result['sync_joined'] = true;
-        } elseif ($script && function_exists('exec')) {
-            $jobId = (string)($syncState['job_id'] ?? '');
-            $command = 'php ' . escapeshellarg($script)
-                . ($jobId !== '' ? ' ' . escapeshellarg($jobId) : '')
-                . ' > /dev/null 2>&1 & echo $!';
-            $output = [];
-            $exitCode = 1;
-            @exec($command, $output, $exitCode);
-            // 只有拿到后台 PID 才报告已启动，避免右下角中心显示“同步中”但实际没有 worker。
-            $result['sync_started'] = $exitCode === 0
-                && !empty($output)
-                && ctype_digit(trim((string)end($output)));
-        }
         if ($pdo) {
-            if (!$result['sync_started'] && $syncState) {
-                try {
-                    configSyncStateMarkFinished(
-                        $pdo,
-                        ['total' => 0, 'success' => 0, 'fail' => 0, 'message' => '后台同步脚本未启动'],
-                        (string)($syncState['job_id'] ?? ''),
-                        new RuntimeException('后台同步脚本未启动')
-                    );
-                } catch (Throwable $ignored) {}
-            }
             try {
-                $result['sync_job'] = configSyncStateRead($pdo);
-            } catch (Throwable $ignored) {
-                $result['sync_job'] = null;
+                // 节点池每次保存都进入同一调度合同：原子写 dirty/截止时间，
+                // 新 job 启动一个 worker，已有 job 则只合并原因并重置 60 秒。
+                $scheduled = configSyncStateScheduleWorker($pdo, '全局配置变更', false);
+                $result['sync_started'] = !empty($scheduled['scheduled']);
+                $result['sync_joined'] = !empty($scheduled['joined']);
+                $result['sync_job'] = $scheduled['snapshot'] ?? configSyncStateRead($pdo);
+            } catch (Throwable $error) {
+                // 状态表短暂异常时先保留 dirty，再重试一次；这样即使首次调度恰好遇到
+                // 连接抖动，也不会把已保存的节点池变更变成无任务。
+                error_log('[ConfigDelivery] 全局配置同步调度失败，准备重试: ' . $error->getMessage());
+                try {
+                    configSyncStateMarkDirty($pdo);
+                    $retry = configSyncStateScheduleWorker($pdo, '全局配置变更', false);
+                    $result['sync_started'] = !empty($retry['scheduled']);
+                    $result['sync_joined'] = !empty($retry['joined']);
+                    $result['sync_job'] = $retry['snapshot'] ?? configSyncStateRead($pdo);
+                } catch (Throwable $retryError) {
+                    error_log('[ConfigDelivery] 全局配置同步重试仍失败: ' . $retryError->getMessage());
+                    $result['sync_job'] = null;
+                }
             }
         }
         return $result;

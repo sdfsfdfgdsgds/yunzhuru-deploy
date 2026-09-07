@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS `cainiao_config_sync_state` (
   `started_at` datetime NULL,
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `finished_at` datetime NULL,
+  `debounce_until` datetime NULL COMMENT '最后一次配置修改后允许开始同步的 UTC 时间',
   `reasons` text NULL,
   `result_json` longtext NULL,
   PRIMARY KEY (`id`),

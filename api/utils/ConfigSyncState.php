@@ -32,6 +32,7 @@ if (!function_exists('ensureConfigSyncStateSchema')) {
             started_at datetime NULL,
             updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             finished_at datetime NULL,
+            debounce_until datetime NULL,
             reasons text NULL,
             result_json longtext NULL,
             PRIMARY KEY (id),
@@ -41,7 +42,12 @@ if (!function_exists('ensureConfigSyncStateSchema')) {
             (id,status,phase,phase_label,message,reasons,result_json)
             VALUES (1,'idle','idle','待命','尚未执行配置桶全量同步','[]','{}')");
         // 已存在的旧状态表按需补列，保证滚动发布期间接口字段始终完整。
-        foreach (['current_app' => "varchar(255) NOT NULL DEFAULT ''", 'current_bucket' => "varchar(255) NOT NULL DEFAULT ''"] as $column => $definition) {
+        foreach ([
+            'current_app' => "varchar(255) NOT NULL DEFAULT ''",
+            'current_bucket' => "varchar(255) NOT NULL DEFAULT ''",
+            // 旧版本状态表没有延迟截止时间，滚动发布时按需补列即可。
+            'debounce_until' => 'datetime NULL',
+        ] as $column => $definition) {
             try {
                 $check = $pdo->query("SHOW COLUMNS FROM cainiao_config_sync_state LIKE '{$column}'");
                 if (!$check || !$check->fetch(PDO::FETCH_ASSOC)) {
@@ -52,6 +58,69 @@ if (!function_exists('ensureConfigSyncStateSchema')) {
             }
         }
         $ready[$pdoKey] = true;
+    }
+}
+
+if (!function_exists('configSyncStateDebounceSeconds')) {
+    /**
+     * 返回自动同步的防抖窗口（秒）。
+     *
+     * 默认固定为 60 秒，便于管理员连续修改多个配置时只产生一轮对象推送；
+     * 保留环境变量仅用于测试和运维临时调节，生产未设置时始终使用默认值。
+     */
+    function configSyncStateDebounceSeconds(): int
+    {
+        $configured = getenv('YUNZHURU_CONFIG_SYNC_DEBOUNCE_SECONDS');
+        if ($configured === false) $configured = getenv('CONFIG_SYNC_DEBOUNCE_SECONDS');
+        if ($configured === false || !preg_match('/^\d+$/', trim((string)$configured))) {
+            return 60;
+        }
+        // 防止错误配置造成超长驻留；0 可用于手工关闭防抖或自动化测试。
+        return min(86400, max(0, (int)$configured));
+    }
+}
+
+if (!function_exists('configSyncStateComputeDebounceUntil')) {
+    /** 根据给定时刻计算下一次允许同步的 UTC 截止时间，供状态写入和回归测试复用。 */
+    function configSyncStateComputeDebounceUntil(?DateTimeImmutable $now = null, ?int $seconds = null): ?string
+    {
+        $seconds = $seconds === null ? configSyncStateDebounceSeconds() : max(0, (int)$seconds);
+        if ($seconds <= 0) return null;
+        $now = $now ?: new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        $now = $now->setTimezone(new DateTimeZone('UTC'));
+        // 数据库列精度为秒；向上补齐带微秒的当前时刻，避免格式化截断后
+        // 实际等待时间少于配置的完整窗口。
+        $timestamp = $now->getTimestamp() + $seconds;
+        if ((int)$now->format('u') > 0) $timestamp++;
+        return (new DateTimeImmutable('@' . $timestamp))
+            ->setTimezone(new DateTimeZone('UTC'))
+            ->format('Y-m-d H:i:s');
+    }
+}
+
+if (!function_exists('configSyncStateParseUtc')) {
+    /** 将数据库时间安全解析为 UTC；空值或异常值统一返回 null。 */
+    function configSyncStateParseUtc($value): ?DateTimeImmutable
+    {
+        $value = trim((string)$value);
+        if ($value === '') return null;
+        try {
+            return new DateTimeImmutable($value, new DateTimeZone('UTC'));
+        } catch (Throwable $ignored) {
+            return null;
+        }
+    }
+}
+
+if (!function_exists('configSyncStateRemainingSeconds')) {
+    /** 计算截止时间距当前 UTC 时刻的剩余秒数，向上取整避免提前显示已到期。 */
+    function configSyncStateRemainingSeconds($value, ?DateTimeImmutable $now = null): int
+    {
+        $until = configSyncStateParseUtc($value);
+        if (!$until) return 0;
+        $now = $now ?: new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        $microseconds = (float)$until->format('U.u') - (float)$now->setTimezone(new DateTimeZone('UTC'))->format('U.u');
+        return max(0, (int)ceil($microseconds));
     }
 }
 
@@ -586,10 +655,15 @@ if (!function_exists('configSyncStateRead')) {
         );
         $details = $hydrated['details'];
         $hydratedCurrentApp = (string)($hydrated['current_app'] ?? '');
+        $debounceUntilRaw = trim((string)($row['debounce_until'] ?? ''));
+        $debounceUntil = $formatTime($debounceUntilRaw);
+        $debounceRemaining = configSyncStateRemainingSeconds($debounceUntilRaw);
+        $storedStatus = (string)($row['status'] ?? 'idle');
+        $isDebouncing = in_array($storedStatus, ['queued', 'running'], true)
+            && $debounceRemaining > 0;
         // 旧版本曾把“任一桶失败”直接落成 failed。读取历史快照时按已经保存的
         // 桶级明细重算一次有效状态，让 B2 成功 + AWS/R2 失败的既有任务立即显示
         // 为“部分失败”，无需用户先重新执行一轮同步才能看到真实结果。
-        $storedStatus = (string)($row['status'] ?? 'idle');
         $effectiveStatus = $storedStatus !== '' ? $storedStatus : 'idle';
         if (!in_array($storedStatus, ['queued', 'running'], true)) {
             $summary = $details['result_summary'] ?? [];
@@ -640,6 +714,13 @@ if (!function_exists('configSyncStateRead')) {
             'started_at' => $formatTime($row['started_at'] ?? ''),
             'updated_at' => $formatTime($row['updated_at'] ?? ''),
             'finished_at' => $formatTime($row['finished_at'] ?? ''),
+            // debounce_until 使用北京时间输出，剩余秒数由服务端重新计算，
+            // 前端刷新或多个管理窗口读取时都遵循同一截止时间。
+            'debounce_until' => $debounceUntil,
+            'next_sync_at' => $debounceUntil,
+            'debounce_seconds' => configSyncStateDebounceSeconds(),
+            'debounce_remaining_seconds' => $isDebouncing ? $debounceRemaining : 0,
+            'is_debouncing' => $isDebouncing ? 1 : 0,
             'reasons' => array_values(array_filter(array_map('strval', $reasons))),
             'success_items' => $details['success_items'],
             'successful_items' => $details['successful_items'],
@@ -665,77 +746,259 @@ if (!function_exists('configSyncStateRead')) {
     }
 }
 
+if (!function_exists('configSyncStateEnsureDirtySchema')) {
+    /**
+     * 在调度事务之前补齐 dirty 元数据表。
+     *
+     * MySQL DDL 会隐式提交，因此已处于业务事务时只依赖正式迁移表，
+     * 不在这里改变调用方的事务边界。
+     */
+    function configSyncStateEnsureDirtySchema(PDO $pdo): void
+    {
+        static $ready = [];
+        $pdoKey = function_exists('spl_object_id') ? spl_object_id($pdo) : (string)(int)$pdo;
+        if (isset($ready[$pdoKey]) || $pdo->inTransaction()) return;
+        $pdo->exec("CREATE TABLE IF NOT EXISTS cainiao_config_delivery_meta (
+            key_name varchar(64) NOT NULL,
+            key_value varchar(255) NOT NULL,
+            updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (key_name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='配置分发迁移状态'");
+        $ready[$pdoKey] = true;
+    }
+}
+
 if (!function_exists('configSyncStateMarkDirty')) {
-    /** 同步前设置 dirty 标记，避免 worker 的合并模式把本次变更误判为已处理。 */
+    /**
+     * 设置 dirty 标记，供 worker 判定当前上传期间是否又有新修改。
+     * 调度器会在状态行锁事务内调用，使 dirty 与 debounce_until
+     * 一起提交，避免 worker 在截止时间落库前提前消费变更。
+     */
     function configSyncStateMarkDirty(PDO $pdo): void
     {
         try {
-            $pdo->exec("CREATE TABLE IF NOT EXISTS cainiao_config_delivery_meta (
-                key_name varchar(64) NOT NULL,
-                key_value varchar(255) NOT NULL,
-                updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                PRIMARY KEY (key_name)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='配置分发迁移状态'");
+            configSyncStateEnsureDirtySchema($pdo);
             $stmt = $pdo->prepare("INSERT INTO cainiao_config_delivery_meta (key_name,key_value)
                 VALUES ('distribution_dirty','1')
                 ON DUPLICATE KEY UPDATE key_value='1'");
             $stmt->execute();
         } catch (Throwable $ignored) {
-            // 状态表/脏标记不可用时，推送接口仍可由 force 模式完成。
+            // 元数据表暂时不可用时，force 手工推送仍可执行完整上传。
         }
     }
 }
 
 if (!function_exists('configSyncStateMarkQueued')) {
-    /** 标记排队任务并返回快照；运行中的任务只追加原因并复用当前代次。 */
-    function configSyncStateMarkQueued(PDO $pdo, string $reason = '配置变更'): array
+    /**
+     * 标记排队任务并返回快照；运行中的任务只追加原因并复用当前代次。
+     *
+     * 自动配置修改默认进入 60 秒防抖窗口，每次调用都会把截止时间推迟到
+     * “本次修改 + 窗口”之后。手工同步可传入 $immediate=true，直接唤醒已有
+     * worker 或创建立即可执行的任务。
+     */
+    function configSyncStateMarkQueued(PDO $pdo, string $reason = '配置变更', bool $immediate = false): array
     {
         ensureConfigSyncStateSchema($pdo);
         $reason = trim($reason) !== '' ? trim($reason) : '配置变更';
-        $current = configSyncStateRead($pdo);
-        if (in_array((string)($current['status'] ?? ''), ['queued', 'running'], true)
-            && (string)($current['job_id'] ?? '') !== '') {
-            $reasons = array_values(array_unique(array_merge($current['reasons'] ?? [], [$reason])));
-            $stmt = $pdo->prepare("UPDATE cainiao_config_sync_state SET
-                message=:message, reasons=:reasons, updated_at=UTC_TIMESTAMP() WHERE id=1 AND job_id=:job_id");
-            $stmt->execute([
-                ':message' => '已合并变更：' . $reason,
-                ':reasons' => configSyncStateJson($reasons),
-                ':job_id' => $current['job_id'],
-            ]);
+        $delaySeconds = $immediate ? 0 : configSyncStateDebounceSeconds();
+        $queuedPhase = $delaySeconds > 0 ? 'debounce' : 'queued';
+        $queuedPhaseLabel = $delaySeconds > 0 ? '等待修改稳定' : '等待同步';
+        $messageSuffix = $delaySeconds > 0
+            ? '；最后一次修改后 ' . $delaySeconds . ' 秒开始同步'
+            : '';
+        $shortMessage = static function (string $prefix): string {
+            return function_exists('mb_substr')
+                ? mb_substr($prefix, 0, 255, 'UTF-8')
+                : substr($prefix, 0, 255);
+        };
+        // 建表放在状态行锁事务之前；真正的 dirty 写入只在下方事务内执行，
+        // 使“待同步”与“最后修改截止时间”对 worker 同时可见。
+        configSyncStateEnsureDirtySchema($pdo);
+        $ownsTransaction = !$pdo->inTransaction();
+        $joined = false;
+        $created = false;
+        try {
+            if ($ownsTransaction) $pdo->beginTransaction();
+            $driver = (string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            $lockSql = "SELECT status,job_id,phase,phase_label,reasons
+                FROM cainiao_config_sync_state WHERE id=1 LIMIT 1";
+            if ($driver === 'mysql') $lockSql .= ' FOR UPDATE';
+            $current = $pdo->query($lockSql)->fetch(PDO::FETCH_ASSOC) ?: [];
+            $currentStatus = (string)($current['status'] ?? 'idle');
+            $currentJobId = (string)($current['job_id'] ?? '');
+            // 必须在拿到状态行锁后再读取当前时间并计算截止时间。若请求 A
+            // 先进入函数、请求 B 后进入但先拿到锁，A 不应使用锁前的旧时间把
+            // B 已经写入的较新防抖截止时间覆盖掉；最终落库顺序应始终单调。
+            $debounceUntil = configSyncStateComputeDebounceUntil(null, $delaySeconds);
+
+            if (in_array($currentStatus, ['queued', 'running'], true) && $currentJobId !== '') {
+                $storedReasons = json_decode((string)($current['reasons'] ?? '[]'), true);
+                if (!is_array($storedReasons)) $storedReasons = [];
+                $reasons = array_values(array_unique(array_merge(
+                    array_values(array_filter(array_map('strval', $storedReasons))),
+                    [$reason]
+                )));
+                $isRunning = $currentStatus === 'running';
+                $stmt = $pdo->prepare("UPDATE cainiao_config_sync_state SET
+                    phase=:phase, phase_label=:phase_label, message=:message, reasons=:reasons,
+                    debounce_until=:debounce_until, updated_at=UTC_TIMESTAMP()
+                    WHERE id=1 AND job_id=:job_id AND status IN ('queued','running')");
+                $stmt->execute([
+                    // 运行中的当前轮次仍显示“同步中”，但截止时间会约束下一轮；
+                    // 排队中的任务则明确显示正在等待修改稳定。
+                    ':phase' => $isRunning ? (string)($current['phase'] ?? 'sync') : $queuedPhase,
+                    ':phase_label' => $isRunning ? (string)($current['phase_label'] ?? '正在同步') : $queuedPhaseLabel,
+                    ':message' => $shortMessage('已合并变更：' . $reason . $messageSuffix),
+                    ':reasons' => configSyncStateJson($reasons),
+                    ':debounce_until' => $debounceUntil,
+                    ':job_id' => $currentJobId,
+                ]);
+                $joined = true;
+            } else {
+                $jobId = configSyncStateNow();
+                $stmt = $pdo->prepare("UPDATE cainiao_config_sync_state SET
+                    status='queued', job_id=:job_id, phase=:phase, phase_label=:phase_label,
+                    message=:message, expected_total=0, current_index=0, success=0, fail=0,
+                    current_app_id=0, current_app='', current_bucket='', started_at=NULL, finished_at=NULL, reasons=:reasons,
+                    result_json='{}', debounce_until=:debounce_until, updated_at=UTC_TIMESTAMP()
+                    WHERE id=1");
+                $stmt->execute([
+                    ':job_id' => $jobId,
+                    ':phase' => $queuedPhase,
+                    ':phase_label' => $queuedPhaseLabel,
+                    ':message' => $shortMessage('已排队：' . $reason . $messageSuffix),
+                    ':reasons' => configSyncStateJson([$reason]),
+                    ':debounce_until' => $debounceUntil,
+                ]);
+                $created = true;
+            }
             configSyncStateMarkDirty($pdo);
-            return configSyncStateRead($pdo);
+            if ($ownsTransaction) $pdo->commit();
+        } catch (Throwable $error) {
+            if ($ownsTransaction && $pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
         }
-        $jobId = configSyncStateNow();
-        $stmt = $pdo->prepare("UPDATE cainiao_config_sync_state SET
-            status='queued', job_id=:job_id, phase='queued', phase_label='等待同步',
-            message=:message, expected_total=0, current_index=0, success=0, fail=0,
-            current_app_id=0, current_app='', current_bucket='', started_at=NULL, finished_at=NULL, reasons=:reasons,
-            result_json='{}', updated_at=UTC_TIMESTAMP()
-            WHERE id=1");
-        $stmt->execute([
-            ':job_id' => $jobId,
-            ':message' => '已排队：' . $reason,
-            ':reasons' => configSyncStateJson([$reason]),
-        ]);
-        configSyncStateMarkDirty($pdo);
-        return configSyncStateRead($pdo);
+
+        $snapshot = configSyncStateRead($pdo);
+        // 这两个字段只描述本次排队动作，便于调度器在并发请求下准确决定
+        // 是否需要启动 worker；它们仅作为本次调用标记，不落库也不改变持久状态合同。
+        $snapshot['queue_created'] = $created ? 1 : 0;
+        $snapshot['queue_joined'] = $joined ? 1 : 0;
+        return $snapshot;
     }
 }
 
 if (!function_exists('configSyncStateMarkRunning')) {
-    /** 将指定代次切换为 running；CAS 防止旧 worker 覆盖较新的排队任务。 */
-    function configSyncStateMarkRunning(PDO $pdo, string $jobId = '', string $message = '正在同步全部配置'): array
+    /**
+     * 将指定代次切换为 running；CAS 防止旧 worker 覆盖较新的排队任务。
+     * $respectDebounce=true 时要求截止时间已到，供后台 worker 抢占排队任务；
+     * 手工同步保持默认 false，可立即接管任务。
+     */
+    function configSyncStateMarkRunning(PDO $pdo, string $jobId = '', string $message = '正在同步全部配置', bool $respectDebounce = false): array
     {
         ensureConfigSyncStateSchema($pdo);
         if ($jobId === '') $jobId = (string)(configSyncStateRead($pdo)['job_id'] ?? '');
+        $dueCondition = $respectDebounce
+            ? " AND (debounce_until IS NULL OR debounce_until <= UTC_TIMESTAMP())"
+            : '';
+        $statusCondition = $respectDebounce ? "status='queued'" : "status IN ('queued','running')";
         $stmt = $pdo->prepare("UPDATE cainiao_config_sync_state SET
             status='running', phase='sync', phase_label='正在同步', message=:message,
             started_at=COALESCE(started_at,UTC_TIMESTAMP()), finished_at=NULL,
-            updated_at=UTC_TIMESTAMP()
-            WHERE id=1 AND job_id=:job_id AND status IN ('queued','running')");
+            debounce_until=NULL, updated_at=UTC_TIMESTAMP()
+            WHERE id=1 AND job_id=:job_id AND {$statusCondition}{$dueCondition}");
         $stmt->execute([':job_id' => $jobId, ':message' => $message]);
-        return configSyncStateRead($pdo);
+        $snapshot = configSyncStateRead($pdo);
+        $snapshot['claim_acquired'] = $stmt->rowCount() > 0 ? 1 : 0;
+        return $snapshot;
+    }
+}
+
+if (!function_exists('configSyncStateReadGate')) {
+    /** 只读取 worker 等待所需的门闩字段，避免每半秒反复归一化整份结果明细。 */
+    function configSyncStateReadGate(PDO $pdo): array
+    {
+        ensureConfigSyncStateSchema($pdo);
+        $row = $pdo->query("SELECT job_id,status,debounce_until
+            FROM cainiao_config_sync_state WHERE id=1 LIMIT 1")
+            ->fetch(PDO::FETCH_ASSOC) ?: [];
+        return [
+            'job_id' => (string)($row['job_id'] ?? ''),
+            'status' => (string)($row['status'] ?? 'idle'),
+            'debounce_until' => (string)($row['debounce_until'] ?? ''),
+            'debounce_remaining_seconds' => configSyncStateRemainingSeconds($row['debounce_until'] ?? ''),
+        ];
+    }
+}
+
+if (!function_exists('configSyncStateWaitForDue')) {
+    /**
+     * 等待防抖截止时间，并可原子地把当前代次切换为 running。
+     *
+     * worker 在等待期间反复读取数据库截止时间，因此连续修改会自然地把
+     * 唤醒时刻向后推移；任务被新代次替换或已结束时返回 ready=false，调用方
+     * 应立即退出，避免旧进程继续写入状态。
+     */
+    function configSyncStateWaitForDue(PDO $pdo, string $jobId = '', bool $claimRunning = true): array
+    {
+        if ($jobId === '') {
+            $jobId = (string)(configSyncStateReadGate($pdo)['job_id'] ?? '');
+        }
+        // 抢占 UPDATE 与随后快照读取之间可能又有修改把截止时间推后。
+        // 本地标记记住已经抢占成功的所有者，让它继续等待新截止时间，
+        // 避免把自己误判为“已有其它 worker”而退出。
+        $ownsRunning = false;
+        while (true) {
+            $state = configSyncStateReadGate($pdo);
+            $stateJobId = (string)($state['job_id'] ?? '');
+            $status = (string)($state['status'] ?? 'idle');
+            if ($jobId !== '' && ($stateJobId !== $jobId
+                || !in_array($status, ['queued', 'running'], true))) {
+                return ['ready' => false, 'stale' => true, 'state' => $state];
+            }
+
+            $remaining = max(0, (int)($state['debounce_remaining_seconds'] ?? 0));
+            if ($remaining > 0) {
+                // 半秒粒度兼顾截止时间精度和数据库压力；每次循环都会重新
+                // 读取截止时间，所以新修改不需要另起 worker 才能延后同步。
+                usleep(500000);
+                continue;
+            }
+            if (!$claimRunning || ($ownsRunning && $status === 'running')) {
+                return ['ready' => true, 'stale' => false, 'state' => $state];
+            }
+            if ($status === 'running') {
+                // 本进程尚未抢占却看到同一 job 正在运行，说明已由其它 worker 持有。
+                return ['ready' => false, 'stale' => false, 'owned_by_other' => true, 'state' => $state];
+            }
+
+            // 只有截止时间已到的 CAS 更新才可以抢占 queued 任务；若更新期间
+            // 又发生修改，markRunning 会保持 queued，下一轮重新读取新截止时间。
+            $running = configSyncStateMarkRunning($pdo, $jobId, '正在同步全部配置', true);
+            $runningJobId = (string)($running['job_id'] ?? '');
+            $runningStatus = (string)($running['status'] ?? 'idle');
+            if (!empty($running['claim_acquired'])
+                && $runningJobId === $jobId && $runningStatus === 'running') {
+                $ownsRunning = true;
+                if ((int)($running['debounce_remaining_seconds'] ?? 0) <= 0) {
+                    return ['ready' => true, 'stale' => false, 'state' => $running];
+                }
+                // 抢占后刚好收到修改，本 worker 保留所有权并回到循环等待。
+                usleep(100000);
+                continue;
+            }
+            if ($runningJobId === $jobId && $runningStatus === 'running') {
+                // 同一代次已经被另一个 worker 抢占；当前进程退出即可，实际
+                // 上传和终态由持有者负责。
+                return ['ready' => false, 'stale' => false, 'owned_by_other' => true, 'state' => $running];
+            }
+            if ($runningJobId !== $jobId
+                || !in_array($runningStatus, ['queued', 'running'], true)) {
+                return ['ready' => false, 'stale' => true, 'state' => $running];
+            }
+            // 竞态窗口内截止时间被重置，继续等待而不是提前上传旧快照。
+            usleep(100000);
+        }
     }
 }
 
@@ -781,8 +1044,12 @@ if (!function_exists('configSyncStateMarkProgress')) {
 }
 
 if (!function_exists('configSyncStateMarkFinished')) {
-    /** 固化同步终态与摘要；异常任务使用 failed，部分应用失败使用 partial_failure。 */
-    function configSyncStateMarkFinished(PDO $pdo, array $result = [], string $jobId = '', ?Throwable $error = null): array
+    /**
+     * 固化同步终态与摘要；异常任务使用 failed，部分应用失败使用 partial_failure。
+     * 正常结束受 debounce_until CAS 保护；worker 启动失败等无后续执行者的异常
+     * 可传 $ignoreDebounce=true 立即落成终态。
+     */
+    function configSyncStateMarkFinished(PDO $pdo, array $result = [], string $jobId = '', ?Throwable $error = null, bool $ignoreDebounce = false): array
     {
         ensureConfigSyncStateSchema($pdo);
         if ($jobId === '') $jobId = (string)(configSyncStateRead($pdo)['job_id'] ?? '');
@@ -859,12 +1126,19 @@ if (!function_exists('configSyncStateMarkFinished')) {
         $result = array_merge($result, $details);
         if ($total === 0 && $detailAppTotal > 0) $total = $detailAppTotal;
         $encodedResult = configSyncStateJson($result, '{}');
+        $finishGuardCondition = $ignoreDebounce
+            ? ''
+            : " AND (debounce_until IS NULL OR debounce_until <= UTC_TIMESTAMP())
+                AND NOT EXISTS (
+                    SELECT 1 FROM cainiao_config_delivery_meta
+                    WHERE key_name='distribution_dirty' AND key_value='1'
+                )";
         $stmt = $pdo->prepare("UPDATE cainiao_config_sync_state SET
             status=:status, phase='finished', phase_label=:phase_label, message=:message,
             expected_total=:total, current_index=:total, success=:success, fail=:fail,
             current_app_id=0, current_app='', current_bucket='', finished_at=UTC_TIMESTAMP(), updated_at=UTC_TIMESTAMP(),
-            result_json=:result_json
-            WHERE id=1 AND job_id=:job_id AND status IN ('queued','running')");
+            debounce_until=NULL, result_json=:result_json
+            WHERE id=1 AND job_id=:job_id AND status IN ('queued','running'){$finishGuardCondition}");
         $stmt->execute([
             ':status' => $status,
             ':phase_label' => $status === 'completed' ? '同步完成' : ($status === 'partial_failure' ? '部分失败' : '同步失败'),
@@ -872,7 +1146,11 @@ if (!function_exists('configSyncStateMarkFinished')) {
             ':total' => $total, ':success' => $success, ':fail' => $fail,
             ':result_json' => $encodedResult, ':job_id' => $jobId,
         ]);
-        return configSyncStateRead($pdo);
+        $snapshot = configSyncStateRead($pdo);
+        // worker 可以用这个临时字段区分“已真正落成终态”和
+        // “终态前又收到新修改，本次 CAS 未命中”。
+        $snapshot['finish_applied'] = $stmt->rowCount() > 0 ? 1 : 0;
+        return $snapshot;
     }
 }
 
@@ -885,28 +1163,18 @@ if (!function_exists('configSyncStateScheduleWorker')) {
      * 当前变更已有 worker 接管（包括加入已有任务），snapshot 是可直接返回前端的
      * 非敏感状态摘要。
      */
-    function configSyncStateScheduleWorker(PDO $pdo, string $reason = '配置变更'): array
+    function configSyncStateScheduleWorker(PDO $pdo, string $reason = '配置变更', bool $immediate = false): array
     {
-        $before = [];
-        $alreadyActive = false;
-        try {
-            $before = configSyncStateRead($pdo);
-            $alreadyActive = in_array((string)($before['status'] ?? ''), ['queued', 'running'], true)
-                && (string)($before['job_id'] ?? '') !== '';
-        } catch (Throwable $ignored) {
-            // 首次迁移时由下面的排队调用补齐状态表。
-        }
-
-        $snapshot = configSyncStateMarkQueued($pdo, $reason);
-        // 读取旧状态与排队之间任务可能已结束；只有仍属同一 job 才视为加入旧任务。
-        if ($alreadyActive) {
-            $alreadyActive = in_array((string)($snapshot['status'] ?? ''), ['queued', 'running'], true)
-                && (string)($snapshot['job_id'] ?? '') !== ''
-                && (string)($snapshot['job_id'] ?? '') === (string)($before['job_id'] ?? '');
-        }
+        $snapshot = configSyncStateMarkQueued($pdo, $reason, $immediate);
+        // markQueued 在行锁内决定“新建”或“加入”，避免两个并发保存都把
+        // 自己误判为首个请求并重复启动同一 job 的 worker。排队状态下的
+        // 加入者仍会尝试启动一个轻量 watcher：首个请求若在 exec 前崩溃，
+        // 后续请求可以接替启动；真正上传仍由 worker 的 CAS 保证单实例。
+        $alreadyActive = !empty($snapshot['queue_joined']);
+        $joinedQueued = $alreadyActive && (string)($snapshot['status'] ?? '') === 'queued';
 
         $script = realpath(__DIR__ . '/../../service/push_all_configs.php');
-        if ($alreadyActive) {
+        if ($alreadyActive && !$joinedQueued) {
             return [
                 'scheduled' => true,
                 'started' => false,
@@ -920,12 +1188,13 @@ if (!function_exists('configSyncStateScheduleWorker')) {
                 $pdo,
                 ['total' => 0, 'success' => 0, 'fail' => 0, 'message' => '后台同步脚本未启动'],
                 (string)($snapshot['job_id'] ?? ''),
-                new RuntimeException('后台同步脚本未启动')
+                new RuntimeException('后台同步脚本未启动'),
+                true
             );
             return [
                 'scheduled' => false,
                 'started' => false,
-                'joined' => false,
+                'joined' => $alreadyActive,
                 'snapshot' => $failed,
             ];
         }
@@ -941,19 +1210,26 @@ if (!function_exists('configSyncStateScheduleWorker')) {
             && !empty($output)
             && ctype_digit(trim((string)end($output)));
         if (!$started) {
-            $snapshot = configSyncStateMarkFinished(
-                $pdo,
-                ['total' => 0, 'success' => 0, 'fail' => 0, 'message' => '后台同步脚本未启动'],
-                $jobId,
-                new RuntimeException('后台同步脚本未启动')
-            );
+            // exec 的瞬时失败不把任务落成 failed：并发加入者可能正在接替
+            // 启动，保留 queued 与原防抖截止时间才能让它继续抢占。下一次
+            // 配置修改或手工“立即同步”会再次尝试启动；状态消息明确提示重试。
+            try {
+                $pending = $pdo->prepare("UPDATE cainiao_config_sync_state SET
+                    phase='debounce', phase_label='等待修改稳定',
+                    message='后台同步脚本未启动，等待重试', updated_at=UTC_TIMESTAMP()
+                    WHERE id=1 AND job_id=:job_id AND status='queued'");
+                $pending->execute([':job_id' => $jobId]);
+                $snapshot = configSyncStateRead($pdo);
+            } catch (Throwable $ignored) {
+                $snapshot = configSyncStateRead($pdo);
+            }
         } else {
             $snapshot = configSyncStateRead($pdo);
         }
         return [
             'scheduled' => $started,
             'started' => $started,
-            'joined' => false,
+            'joined' => $alreadyActive,
             'snapshot' => $snapshot,
         ];
     }

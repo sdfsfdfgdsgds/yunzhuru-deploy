@@ -867,6 +867,13 @@
       line-height: 1.55;
     }
 
+    .global-config-sync__debounce-hint {
+      margin: -2px 0 10px;
+      color: #2563eb;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
     .global-config-sync__metrics {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1582,6 +1589,9 @@
           <div class="global-config-sync__summary-message">
             {{ globalSyncProgress.message || '等待配置变更' }}
           </div>
+          <div v-if="globalSyncDebounceRemaining > 0" class="global-config-sync__debounce-hint">
+            {{ globalSyncDebounceLabel }}（继续修改会重新计时）
+          </div>
           <el-progress
             :percentage="globalSyncProgressPercent"
             :stroke-width="9"
@@ -1773,10 +1783,10 @@
           <el-button
             type="primary"
             :loading="globalSyncStarting"
-            :disabled="globalSyncBusy"
+            :disabled="globalSyncManualDisabled"
             @click="startGlobalConfigSync"
           >
-            {{ ['partial_failure', 'partial', 'partial_success', 'failed'].includes(globalSyncProgress.status) ? '重新全量同步' : '同步全部配置' }}
+            {{ globalSyncProgress.status === 'queued' ? '立即同步' : (['partial_failure', 'partial', 'partial_success', 'failed'].includes(globalSyncProgress.status) ? '重新全量同步' : '同步全部配置') }}
           </el-button>
         </div>
       </template>
@@ -2512,7 +2522,9 @@
           current_app_id: 0, current_app: '', current_bucket: '',
           reasons: [], result: {}, results: {}, result_summary: {},
           app_results: [], partial_apps: [], partial_items: [], cleanup_items: [], success_items: [], successful_items: [], failed_items: [], skipped_items: [], sync_items: [],
-          started_at: '', updated_at: '', finished_at: ''
+          started_at: '', updated_at: '', finished_at: '',
+          debounce_until: '', next_sync_at: '', debounce_seconds: 60,
+          debounce_remaining_seconds: 0, is_debouncing: 0
         });
         let globalSyncStatusTimer = null;
         let globalSyncStatusRequestGeneration = 0;
@@ -2522,11 +2534,24 @@
           globalSyncStarting.value
           || ['queued', 'running'].includes(String(globalSyncProgress.status || ''))
         ));
+        const globalSyncManualDisabled = computed(() => (
+          globalSyncStarting.value || String(globalSyncProgress.status || '') === 'running'
+        ));
         const globalSyncStatusLabel = computed(() => ({
           queued: '排队中', running: '同步中', completed: '已完成',
           partial_failure: '部分失败', partial: '部分成功', partial_success: '部分成功',
           failed: '同步失败', idle: '待命'
         }[String(globalSyncProgress.status || 'idle')] || '待命'));
+        const globalSyncDebounceRemaining = computed(() => Math.max(
+          0,
+          Number(globalSyncProgress.debounce_remaining_seconds || 0)
+        ));
+        const globalSyncDebounceLabel = computed(() => {
+          const remaining = globalSyncDebounceRemaining.value;
+          if (remaining <= 0) return '';
+          const action = String(globalSyncProgress.status || '') === 'running' ? '继续同步' : '开始同步';
+          return '修改已合并，' + remaining + ' 秒后' + action;
+        });
         const globalSyncStatusTagType = computed(() => ({
           queued: 'warning', running: 'warning', completed: 'success',
           partial_failure: 'danger', partial: 'warning', partial_success: 'warning',
@@ -3059,6 +3084,10 @@
             globalSyncProgress.current_app = '';
             globalSyncProgress.current_app_id = 0;
             globalSyncProgress.current_bucket = '';
+            globalSyncProgress.debounce_until = '';
+            globalSyncProgress.next_sync_at = '';
+            globalSyncProgress.debounce_remaining_seconds = 0;
+            globalSyncProgress.is_debouncing = 0;
             globalSyncProgress.success = 0;
             globalSyncProgress.fail = 0;
             globalSyncProgress.skipped = 0;
@@ -3117,13 +3146,16 @@
           );
           if (inferredStatus) globalSyncProgress.status = inferredStatus;
           ['job_id', 'phase', 'phase_label', 'message', 'current_app', 'current_bucket',
-            'started_at', 'updated_at', 'finished_at'].forEach(field => {
+            'started_at', 'updated_at', 'finished_at', 'debounce_until', 'next_sync_at'].forEach(field => {
             if (data[field] !== undefined) globalSyncProgress[field] = String(data[field] || '');
           });
           ['total', 'expected_total', 'current', 'processed', 'skipped', 'app_success_count', 'app_successful_count',
             'app_failed_count', 'app_skipped_count', 'partial', 'partial_success', 'app_partial_count',
             'bucket_success', 'bucket_fail', 'bucket_total', 'bucket_success_count',
             'bucket_failed_count', 'bucket_fail_count', 'current_app_id'].forEach(field => {
+            if (data[field] !== undefined) globalSyncProgress[field] = Number(data[field]) || 0;
+          });
+          ['debounce_seconds', 'debounce_remaining_seconds', 'is_debouncing'].forEach(field => {
             if (data[field] !== undefined) globalSyncProgress[field] = Number(data[field]) || 0;
           });
           if (Array.isArray(data.reasons)) globalSyncProgress.reasons = data.reasons;
@@ -3227,7 +3259,7 @@
         }
 
         async function startGlobalConfigSync() {
-          if (globalSyncBusy.value) return;
+          if (globalSyncManualDisabled.value) return;
           globalSyncStarting.value = true;
           globalSyncStatusSupported.value = true;
           applyGlobalSyncSnapshot({
@@ -4694,7 +4726,10 @@ async function clearS3Config() {
           globalSyncStarting,
           globalSyncProgress,
           globalSyncBusy,
+          globalSyncManualDisabled,
           globalSyncStatusLabel,
+          globalSyncDebounceRemaining,
+          globalSyncDebounceLabel,
           globalSyncStatusTagType,
           globalSyncLauncherType,
           globalSyncBadgeValue,

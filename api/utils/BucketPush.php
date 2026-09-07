@@ -789,10 +789,13 @@ function pushAllConfigsToBucketsUnlocked(PDO $pdo): array {
 /**
  * 全量桶同步使用 MySQL advisory lock 去重。
  *
- * 配置分发页连续保存多个节点时会连续触发异步刷新；后到任务
- * 若发现已有全量任务，直接合并为“已在同步”，避免 126 个应用重复排队。
+ * 每次调用只在持锁期间执行一个完整快照。如果上传期间又有配置修改，
+ * 通过 pending_change 交给外层 worker 在释放锁后等待新的防抖截止时间。
+ * 这样等待期不会占用全局同步锁，管理员的手工立即同步仍可迅速进入。
+ * @param bool $force 是否忽略 dirty 标记（手工调用默认 true）
+ * @param string $syncJobId 异步全局任务代次，用于写入同一份进度快照
  */
-function pushAllConfigsToBuckets(PDO $pdo, bool $force = true): array {
+function pushAllConfigsToBuckets(PDO $pdo, bool $force = true, string $syncJobId = ''): array {
     $driver = (string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
     if ($driver !== 'mysql') {
         return pushAllConfigsToBucketsUnlocked($pdo);
@@ -815,64 +818,130 @@ function pushAllConfigsToBuckets(PDO $pdo, bool $force = true): array {
     }
 
     try {
-        $dirtyAvailable = true;
+        // 在真正生成快照前，用与 markQueued 一致的“状态行 -> dirty 行”
+        // 锁顺序原子消费本轮截止时间和 dirty。修改若先提交，这里会看到
+        // 新截止时间并返回等待；本轮若先领取，后到修改就归入下一轮。
+        $claimTransaction = false;
         try {
-            $dirtyStmt = $pdo->prepare("SELECT key_value FROM cainiao_config_delivery_meta
-                WHERE key_name='distribution_dirty' LIMIT 1");
-            $dirtyStmt->execute();
-            $dirty = (string)$dirtyStmt->fetchColumn() === '1';
-        } catch (Throwable $ignored) {
-            $dirtyAvailable = false;
-            $dirty = true;
-        }
+            $pdo->beginTransaction();
+            $claimTransaction = true;
+            if ($syncJobId !== '') {
+                $gateStmt = $pdo->prepare("SELECT job_id,status,debounce_until,
+                    CASE WHEN debounce_until IS NOT NULL AND debounce_until > UTC_TIMESTAMP()
+                        THEN 1 ELSE 0 END AS debounce_pending
+                    FROM cainiao_config_sync_state WHERE id=1 LIMIT 1 FOR UPDATE");
+                $gateStmt->execute();
+                $gate = $gateStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+                $gateJobId = (string)($gate['job_id'] ?? '');
+                $gateStatus = (string)($gate['status'] ?? 'idle');
+                if ($gateJobId !== $syncJobId || $gateStatus !== 'running') {
+                    if (!$pdo->commit()) throw new RuntimeException('提交过期任务检查事务失败');
+                    $claimTransaction = false;
+                    return [
+                        'code' => 409,
+                        'status' => 'stale',
+                        'message' => '同步任务已被替换',
+                        'success' => 0,
+                        'fail' => 0,
+                        'total' => 0,
+                        'data' => [],
+                        'stale_job' => 1,
+                    ];
+                }
+                if (!empty($gate['debounce_pending'])) {
+                    if (!$pdo->commit()) throw new RuntimeException('提交防抖门闩检查事务失败');
+                    $claimTransaction = false;
+                    return [
+                        'code' => 202,
+                        'status' => 'debouncing',
+                        'message' => '检测到新修改，等待防抖截止时间',
+                        'success' => 0,
+                        'fail' => 0,
+                        'total' => 0,
+                        'data' => [],
+                        'coalesced_passes' => 0,
+                        'pending_change' => 1,
+                        'deferred' => 1,
+                    ];
+                }
+            }
 
-        if (!$force && $dirtyAvailable && !$dirty) {
-            return [
-                'code' => 200,
-                'message' => '最新全局配置已由前一同步任务处理',
-                'success' => 0,
-                'fail' => 0,
-                'total' => 0,
-                'data' => [],
-                'coalesced' => 1,
-            ];
-        }
+            $dirtyAvailable = true;
+            try {
+                $dirtyStmt = $pdo->prepare("SELECT key_value FROM cainiao_config_delivery_meta
+                    WHERE key_name='distribution_dirty' LIMIT 1 FOR UPDATE");
+                $dirtyStmt->execute();
+                $dirty = (string)$dirtyStmt->fetchColumn() === '1';
+            } catch (Throwable $ignored) {
+                $dirtyAvailable = false;
+                $dirty = true;
+            }
 
-        $passes = 0;
-        $result = [];
-        do {
+            if (!$force && $dirtyAvailable && !$dirty) {
+                // 旧 worker 已经吸收本轮修改；同时清理已到期截止时间，
+                // 后续终态 CAS 即可收敛当前 job。
+                if ($syncJobId !== '') {
+                    $clearDue = $pdo->prepare("UPDATE cainiao_config_sync_state SET
+                        debounce_until=NULL, updated_at=UTC_TIMESTAMP()
+                        WHERE id=1 AND job_id=:job_id AND status='running'");
+                    $clearDue->execute([':job_id' => $syncJobId]);
+                }
+                if (!$pdo->commit()) throw new RuntimeException('提交同步合并检查事务失败');
+                $claimTransaction = false;
+                return [
+                    'code' => 200,
+                    'message' => '最新全局配置已由前一同步任务处理',
+                    'success' => 0,
+                    'fail' => 0,
+                    'total' => 0,
+                    'data' => [],
+                    'coalesced' => 1,
+                    'pending_change' => 0,
+                ];
+            }
+
             if ($dirtyAvailable) {
                 $clearDirty = $pdo->prepare("INSERT INTO cainiao_config_delivery_meta (key_name,key_value)
                     VALUES ('distribution_dirty','0')
                     ON DUPLICATE KEY UPDATE key_value='0'");
                 $clearDirty->execute();
             }
-
-            try {
-                $result = pushAllConfigsToBucketsUnlocked($pdo);
-            } catch (Throwable $e) {
-                if ($dirtyAvailable) {
-                    try {
-                        $restoreDirty = $pdo->prepare("INSERT INTO cainiao_config_delivery_meta (key_name,key_value)
-                            VALUES ('distribution_dirty','1')
-                            ON DUPLICATE KEY UPDATE key_value='1'");
-                        $restoreDirty->execute();
-                    } catch (Throwable $ignored) {}
-                }
-                throw $e;
+            if ($syncJobId !== '') {
+                $clearDue = $pdo->prepare("UPDATE cainiao_config_sync_state SET
+                    debounce_until=NULL, updated_at=UTC_TIMESTAMP()
+                    WHERE id=1 AND job_id=:job_id AND status='running'");
+                $clearDue->execute([':job_id' => $syncJobId]);
             }
-            $passes++;
+            if (!$pdo->commit()) throw new RuntimeException('提交同步快照领取事务失败');
+            $claimTransaction = false;
+        } catch (Throwable $claimError) {
+            if ($claimTransaction && $pdo->inTransaction()) $pdo->rollBack();
+            throw $claimError;
+        }
 
-            if (!$dirtyAvailable) {
-                $dirty = false;
-                break;
+        try {
+            $result = pushAllConfigsToBucketsUnlocked($pdo);
+        } catch (Throwable $e) {
+            if ($dirtyAvailable) {
+                try {
+                    $restoreDirty = $pdo->prepare("INSERT INTO cainiao_config_delivery_meta (key_name,key_value)
+                        VALUES ('distribution_dirty','1')
+                        ON DUPLICATE KEY UPDATE key_value='1'");
+                    $restoreDirty->execute();
+                } catch (Throwable $ignored) {}
             }
-            $dirtyStmt->execute();
-            $dirty = (string)$dirtyStmt->fetchColumn() === '1';
-            // 单个工作者最多吸收三轮并发修改；仍有新变更时由已等锁工作者继续。
-        } while ($dirty && $passes < 3);
+            throw $e;
+        }
 
-        $result['coalesced_passes'] = $passes;
+        if ($dirtyAvailable) {
+            $dirtyAfterStmt = $pdo->prepare("SELECT key_value FROM cainiao_config_delivery_meta
+                WHERE key_name='distribution_dirty' LIMIT 1");
+            $dirtyAfterStmt->execute();
+            $dirty = (string)$dirtyAfterStmt->fetchColumn() === '1';
+        } else {
+            $dirty = false;
+        }
+        $result['coalesced_passes'] = 1;
         $result['pending_change'] = $dirty ? 1 : 0;
         return $result;
     } finally {
