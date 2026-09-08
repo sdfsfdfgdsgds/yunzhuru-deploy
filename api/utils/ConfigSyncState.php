@@ -7,6 +7,8 @@
  * 真实同步仍由 BucketPush/worker 执行，状态写入失败不会阻断对象推送主链路。
  */
 
+require_once __DIR__ . '/ConfigSyncHistory.php';
+
 if (!function_exists('ensureConfigSyncStateSchema')) {
     /** 创建全局同步状态表并补齐初始 idle 行；可重复调用。 */
     function ensureConfigSyncStateSchema(PDO $pdo): void
@@ -14,7 +16,12 @@ if (!function_exists('ensureConfigSyncStateSchema')) {
         // 同一请求/worker 内会按应用多次更新进度；避免每次重复执行 DDL 和 SHOW COLUMNS。
         static $ready = [];
         $pdoKey = function_exists('spl_object_id') ? spl_object_id($pdo) : (string)(int)$pdo;
-        if (isset($ready[$pdoKey])) return;
+        if (isset($ready[$pdoKey])) {
+            ensureConfigSyncHistorySchema($pdo);
+            return;
+        }
+        // 调用方事务内依赖正式迁移，避免运行时 DDL 隐式提交业务修改。
+        if ($pdo->inTransaction()) return;
         $pdo->exec("CREATE TABLE IF NOT EXISTS cainiao_config_sync_state (
             id tinyint unsigned NOT NULL,
             status varchar(32) NOT NULL DEFAULT 'idle',
@@ -29,6 +36,7 @@ if (!function_exists('ensureConfigSyncStateSchema')) {
             current_app_id int unsigned NOT NULL DEFAULT 0,
             current_app varchar(255) NOT NULL DEFAULT '',
             current_bucket varchar(255) NOT NULL DEFAULT '',
+            created_at datetime NULL,
             started_at datetime NULL,
             updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             finished_at datetime NULL,
@@ -43,6 +51,7 @@ if (!function_exists('ensureConfigSyncStateSchema')) {
             VALUES (1,'idle','idle','待命','尚未执行配置桶全量同步','[]','{}')");
         // 已存在的旧状态表按需补列，保证滚动发布期间接口字段始终完整。
         foreach ([
+            'created_at' => 'datetime NULL',
             'current_app' => "varchar(255) NOT NULL DEFAULT ''",
             'current_bucket' => "varchar(255) NOT NULL DEFAULT ''",
             // 旧版本状态表没有延迟截止时间，滚动发布时按需补列即可。
@@ -58,6 +67,7 @@ if (!function_exists('ensureConfigSyncStateSchema')) {
             }
         }
         $ready[$pdoKey] = true;
+        ensureConfigSyncHistorySchema($pdo);
     }
 }
 
@@ -628,6 +638,14 @@ if (!function_exists('configSyncStateRead')) {
     {
         ensureConfigSyncStateSchema($pdo);
         $row = $pdo->query('SELECT * FROM cainiao_config_sync_state WHERE id=1 LIMIT 1')->fetch(PDO::FETCH_ASSOC) ?: [];
+        return configSyncStateNormalizeRow($pdo, $row);
+    }
+}
+
+if (!function_exists('configSyncStateNormalizeRow')) {
+    /** 规范化已读取的状态行，归档与实时读取共用同一输出合同。 */
+    function configSyncStateNormalizeRow(PDO $pdo, array $row): array
+    {
         $formatTime = static function ($value): string {
             $value = trim((string)$value);
             if ($value === '') return '';
@@ -711,6 +729,7 @@ if (!function_exists('configSyncStateRead')) {
             'total' => (int)($row['expected_total'] ?? 0),
             'current' => (int)($row['current_index'] ?? 0),
             // 数据库统一使用 UTC 写入，管理页合同输出北京时间可读值。
+            'created_at' => $formatTime($row['created_at'] ?? $row['started_at'] ?? $row['updated_at'] ?? ''),
             'started_at' => $formatTime($row['started_at'] ?? ''),
             'updated_at' => $formatTime($row['updated_at'] ?? ''),
             'finished_at' => $formatTime($row['finished_at'] ?? ''),
@@ -820,8 +839,7 @@ if (!function_exists('configSyncStateMarkQueued')) {
         try {
             if ($ownsTransaction) $pdo->beginTransaction();
             $driver = (string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
-            $lockSql = "SELECT status,job_id,phase,phase_label,reasons
-                FROM cainiao_config_sync_state WHERE id=1 LIMIT 1";
+            $lockSql = "SELECT * FROM cainiao_config_sync_state WHERE id=1 LIMIT 1";
             if ($driver === 'mysql') $lockSql .= ' FOR UPDATE';
             $current = $pdo->query($lockSql)->fetch(PDO::FETCH_ASSOC) ?: [];
             $currentStatus = (string)($current['status'] ?? 'idle');
@@ -855,12 +873,14 @@ if (!function_exists('configSyncStateMarkQueued')) {
                 ]);
                 $joined = true;
             } else {
+                // 新代次替换前保存唯一旧快照；已有终态历史保持冻结。
+                configSyncHistoryStoreRow($pdo, $current, false);
                 $jobId = configSyncStateNow();
                 $stmt = $pdo->prepare("UPDATE cainiao_config_sync_state SET
                     status='queued', job_id=:job_id, phase=:phase, phase_label=:phase_label,
                     message=:message, expected_total=0, current_index=0, success=0, fail=0,
                     current_app_id=0, current_app='', current_bucket='', started_at=NULL, finished_at=NULL, reasons=:reasons,
-                    result_json='{}', debounce_until=:debounce_until, updated_at=UTC_TIMESTAMP()
+                    result_json='{}', debounce_until=:debounce_until, created_at=UTC_TIMESTAMP(), updated_at=UTC_TIMESTAMP()
                     WHERE id=1");
                 $stmt->execute([
                     ':job_id' => $jobId,
@@ -872,14 +892,16 @@ if (!function_exists('configSyncStateMarkQueued')) {
                 ]);
                 $created = true;
             }
+            // 每个新批次先登记一条历史；queued/running 的后续变更仅覆盖当前状态。
+            if ($created) configSyncHistoryStoreRow($pdo, configSyncHistoryReadCurrentRow($pdo), false);
             configSyncStateMarkDirty($pdo);
+            $snapshot = configSyncStateRead($pdo);
             if ($ownsTransaction) $pdo->commit();
         } catch (Throwable $error) {
             if ($ownsTransaction && $pdo->inTransaction()) $pdo->rollBack();
             throw $error;
         }
 
-        $snapshot = configSyncStateRead($pdo);
         // 这两个字段只描述本次排队动作，便于调度器在并发请求下准确决定
         // 是否需要启动 worker；它们仅作为本次调用标记，不落库也不改变持久状态合同。
         $snapshot['queue_created'] = $created ? 1 : 0;
@@ -1139,14 +1161,16 @@ if (!function_exists('configSyncStateMarkFinished')) {
             current_app_id=0, current_app='', current_bucket='', finished_at=UTC_TIMESTAMP(), updated_at=UTC_TIMESTAMP(),
             debounce_until=NULL, result_json=:result_json
             WHERE id=1 AND job_id=:job_id AND status IN ('queued','running'){$finishGuardCondition}");
-        $stmt->execute([
-            ':status' => $status,
-            ':phase_label' => $status === 'completed' ? '同步完成' : ($status === 'partial_failure' ? '部分失败' : '同步失败'),
-            ':message' => mb_substr($message, 0, 255, 'UTF-8'),
-            ':total' => $total, ':success' => $success, ':fail' => $fail,
-            ':result_json' => $encodedResult, ':job_id' => $jobId,
-        ]);
-        $snapshot = configSyncStateRead($pdo);
+        $snapshot = configSyncHistoryMutateCurrent($pdo, $jobId, static function () use ($stmt, $status, $message, $total, $success, $fail, $encodedResult, $jobId): bool {
+            $stmt->execute([
+                ':status' => $status,
+                ':phase_label' => $status === 'completed' ? '同步完成' : ($status === 'partial_failure' ? '部分失败' : '同步失败'),
+                ':message' => mb_substr($message, 0, 255, 'UTF-8'),
+                ':total' => $total, ':success' => $success, ':fail' => $fail,
+                ':result_json' => $encodedResult, ':job_id' => $jobId,
+            ]);
+            return $stmt->rowCount() > 0;
+        });
         // worker 可以用这个临时字段区分“已真正落成终态”和
         // “终态前又收到新修改，本次 CAS 未命中”。
         $snapshot['finish_applied'] = $stmt->rowCount() > 0 ? 1 : 0;
@@ -1199,17 +1223,12 @@ if (!function_exists('configSyncStateScheduleWorker')) {
             ];
         }
 
-        $output = [];
-        $exitCode = 1;
+        require_once __DIR__ . '/ConfigSyncWorker.php';
         $jobId = (string)($snapshot['job_id'] ?? '');
-        $command = 'php ' . escapeshellarg($script)
-            . ($jobId !== '' ? ' ' . escapeshellarg($jobId) : '')
-            . ' > /dev/null 2>&1 & echo $!';
-        @exec($command, $output, $exitCode);
-        $started = $exitCode === 0
-            && !empty($output)
-            && ctype_digit(trim((string)end($output)));
-        if (!$started) {
+        $worker = configSyncWorkerEnsureStarted($pdo, $jobId);
+        $started = !empty($worker['started']);
+        $scheduled = !empty($worker['scheduled']);
+        if (!$scheduled) {
             // exec 的瞬时失败不把任务落成 failed：并发加入者可能正在接替
             // 启动，保留 queued 与原防抖截止时间才能让它继续抢占。下一次
             // 配置修改或手工“立即同步”会再次尝试启动；状态消息明确提示重试。
@@ -1227,7 +1246,7 @@ if (!function_exists('configSyncStateScheduleWorker')) {
             $snapshot = configSyncStateRead($pdo);
         }
         return [
-            'scheduled' => $started,
+            'scheduled' => $scheduled,
             'started' => $started,
             'joined' => $alreadyActive,
             'snapshot' => $snapshot,
@@ -1350,16 +1369,18 @@ if (!function_exists('configSyncStatePersistRetry')) {
             success=:success, fail=:fail, finished_at=UTC_TIMESTAMP(), updated_at=UTC_TIMESTAMP(),
             result_json=:result_json WHERE id=1 AND job_id=:job_id
               AND status NOT IN ('queued','running')");
-        $stmt->execute([
-            ':status' => $status,
-            ':phase_label' => $status === 'completed' ? '同步完成' : ($status === 'partial_failure' ? '部分失败' : '同步失败'),
-            ':message' => mb_substr((string)$result['message'], 0, 255, 'UTF-8'),
-            ':success' => (int)$result['success'],
-            ':fail' => (int)$result['fail'],
-            ':result_json' => configSyncStateJson($result, '{}'),
-            ':job_id' => $jobId,
-        ]);
-        $snapshot = configSyncStateRead($pdo);
+        $snapshot = configSyncHistoryMutateCurrent($pdo, $jobId, static function () use ($stmt, $status, $result, $jobId): bool {
+            $stmt->execute([
+                ':status' => $status,
+                ':phase_label' => $status === 'completed' ? '同步完成' : ($status === 'partial_failure' ? '部分失败' : '同步失败'),
+                ':message' => mb_substr((string)$result['message'], 0, 255, 'UTF-8'),
+                ':success' => (int)$result['success'],
+                ':fail' => (int)$result['fail'],
+                ':result_json' => configSyncStateJson($result, '{}'),
+                ':job_id' => $jobId,
+            ]);
+            return $stmt->rowCount() > 0;
+        });
         // 相同失败重复点击可能产生完全相同的 JSON，rowCount=0 也需区别于新任务抢占。
         $snapshot['retry_applied'] = (string)($snapshot['job_id'] ?? '') === $jobId
             && !in_array((string)($snapshot['status'] ?? ''), ['queued', 'running'], true) ? 1 : 0;

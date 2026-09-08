@@ -4,16 +4,33 @@
  * 用于全局配置变化后刷新 S3/R2/B2 上的 config/*.enc。
  */
 
-require_once __DIR__ . '/../config/db.php';
-require_once __DIR__ . '/../config/redis.php';
-require_once __DIR__ . '/../api/utils/Auth.php';
-require_once __DIR__ . '/../api/utils/BucketPush.php';
-require_once __DIR__ . '/../api/utils/ConfigSyncState.php';
+if (PHP_SAPI !== 'cli') {
+    http_response_code(403);
+    exit(1);
+}
+
+require_once __DIR__ . '/../api/utils/ConfigSyncWorker.php';
+ini_set('display_errors', '0');
+ini_set('log_errors', '0');
 
 $jobId = trim((string)($argv[1] ?? ''));
+$bootstrapped = false;
+// 历史数据库引导可能直接输出连接错误并退出。丢弃正文，日志只保留固定
+// 故障分类；未接管的 queued 原样留下，供常驻 dispatcher 再次尝试。
+ob_start(static function (string $output): string { return ''; }, 1);
+register_shutdown_function(static function () use (&$bootstrapped, &$jobId): void {
+    $error = error_get_last();
+    $fatal = $error && in_array((int)$error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true);
+    if (!$bootstrapped || $fatal) {
+        configSyncWorkerLog($fatal ? 'worker_fatal' : 'worker_bootstrap_failed', $jobId,
+            ['error_code' => $error['type'] ?? 0, 'error_line' => $error['line'] ?? 0]);
+        exit(2);
+    }
+});
+$pdo = null;
 $watcherLockName = '';
 $watcherLockHeld = false;
-$releaseWatcherLock = static function () use ($pdo, &$watcherLockName, &$watcherLockHeld): void {
+$releaseWatcherLock = static function () use (&$pdo, &$watcherLockName, &$watcherLockHeld): void {
     if (!$watcherLockHeld || $watcherLockName === '') return;
     try {
         $release = $pdo->prepare('SELECT RELEASE_LOCK(:lock_name)');
@@ -25,6 +42,13 @@ $releaseWatcherLock = static function () use ($pdo, &$watcherLockName, &$watcher
     $watcherLockHeld = false;
 };
 try {
+    require_once __DIR__ . '/../config/db.php';
+    require_once __DIR__ . '/../config/redis.php';
+    require_once __DIR__ . '/../api/utils/Auth.php';
+    require_once __DIR__ . '/../api/utils/BucketPush.php';
+    require_once __DIR__ . '/../api/utils/ConfigSyncState.php';
+    if (!($pdo instanceof PDO)) throw new RuntimeException('database unavailable');
+    $bootstrapped = true;
     // 调度器会把 job_id 作为参数传入；没有参数时兼容旧手工执行并接管当前排队任务。
     $state = configSyncStateRead($pdo);
     if ($jobId === '') $jobId = (string)($state['job_id'] ?? '');
@@ -32,14 +56,15 @@ try {
     // 前退出的窗口；同一 job 只允许一个进程持有该零等待 advisory lock，
     // 其余进程立即结束，因此不会形成大量驻留进程或重复上传。
     if ($jobId !== '' && (string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
-        $watcherLockName = 'yunzhuru_cfg_wait_' . substr(hash('sha256', $jobId), 0, 32);
+        $watcherLockName = configSyncWorkerWaiterLockName($jobId);
         $watcherLock = $pdo->prepare('SELECT GET_LOCK(:lock_name, 0)');
         $watcherLock->execute([':lock_name' => $watcherLockName]);
         if ((int)$watcherLock->fetchColumn() !== 1) {
-            error_log('[push_all_configs.php] 同一任务已有等待 worker: ' . $jobId);
+            configSyncWorkerLog('waiter_already_owned', $jobId);
             exit(0);
         }
         $watcherLockHeld = true;
+        configSyncWorkerLog('waiter_acquired', $jobId, ['pid' => getmypid()]);
     }
     // 自动触发采用防抖：只有最后一次修改后的截止时间到达，worker 才会
     // 抢占 running。等待期间每次重读数据库，因此连续保存会继续向后延迟。
@@ -47,7 +72,7 @@ try {
         $ready = configSyncStateWaitForDue($pdo, $jobId, true);
         if (empty($ready['ready'])) {
             $releaseWatcherLock();
-            error_log('[push_all_configs.php] 检测到过期任务，跳过旧 worker: ' . $jobId);
+            configSyncWorkerLog('waiter_not_claimed', $jobId);
             exit(0);
         }
     } else {
@@ -55,7 +80,7 @@ try {
         $runningState = configSyncStateMarkRunning($pdo, $jobId);
         if ($jobId !== '' && ((string)($runningState['job_id'] ?? '') !== $jobId
             || !in_array((string)($runningState['status'] ?? ''), ['queued', 'running'], true))) {
-            error_log('[push_all_configs.php] 检测到过期任务，跳过旧 worker: ' . $jobId);
+            configSyncWorkerLog('stale_job', $jobId);
             exit(0);
         }
     }
@@ -69,7 +94,7 @@ try {
     while (true) {
         $result = pushAllConfigsToBuckets($pdo, false, $jobId);
         if (!empty($result['stale_job'])) {
-            error_log('[push_all_configs.php] 任务已替换，停止旧 worker: ' . $jobId);
+            configSyncWorkerLog('stale_job', $jobId);
             exit(0);
         }
         // 上传期间又有修改时先释放 BucketPush 里的 advisory lock，
@@ -79,7 +104,7 @@ try {
                 ? configSyncStateWaitForDue($pdo, $jobId, false)
                 : ['ready' => true];
             if (empty($ready['ready'])) {
-                error_log('[push_all_configs.php] 任务已替换，停止旧 worker: ' . $jobId);
+                configSyncWorkerLog('stale_job', $jobId);
                 exit(0);
             }
             continue;
@@ -96,12 +121,12 @@ try {
                 ? configSyncStateWaitForDue($pdo, $jobId, false)
                 : ['ready' => true];
             if (empty($ready['ready'])) {
-                error_log('[push_all_configs.php] 任务已替换，停止旧 worker: ' . $jobId);
+                configSyncWorkerLog('stale_job', $jobId);
                 exit(0);
             }
             continue;
         }
-        error_log('[push_all_configs.php] 推送完成: ' . json_encode($result, JSON_UNESCAPED_UNICODE));
+        configSyncWorkerLog('finished', $jobId, is_array($result) ? $result : []);
         break;
     }
 } catch (Throwable $e) {
@@ -121,6 +146,6 @@ try {
     } catch (Throwable $ignored) {
         // 状态固化失败不覆盖原始同步异常；主日志仍保留具体原因。
     }
-    error_log('[push_all_configs.php] 推送失败: ' . $e->getMessage());
+    configSyncWorkerLog('failed', $jobId, ['error_code' => $e->getCode(), 'error_line' => $e->getLine()]);
     exit(1);
 }

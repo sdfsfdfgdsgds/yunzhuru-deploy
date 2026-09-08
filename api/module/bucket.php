@@ -1124,6 +1124,18 @@ function getSyncStatus(PDO $pdo, array $input) {
     return getConfigSyncStatus($pdo, $input);
 }
 
+/** 分页读取全局同步批次；连续修改合并为同一任务，往期记录仅供查看。 */
+function getConfigSyncTasks(PDO $pdo, array $input) {
+    bucketRequireAdmin($pdo);
+    return configSyncHistoryList($pdo, (int)($input['page'] ?? 1), (int)($input['page_size'] ?? 10));
+}
+
+/** 展开指定批次的完整详情；历史详情不触发同步，也不改变当前任务。 */
+function getConfigSyncTaskDetail(PDO $pdo, array $input) {
+    bucketRequireAdmin($pdo);
+    return configSyncHistoryDetail($pdo, trim((string)($input['job_id'] ?? '')));
+}
+
 /**
  * 仅重试当前终态中失败的配置对象，成功对象保持不动。
  *

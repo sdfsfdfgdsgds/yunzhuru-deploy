@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS `cainiao_config_sync_state` (
   `current_app_id` int unsigned NOT NULL DEFAULT 0,
   `current_app` varchar(255) NOT NULL DEFAULT '',
   `current_bucket` varchar(255) NOT NULL DEFAULT '',
+  `created_at` datetime NULL COMMENT '本批次首次排队的 UTC 时间',
   `started_at` datetime NULL,
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `finished_at` datetime NULL,
@@ -38,6 +39,22 @@ CREATE TABLE IF NOT EXISTS `cainiao_config_sync_state` (
 INSERT IGNORE INTO `cainiao_config_sync_state`
   (`id`,`status`,`phase`,`phase_label`,`message`,`reasons`,`result_json`)
 VALUES (1,'idle','idle','待命','尚未执行配置桶全量同步','[]','{}');
+
+-- 每个同步批次一条完整历史。旧表的 created_at 由运行时增量迁移补齐；
+-- 升级时仅迁入当时存在的单行快照，不推测已被旧版本覆盖的任务。
+CREATE TABLE IF NOT EXISTS `cainiao_config_sync_history` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `job_id` varchar(80) NOT NULL,
+  `status` varchar(32) NOT NULL,
+  `created_at` datetime NOT NULL,
+  `updated_at` datetime NOT NULL,
+  `finished_at` datetime NULL,
+  `summary_json` text NOT NULL,
+  `snapshot_json` longtext NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_config_sync_history_job` (`job_id`),
+  KEY `idx_config_sync_history_created` (`created_at`,`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='配置桶同步任务历史';
 
 CREATE TABLE IF NOT EXISTS `cainiao_api_domain_pool` (
   `id` int unsigned NOT NULL AUTO_INCREMENT,

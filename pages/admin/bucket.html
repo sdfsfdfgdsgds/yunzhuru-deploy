@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="/element/css/index.css">
   <script src="/element/js/vue.global.js"></script>
   <script src="/element/js/index.full.js"></script>
+  <script src="/element/js/config-sync-task-history.js?v=20260908-1"></script>
+  <link rel="stylesheet" href="/element/css/config-sync-task-history.css?v=20260908-1">
   <!-- 该页还会被配置分发以嵌套 iframe 打开，因此独立加载文档根稳宽合同。 -->
   <script src="/element/js/admin-scroll-lock-stabilizer.js?v=20260902-1" data-admin-scroll-lock-stabilizer="true" data-admin-scroll-lock-version="20260902-1"></script>
   <style>
@@ -1603,6 +1605,7 @@
   <!-- 全局配置同步中心：与崩溃系统一致，入口固定在右下角并在抽屉内展示权威进度。 -->
   <el-badge
     v-if="!syncHostedByGlobalCenter"
+    v-show="!syncCenterVisible"
     class="config-sync-center__badge"
     :value="syncBadgeValue"
     :hidden="syncBadgeValue === 0"
@@ -1631,21 +1634,23 @@
     <template #header>
       <div class="config-sync-center__header">
         <div>
-          <div class="config-sync-center__title">全局配置同步</div>
-          <div class="config-sync-center__subtitle">
+          <div class="config-sync-center__title">{{ syncTaskHistory.state.view === 'list' ? '配置同步任务' : '任务详情' }}</div>
+          <div v-if="syncTaskHistory.state.view === 'list'" class="config-sync-center__subtitle">每次同步独立记录，点击任务查看明细</div>
+          <div v-else-if="syncTaskHistory.state.detailReady && !syncTaskHistory.state.detailLoading" class="config-sync-center__subtitle">
             <span class="config-sync-center__status-dot" :class="syncStatusDotClass" aria-hidden="true"></span>
-            {{ syncProgress.phase_label || syncStatusLabel }}
-            <span v-if="syncBusy && syncTotal > 0"> · {{ syncCurrent }}/{{ syncTotal }}</span>
+            {{ syncDetailProgress.phase_label || syncStatusLabel }}
+            <span v-if="syncDetailBusy && syncTotal > 0"> · {{ syncCurrent }}/{{ syncTotal }}</span>
           </div>
         </div>
-        <el-tag :type="syncStatusTagType" size="small" effect="light">{{ syncStatusLabel }}</el-tag>
+        <el-tag v-if="syncTaskHistory.state.view === 'detail' && syncTaskHistory.state.detailReady && !syncTaskHistory.state.detailLoading" :type="syncStatusTagType" size="small" effect="light">{{ syncStatusLabel }}</el-tag>
       </div>
     </template>
 
-    <div class="config-sync-center__body" aria-live="polite">
-      <section class="config-sync-center__summary config-sync-summary" :class="'is-' + (syncProgress.status || 'idle')">
+    <config-sync-task-browser :controller="syncTaskHistory">
+      <div class="config-sync-center__body" aria-live="polite">
+      <section class="config-sync-center__summary config-sync-summary" :class="'is-' + (syncDetailProgress.status || 'idle')">
         <div class="config-sync-center__summary-message config-sync-summary__message">
-          {{ syncProgress.message || '等待配置变更' }}
+          {{ syncDetailProgress.message || '等待配置变更' }}
         </div>
         <div v-if="syncDebounceRemaining > 0" class="config-sync-center__debounce-hint">
           {{ syncDebounceLabel }}（继续修改会重新计时）
@@ -1653,16 +1658,16 @@
         <el-progress
           :percentage="syncProgressPercent"
           :stroke-width="9"
-          :indeterminate="syncBusy && syncTotal === 0"
+          :indeterminate="syncDetailBusy && syncTotal === 0"
           :duration="2"
-          :status="syncProgress.status === 'completed' ? 'success' : (['partial_failure', 'failed'].includes(syncProgress.status) ? 'exception' : (['partial', 'partial_success'].includes(syncProgress.status) ? 'warning' : undefined))">
+          :status="syncDetailProgress.status === 'completed' ? 'success' : (['partial_failure', 'failed'].includes(syncDetailProgress.status) ? 'exception' : (['partial', 'partial_success'].includes(syncDetailProgress.status) ? 'warning' : undefined))">
         </el-progress>
       </section>
 
       <div class="config-sync-center__metrics">
         <div class="config-sync-center__metric config-sync-metric">
           <span>计划应用</span>
-          <strong>{{ formatNumber(syncProgress.total || syncProgress.expected_total || 0) }}</strong>
+          <strong>{{ formatNumber(syncDetailProgress.total || syncDetailProgress.expected_total || 0) }}</strong>
         </div>
         <div class="config-sync-center__metric config-sync-metric">
           <span>已处理应用</span>
@@ -1703,11 +1708,11 @@
       <section class="config-sync-center__details config-sync-details">
         <div class="config-sync-center__details-row config-sync-details__row">
           <span>当前应用</span>
-          <strong :title="syncProgress.current_app || '-'">{{ syncProgress.current_app || '-' }}</strong>
+          <strong :title="syncDetailProgress.current_app || '-'">{{ syncDetailProgress.current_app || '-' }}</strong>
         </div>
         <div class="config-sync-center__details-row config-sync-details__row">
           <span>当前配置桶</span>
-          <strong :title="syncProgress.current_bucket || '-'">{{ syncProgress.current_bucket || '-' }}</strong>
+          <strong :title="syncDetailProgress.current_bucket || '-'">{{ syncDetailProgress.current_bucket || '-' }}</strong>
         </div>
         <div class="config-sync-center__details-row config-sync-details__row">
           <span>当前配置对象</span>
@@ -1715,7 +1720,7 @@
         </div>
         <div class="config-sync-center__details-row config-sync-details__row">
           <span>任务编号</span>
-          <strong class="mono" :title="syncProgress.job_id || '-'">{{ syncProgress.job_id || '-' }}</strong>
+          <strong class="mono" :title="syncDetailProgress.job_id || '-'">{{ syncDetailProgress.job_id || '-' }}</strong>
         </div>
       </section>
 
@@ -1732,7 +1737,7 @@
         <div class="config-sync-center__results-toolbar">
           <div class="config-sync-center__results-title">同步操作明细</div>
           <el-button
-            v-if="syncRetryableFailureCount > 0 && !syncBusy"
+            v-if="syncTaskHistory.canRetry() && syncRetryableFailureCount > 0 && !syncDetailBusy"
             type="warning" plain size="small"
             :loading="syncRetrying" :disabled="syncRetrying"
             @click="retryFailedSyncBuckets"
@@ -1775,16 +1780,18 @@
         </div>
         <div v-else class="config-sync-center__results-empty">当前筛选条件没有匹配项；切换“全部”或清空筛选后查看完整结果。</div>
       </section>
-      <section v-else-if="syncBusy" class="config-sync-center__results-empty">
+      <section v-else-if="syncDetailBusy" class="config-sync-center__results-empty">
         同步进行中，应用和配置桶完成后会在这里逐项列出结果。
       </section>
 
       <section class="config-sync-center__meta config-sync-meta">
-        <div><span>开始</span><strong>{{ syncProgress.started_at ? formatTime(syncProgress.started_at) : '-' }}</strong></div>
-        <div><span>更新</span><strong>{{ syncProgress.updated_at ? formatTime(syncProgress.updated_at) : '-' }}</strong></div>
-        <div><span>完成</span><strong>{{ syncProgress.finished_at ? formatTime(syncProgress.finished_at) : '-' }}</strong></div>
+        <div><span>开始</span><strong>{{ syncDetailProgress.started_at ? formatTime(syncDetailProgress.started_at) : '-' }}</strong></div>
+        <div><span>更新</span><strong>{{ syncDetailProgress.updated_at ? formatTime(syncDetailProgress.updated_at) : '-' }}</strong></div>
+        <div><span>完成</span><strong>{{ syncDetailProgress.finished_at ? formatTime(syncDetailProgress.finished_at) : '-' }}</strong></div>
       </section>
     </div>
+
+    </config-sync-task-browser>
 
     <template #footer>
       <div class="config-sync-center__footer">
@@ -1793,7 +1800,7 @@
           :loading="syncStarting"
           :disabled="syncManualDisabled"
           @click="pushAll(false, true)">
-          {{ syncProgress.status === 'queued' ? '立即同步' : (['partial_failure', 'partial', 'partial_success', 'failed'].includes(syncProgress.status) ? '重新全量同步' : '同步全部配置') }}
+          {{ syncTaskHistory.state.view === 'detail' && !syncTaskHistory.state.isCurrent ? '同步最新配置' : (syncProgress.status === 'queued' ? '立即同步' : (['partial_failure', 'partial', 'partial_success', 'failed'].includes(syncProgress.status) ? '重新全量同步' : '同步全部配置')) }}
         </el-button>
       </div>
     </template>
@@ -1804,6 +1811,7 @@
 const { createApp, ref, reactive, computed, watch, onMounted, onBeforeUnmount } = Vue;
 
 createApp({
+  components: { ConfigSyncTaskBrowser: ConfigSyncTaskHistory.component },
   setup() {
     const buckets = ref([]);
     const loading = ref(false);
@@ -1840,6 +1848,17 @@ createApp({
       debounce_until: '', next_sync_at: '', debounce_seconds: 60,
       debounce_remaining_seconds: 0, is_debouncing: 0
     });
+    // 当前任务与所选详情分开保存，历史查询不改写实时状态或影响后台调度。
+    const syncTaskHistory = ConfigSyncTaskHistory.create({
+      Vue, api: api, current: syncProgress,
+      isVisible: () => syncCenterVisible.value,
+      resetFilters: () => { syncResultFilter.value = 'all'; syncResultQuery.value = ''; }
+    });
+    const syncDetailProgress = syncTaskHistory.detail;
+    const syncDetailBusy = computed(() => ['queued', 'running'].includes(String(syncDetailProgress.status || '')));
+    watch(syncProgress, syncTaskHistory.observeCurrent, { deep: true });
+    onBeforeUnmount(() => syncTaskHistory.dispose());
+
     // 存储桶页既可独立打开，也会嵌套在 console 的业务 iframe 中。若顶层
     // 已经挂载全局同步中心，则子页只负责业务操作，避免重复入口和重复轮询；
     // 直接访问本页或没有该外壳的旧环境仍保留自己的同步中心。
@@ -1873,21 +1892,21 @@ createApp({
       queued: '排队中', running: '同步中', completed: '已完成',
       partial_failure: '部分失败', partial: '部分成功', partial_success: '部分成功',
       failed: '同步失败', idle: '待命'
-    }[String(syncProgress.status || 'idle')] || '待命'));
+    }[String(syncDetailProgress.status || 'idle')] || '待命'));
     const syncDebounceRemaining = computed(() => Math.max(
-      0, Number(syncProgress.debounce_remaining_seconds || 0)
+      0, Number(syncDetailProgress.debounce_remaining_seconds || 0)
     ));
     const syncDebounceLabel = computed(() => {
       const remaining = syncDebounceRemaining.value;
       if (remaining <= 0) return '';
-      const action = String(syncProgress.status || '') === 'running' ? '继续同步' : '开始同步';
+      const action = String(syncDetailProgress.status || '') === 'running' ? '继续同步' : '开始同步';
       return '修改已合并，' + remaining + ' 秒后' + action;
     });
     const syncStatusTagType = computed(() => ({
       queued: 'warning', running: 'warning', completed: 'success',
       partial_failure: 'danger', partial: 'warning', partial_success: 'warning',
       failed: 'danger', idle: 'info'
-    }[String(syncProgress.status || 'idle')] || 'info'));
+    }[String(syncDetailProgress.status || 'idle')] || 'info'));
     const syncLauncherType = computed(() => ({
       queued: 'warning', running: 'warning', completed: 'success',
       partial_failure: 'danger', partial: 'warning', partial_success: 'warning',
@@ -1910,26 +1929,26 @@ createApp({
     });
     const syncTotal = computed(() => Math.max(
       0,
-      Number(syncProgress.total || syncProgress.expected_total || 0)
+      Number(syncDetailProgress.total || syncDetailProgress.expected_total || 0)
     ));
     const syncCurrent = computed(() => Math.max(
       0,
       Number(
-        syncProgress.current || syncProgress.processed
-        || Number(syncProgress.success || syncProgress.success_count || 0)
-          + Number(syncProgress.fail || syncProgress.fail_count || 0)
-          + Number(syncProgress.partial || syncProgress.partial_success || syncProgress.app_partial_count || 0)
-          + Number(syncProgress.skipped || 0)
+        syncDetailProgress.current || syncDetailProgress.processed
+        || Number(syncDetailProgress.success || syncDetailProgress.success_count || 0)
+          + Number(syncDetailProgress.fail || syncDetailProgress.fail_count || 0)
+          + Number(syncDetailProgress.partial || syncDetailProgress.partial_success || syncDetailProgress.app_partial_count || 0)
+          + Number(syncDetailProgress.skipped || 0)
       )
     ));
     const syncProgressPercent = computed(() => {
       if (syncTotal.value > 0) {
         return Math.min(100, Math.round((syncCurrent.value / syncTotal.value) * 100));
       }
-      return syncProgress.status === 'completed' ? 100 : 0;
+      return syncDetailProgress.status === 'completed' ? 100 : 0;
     });
     const syncStatusDotClass = computed(() => {
-      const status = String(syncProgress.status || 'idle');
+      const status = String(syncDetailProgress.status || 'idle');
       if (status === 'completed') return 'is-success';
       if (['queued', 'running', 'partial', 'partial_success'].includes(status)) return 'is-warning';
       if (['partial_failure', 'failed'].includes(status)) return 'is-danger';
@@ -1995,7 +2014,7 @@ createApp({
       const syncTime = firstSyncValue(
         source.synced_at, source.completed_at, source.finished_at, source.updated_at,
         source.created_at, source.started_at, source.timestamp, source.time, context.sync_time,
-        syncProgress.updated_at, syncProgress.finished_at, syncProgress.started_at
+        syncDetailProgress.updated_at, syncDetailProgress.finished_at, syncDetailProgress.started_at
       );
       // 服务端对象键固定为 config/{APPID}.enc；旧版别名缺少 app_id 时可由
       // 对象键恢复归属，避免同名桶跨应用折叠。
@@ -2229,17 +2248,17 @@ createApp({
       };
 
       // 新合同优先，旧 result_json 作为回退；所有来源通过 identity 去重。
-      visit(syncProgress.success_items, { result_kind: 'success' });
-      visit(syncProgress.successful_items, { result_kind: 'success' });
-      visit(syncProgress.failed_items, { result_kind: 'failed' });
-      visit(syncProgress.skipped_items, { result_kind: 'skipped' });
-      visit(syncProgress.partial_apps, { result_kind: 'partial', item_kind: 'app' });
-      visit(syncProgress.partial_items, { result_kind: 'partial' });
-      visit(syncProgress.sync_items);
-      visit(syncProgress.app_results);
-      visit(syncProgress.result_summary);
-      visit(syncProgress.result);
-      visit(syncProgress.results);
+      visit(syncDetailProgress.success_items, { result_kind: 'success' });
+      visit(syncDetailProgress.successful_items, { result_kind: 'success' });
+      visit(syncDetailProgress.failed_items, { result_kind: 'failed' });
+      visit(syncDetailProgress.skipped_items, { result_kind: 'skipped' });
+      visit(syncDetailProgress.partial_apps, { result_kind: 'partial', item_kind: 'app' });
+      visit(syncDetailProgress.partial_items, { result_kind: 'partial' });
+      visit(syncDetailProgress.sync_items);
+      visit(syncDetailProgress.app_results);
+      visit(syncDetailProgress.result_summary);
+      visit(syncDetailProgress.result);
+      visit(syncDetailProgress.results);
       return items;
     }
 
@@ -2252,8 +2271,8 @@ createApp({
     const syncPartialApps = computed(() => syncPartialItems.value.filter(item => item.item_kind === 'app'));
     const syncSkippedItems = computed(() => syncResultItems.value.filter(item => item.is_skipped));
     const syncResultSummary = computed(() => {
-      const summary = syncProgress.result_summary && typeof syncProgress.result_summary === 'object'
-        ? syncProgress.result_summary : {};
+      const summary = syncDetailProgress.result_summary && typeof syncDetailProgress.result_summary === 'object'
+        ? syncDetailProgress.result_summary : {};
       const summaryCount = (keys, fallback) => {
         for (const key of keys) {
           if (!Object.prototype.hasOwnProperty.call(summary, key)) continue;
@@ -2273,19 +2292,19 @@ createApp({
       // 到进度标量或由列表推导，避免旧 success=桶数把 APP 数再次误报。
       const appSuccess = summaryCount(
         ['app_success_count', 'app_success'],
-        Number(syncProgress.success || 0)
+        Number(syncDetailProgress.success || 0)
       );
       const appPartial = summaryCount(
         ['app_partial_count', 'app_partial', 'partial_count'],
-        Number(syncProgress.app_partial_count || syncProgress.partial || syncProgress.partial_success || derivedPartialApps)
+        Number(syncDetailProgress.app_partial_count || syncDetailProgress.partial || syncDetailProgress.partial_success || derivedPartialApps)
       );
       const appFailed = summaryCount(
         ['app_failed_count', 'app_failed'],
-        Number(syncProgress.fail || 0)
+        Number(syncDetailProgress.fail || 0)
       );
       const appSkipped = summaryCount(
         ['app_skipped_count', 'app_skipped'],
-        Number(syncProgress.skipped || syncSkippedItems.value.length)
+        Number(syncDetailProgress.skipped || syncSkippedItems.value.length)
       );
       const appSuccessful = summaryCount(
         ['app_successful_count', 'successful_app_count'],
@@ -2293,15 +2312,15 @@ createApp({
       );
       const bucketSuccess = summaryCount(
         ['bucket_success_count', 'bucket_success'],
-        Number(syncProgress.bucket_success_count || syncProgress.bucket_success || derivedBucketSuccess)
+        Number(syncDetailProgress.bucket_success_count || syncDetailProgress.bucket_success || derivedBucketSuccess)
       );
       const bucketFailed = summaryCount(
         ['bucket_failed_count', 'bucket_fail_count', 'bucket_fail', 'bucket_failed'],
-        Number(syncProgress.bucket_failed_count || syncProgress.bucket_fail || derivedBucketFailed)
+        Number(syncDetailProgress.bucket_failed_count || syncDetailProgress.bucket_fail || derivedBucketFailed)
       );
       const bucketTotal = summaryCount(
         ['bucket_total'],
-        Math.max(bucketSuccess + bucketFailed, Number(syncProgress.bucket_total || 0))
+        Math.max(bucketSuccess + bucketFailed, Number(syncDetailProgress.bucket_total || 0))
       );
       return {
         appTotal: summaryCount(['app_total'], syncTotal.value),
@@ -2321,17 +2340,17 @@ createApp({
       };
     });
     const syncCurrentObject = computed(() => {
-      const currentAppId = Number(syncProgress.current_app_id || 0);
+      const currentAppId = Number(syncDetailProgress.current_app_id || 0);
       if (currentAppId > 0) return 'config/' + currentAppId + '.enc';
-      if (!syncBusy.value) return '';
+      if (!syncDetailBusy.value) return '';
       return '';
     });
     const syncPhaseLabel = phase => ({
       sync: '桶上传', cleanup: '旧快照清理', app: '应用检查', task: '任务级'
     }[String(phase || '')] || '同步处理');
     const syncReasons = computed(() => (
-      Array.isArray(syncProgress.reasons)
-        ? syncProgress.reasons.filter(reason => String(reason || '').trim() !== '')
+      Array.isArray(syncDetailProgress.reasons)
+        ? syncDetailProgress.reasons.filter(reason => String(reason || '').trim() !== '')
         : []
     ));
     const syncResultQueryText = computed(() => String(syncResultQuery.value || '').trim().toLowerCase());
@@ -2353,11 +2372,11 @@ createApp({
     });
     const syncHasResultData = computed(() => (
       syncResultItems.value.length > 0
-      || Number(syncProgress.success || 0) > 0
-      || Number(syncProgress.fail || 0) > 0
-      || Number(syncProgress.partial || syncProgress.partial_success || syncProgress.app_partial_count || 0) > 0
-      || Number(syncProgress.bucket_success || syncProgress.bucket_success_count || 0) > 0
-      || Number(syncProgress.bucket_fail || syncProgress.bucket_failed_count || syncProgress.bucket_fail_count || 0) > 0
+      || Number(syncDetailProgress.success || 0) > 0
+      || Number(syncDetailProgress.fail || 0) > 0
+      || Number(syncDetailProgress.partial || syncDetailProgress.partial_success || syncDetailProgress.app_partial_count || 0) > 0
+      || Number(syncDetailProgress.bucket_success || syncDetailProgress.bucket_success_count || 0) > 0
+      || Number(syncDetailProgress.bucket_fail || syncDetailProgress.bucket_failed_count || syncDetailProgress.bucket_fail_count || 0) > 0
       || syncSkippedItems.value.length > 0
     ));
 
@@ -2830,6 +2849,7 @@ createApp({
 
     /** 独立桶页复用统一失败桶接口，只提交当前任务编号并沿用持久快照轮询。 */
     async function retryFailedSyncBuckets() {
+      if (!syncTaskHistory.canRetry()) return;
       if (syncBusy.value || syncRetrying.value || syncRetryableFailureCount.value <= 0) return;
       syncRetrying.value = true;
       try {
@@ -2842,6 +2862,7 @@ createApp({
         const result = json.data || json;
         const snapshot = result.sync_job || result;
         if (snapshot.job_id || snapshot.status) applySyncSnapshot(snapshot);
+        syncTaskHistory.showCurrent();
         notifyGlobalSyncChange(snapshot);
         syncStatusSupported.value = true;
         scheduleSyncStatusPoll(0);
@@ -3103,6 +3124,7 @@ createApp({
     }
     function openSyncCenter() {
       syncCenterVisible.value = true;
+      syncTaskHistory.showList();
       syncStatusSupported.value = true;
       refreshSyncStatus();
     }
@@ -3817,6 +3839,7 @@ createApp({
         if (Number(json.code) === 200) notifyGlobalSyncChange(result);
         if (json.sync_job || result.sync_job || result.status || result.job_id) {
           applySyncSnapshot(json.sync_job || result.sync_job || result);
+          syncTaskHistory.showCurrent();
           scheduleSyncStatusPoll(Number(result.poll_after_ms) || 0);
         }
         const appResults = result.data && typeof result.data === 'object' ? result.data : {};
@@ -3938,6 +3961,7 @@ createApp({
       buckets, loading, dialogVisible, isEdit, submitting, pushing, formTesting,
       filesVisible, filesLoading, filesLoaded, fileSearch, activeBucket, fileData,
       filePage, missingFilePage, filePageSize,
+      syncTaskHistory, syncDetailProgress, syncDetailBusy,
       syncCenterVisible, syncStarting, syncProgress, syncBusy, syncManualDisabled, syncTotal, syncCurrent,
       syncHostedByGlobalCenter, syncRetrying, syncRetryableFailureCount, retryFailedSyncBuckets,
       syncProgressPercent, syncStatusLabel, syncDebounceRemaining, syncDebounceLabel, syncStatusTagType, syncLauncherType,
