@@ -1,96 +1,249 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh" class="admin-v2-frame">
 <head>
   <meta charset="UTF-8">
-  <title>仪表盘 - 后台管理系统</title>
+  <title>工作台 - 云注入</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="/element/css/index.css">
   <script src="/element/js/vue.global.js"></script>
   <script src="/element/js/index.full.js"></script>
   <style>
-    body {
+    /* 工作台只整理已有指引与公告；公共令牌负责字体、颜色和浮层视觉。 */
+    * { box-sizing: border-box; }
+    body.dashboard-page {
       margin: 0;
-      padding: 20px;
-      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-      background: #f5f7fa;
+      padding: 8px 4px 16px;
+      color: var(--admin-text-regular, #475569);
+      background: transparent;
+      font-family: var(--admin-font-sans, Inter, "SF Pro Display", "PingFang SC", "HarmonyOS Sans", "Microsoft YaHei", sans-serif);
+      font-size: 13px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
     }
-    .page-title {
-      font-size: 22px;
-      font-weight: bold;
-      margin-bottom: 20px;
-      color: #333;
-    }
-    .card-block {
-      margin-bottom: 20px;
-    }
-    .button-group {
+    [v-cloak] { display: none; }
+    button { font: inherit; }
+    .dashboard-workspace { max-width: 1560px; margin: 0 auto; }
+    .welcome-panel {
+      position: relative;
       display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 162px;
+      padding: 22px 28px;
+      margin-bottom: 22px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, .9);
+      border-radius: 22px;
+      background: linear-gradient(110deg, rgba(255, 255, 255, .95), rgba(238, 241, 255, .82));
+      box-shadow: var(--admin-shadow-card, 0 8px 32px rgba(51, 78, 123, .06));
     }
+    .welcome-copy { position: relative; z-index: 1; }
+    .welcome-eyebrow { margin: 0 0 9px; color: #818bad; font-size: 11px; font-weight: 600; letter-spacing: 2px; }
+    .welcome-title { margin: 0; color: var(--admin-text-primary, #1e293b); font-size: 27px; font-weight: 700; line-height: 1.25; letter-spacing: -.6px; }
+    .welcome-description { margin: 10px 0 0; color: var(--admin-text-secondary, #7b879c); font-size: 13px; }
+    .welcome-aside { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; margin-left: 24px; }
+    .welcome-time { display: inline-flex; align-items: center; gap: 7px; color: #7e879d; font-size: 11px; font-variant-numeric: tabular-nums; }
+    .welcome-time svg { width: 14px; height: 14px; }
+    .welcome-illustration { width: 165px; height: 90px; opacity: .9; }
+    .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+    .section-heading h2 { margin: 0; color: var(--admin-text-primary, #1e293b); font-size: 15px; font-weight: 650; }
+    .section-heading p { margin: 0; color: var(--admin-text-secondary, #7b879c); font-size: 12px; }
+    .dashboard-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-areas: "panel panel tutorial" "notice tips updates"; align-items: start; gap: 20px; }
+    .dashboard-card {
+      min-width: 0;
+      padding: 22px;
+      border: 1px solid rgba(255, 255, 255, .94);
+      border-radius: 20px;
+      background: var(--admin-panel-bg, rgba(255, 255, 255, .85));
+      box-shadow: var(--admin-shadow-card, 0 8px 32px rgba(51, 78, 123, .06));
+      backdrop-filter: blur(12px);
+    }
+    .dashboard-card--panel { grid-area: panel; align-self: stretch; }
+    .dashboard-card--tutorial { grid-area: tutorial; }
+    .dashboard-card--notice { grid-area: notice; }
+    .dashboard-card--tips { grid-area: tips; }
+    .dashboard-card--updates { grid-area: updates; }
+    .card-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 18px; }
+    .card-title { display: flex; align-items: center; gap: 9px; margin: 0; color: var(--admin-text-primary, #1e293b); font-size: 13px; font-weight: 600; line-height: 20px; }
+    .card-marker { width: 7px; height: 7px; border-radius: 3px; background: #818cf8; box-shadow: 0 0 0 4px #f0f1ff; }
+    .dashboard-card--notice .card-marker { background: #eead61; box-shadow: 0 0 0 4px #fff5e9; }
+    .dashboard-card--tips .card-marker { background: #66b6a7; box-shadow: 0 0 0 4px #edf8f4; }
+    .card-count { color: var(--admin-text-secondary, #7b879c); font-size: 11px; }
+    .card-description { margin: -7px 0 18px; color: var(--admin-text-secondary, #7b879c); font-size: 12px; }
+    .help-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .help-button {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 111px;
+      padding: 16px;
+      text-align: left;
+      color: var(--admin-text-regular, #475569);
+      background: #f7f9fd;
+      border: 1px solid #edf1f7;
+      border-radius: 14px;
+      cursor: pointer;
+      transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+    }
+    .help-button:hover { border-color: #d8def5; background: #f0f3ff; transform: translateY(-1px); }
+    .help-button-main { display: flex; align-items: center; gap: 10px; width: 100%; font-size: 12px; font-weight: 550; }
+    .help-number { display: grid; place-items: center; flex: 0 0 27px; width: 27px; height: 27px; border-radius: 9px; color: #7379bd; background: #e9ecfc; font-size: 11px; font-weight: 650; }
+    .help-button:first-child { color: #fff; border-color: #293650; background: #293650; }
+    .help-button:first-child:hover { border-color: #364566; background: #364566; }
+    .help-button:first-child .help-number { color: #d9e0ff; background: rgba(255, 255, 255, .12); }
+    .help-button-meta { display: flex; align-items: center; justify-content: space-between; width: 100%; color: #8993aa; font-size: 11px; }
+    .help-button:first-child .help-button-meta { color: #b5c0d7; }
+    .help-button-meta svg { width: 14px; height: 14px; }
+    .tutorial-list { display: flex; flex-direction: column; gap: 3px; }
+    .tutorial-button {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      min-height: 40px;
+      padding: 7px 6px;
+      border: 0;
+      border-radius: 10px;
+      color: var(--admin-text-regular, #475569);
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+      transition: background 160ms ease, color 160ms ease;
+    }
+    .tutorial-button:hover { color: #5961b8; background: #f4f5ff; }
+    .tutorial-play { display: grid; place-items: center; flex: 0 0 27px; width: 27px; height: 27px; color: #8388c9; border-radius: 9px; background: #f0f1fb; }
+    .tutorial-play svg { width: 12px; height: 12px; }
+    .tutorial-label { flex: 1; min-width: 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+    .tutorial-arrow { flex: 0 0 13px; width: 13px; height: 13px; color: #aab2c4; }
+    .help-button:focus-visible, .tutorial-button:focus-visible { outline: 3px solid #a5b4fc; outline-offset: 3px; }
+    .card-content { color: var(--admin-text-regular, #475569); font-size: 12px; line-height: 1.85; overflow-wrap: anywhere; }
+    .card-content ul { margin: 0; padding: 0 0 0 15px !important; line-height: 1.85 !important; }
+    .card-content li { padding-left: 2px; margin-bottom: 10px; }
+    .card-content li:last-child { margin-bottom: 0; }
+    .card-content li::marker { color: #b9c4d8; font-size: 10px; }
+    .dashboard-note { margin: 18px 4px 0; color: var(--admin-text-secondary, #7b879c); font-size: 11px; text-align: right; }
+    .dashboard-dialog-content { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.9; }
+    body.dashboard-page .dashboard-help-dialog { width: min(460px, calc(100vw - 32px)); }
+    @media (max-width: 1080px) {
+      .dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "panel tutorial" "notice tips" "updates updates"; }
+      .help-button { padding: 14px; }
+    }
+    @media (max-width: 640px) {
+      body.dashboard-page { padding: 8px; }
+      .welcome-panel { min-height: 172px; padding: 24px; margin-bottom: 20px; }
+      .welcome-title { font-size: 23px; }
+      .welcome-description { max-width: 245px; margin-bottom: 20px; font-size: 12px; }
+      .welcome-aside { margin: 0; }
+      .welcome-time { position: absolute; left: 24px; bottom: 18px; font-size: 10px; }
+      .welcome-illustration { position: absolute; width: 155px; height: 115px; right: -50px; bottom: -22px; opacity: .26; }
+      .section-heading { align-items: flex-start; flex-direction: column; gap: 2px; }
+      .dashboard-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "panel" "tutorial" "notice" "tips" "updates"; gap: 14px; }
+      .dashboard-card { padding: 20px; }
+      .help-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+      .help-button { min-height: 120px; padding: 13px; }
+      .help-button-main { align-items: flex-start; flex-direction: column; gap: 8px; }
+      .help-button-meta { padding-left: 0; }
+      .dashboard-note { text-align: left; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .help-button, .tutorial-button { transition: none; }
+      .help-button:hover { transform: none; }
+    }
+    /* 深色模式仍遵守父外壳主题；默认浅色保持参考界面的玻璃面板层次。 */
+    html.dark .welcome-panel, html[data-theme="dark"] .welcome-panel { background: var(--admin-panel-bg, #172237); border-color: var(--admin-border); }
+    html.dark .dashboard-card, html[data-theme="dark"] .dashboard-card { border-color: var(--admin-border); }
+    html.dark .help-button:not(:first-child), html[data-theme="dark"] .help-button:not(:first-child) { background: var(--admin-surface-soft); border-color: var(--admin-border); }
+    html.dark .tutorial-button:hover, html[data-theme="dark"] .tutorial-button:hover { background: var(--admin-surface-soft); }
   </style>
+  <link rel="stylesheet" href="/element/css/admin-theme-v2.css?v=20260909-1">
 </head>
-<body>
-  <div id="app">
-    <div class="page-title">仪表盘</div>
+<body class="admin-v2-frame dashboard-page">
+  <main id="app" class="dashboard-workspace" v-cloak>
+    <header class="welcome-panel">
+      <div class="welcome-copy">
+        <p class="welcome-eyebrow">云注入 · 工作台</p>
+        <h1 class="welcome-title">欢迎使用云注入</h1>
+        <p class="welcome-description">从应用管理到远程配置，在这里开始你的工作。</p>
+      </div>
+      <div class="welcome-aside">
+        <div class="welcome-time">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2" stroke-linecap="round"/></svg>
+          <time>{{ time }}</time>
+        </div>
+      <!-- 几何插画仅用于视觉装饰，不表达任何业务统计或运行状态。 -->
+      <svg class="welcome-illustration" viewBox="0 0 230 142" fill="none" aria-hidden="true">
+        <ellipse cx="129" cy="119" rx="83" ry="15" fill="#dce3f6" opacity=".6"/>
+        <circle cx="137" cy="66" r="58" fill="#e5e9fb"/>
+        <circle cx="137" cy="66" r="43" stroke="#d3dbf6" stroke-dasharray="3 5"/>
+        <rect x="62" y="31" width="104" height="79" rx="13" fill="white" stroke="#d7dff3" transform="rotate(-8 62 31)"/>
+        <rect x="78" y="41" width="80" height="5" rx="2.5" fill="#e3e8f8" transform="rotate(-8 78 41)"/>
+        <rect x="81" y="56" width="34" height="34" rx="9" fill="#e9ecff" transform="rotate(-8 81 56)"/>
+        <path d="m93 66 9-1 1 11-9 1-1-11Z" stroke="#9099dd" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="m119 59 28-4m-27 13 34-5m-33 14 21-3" stroke="#d4dcee" stroke-width="4" stroke-linecap="round"/>
+        <rect x="138" y="77" width="56" height="44" rx="12" fill="#818bd5" transform="rotate(8 138 77)"/>
+        <path d="m152 96 7 8 14-12" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="49" cy="70" r="5" fill="#c1ccf0"/><circle cx="187" cy="32" r="4" fill="#bdc8ed"/>
+        <path d="M42 35v9m-4-4h8m150 22v9m-4-4h8" stroke="#b0bde6" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      </div>
+    </header>
 
-    <el-row :gutter="20" class="card-block">
-      <el-col
+    <div class="section-heading">
+      <h2>工作指引</h2>
+      <p>常用操作、视频教程与平台公告</p>
+    </div>
+
+    <div class="dashboard-grid">
+      <section
         v-for="(card, index) in cards"
         :key="index"
-        :xs="24"
-        :sm="12"
-        :md="8"
+        class="dashboard-card"
+        :class="'dashboard-card--' + (card.title === '更新日志' ? 'updates' : card.key)"
+        :aria-labelledby="'dashboard-card-title-' + index"
       >
-        <el-card>
-          <template #header>
-            <span>{{ card.title }}</span>
-          </template>
-    
-          <div v-if="card.key === 'welcome'">
-            <p>当前时间：{{ time }}</p>
-            <p>欢迎进入后台管理系统！</p>
-          </div>
-    
-          <div v-else-if="card.key === 'panel'">
-            <div class="button-group">
-              <el-button
-                v-for="(item, index) in buttons"
-                :key="index"
-                type="primary"
-                @click="openDialog(item)"
-              >{{ item.label }}</el-button>
-            </div>
-          </div>
-    
-          <div v-else-if="card.key === 'tutorial'">
-            <div class="button-group">
-              <el-button
-                v-for="(item, index) in tutorialButtons"
-                :key="index"
-                type="success"
-                @click="confirmAndOpenTutorial(item)"
-              >{{ item.label }}</el-button>
-            </div>
-          </div>
-    
-          <div v-else v-html="card.content"></div>
-        </el-card>
-      </el-col>
-    </el-row>
+        <div class="card-heading">
+          <h2 class="card-title" :id="'dashboard-card-title-' + index"><span class="card-marker" aria-hidden="true"></span>{{ card.title }}</h2>
+          <span v-if="card.key === 'panel'" class="card-count">{{ buttons.length }} 项指引</span>
+          <span v-else-if="card.key === 'tutorial'" class="card-count">{{ tutorialButtons.length }} 个视频</span>
+        </div>
 
+        <div v-if="card.key === 'welcome'">
+          <p>当前时间：{{ time }}</p>
+          <p>欢迎进入后台管理系统！</p>
+        </div>
 
-    <el-dialog
-      v-model="dialogVisible"
-      :title="dialogTitle"
-      width="400px"
-    >
-      <div style="white-space: pre-wrap;">{{ dialogContent }}</div>
+        <template v-else-if="card.key === 'panel'">
+          <p class="card-description">选择一个问题，查看具体操作说明。</p>
+          <div class="help-grid">
+            <button v-for="(item, index) in buttons" :key="index" type="button" class="help-button" @click="openDialog(item)">
+              <span class="help-button-main"><span class="help-number" aria-hidden="true">0{{ index + 1 }}</span><span>{{ item.label }}</span></span>
+              <span class="help-button-meta">查看说明<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            </button>
+          </div>
+        </template>
+
+        <div v-else-if="card.key === 'tutorial'" class="tutorial-list">
+          <button v-for="(item, index) in tutorialButtons" :key="index" type="button" class="tutorial-button" @click="confirmAndOpenTutorial(item)">
+            <span class="tutorial-play"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5a.7.7 0 0 1 1.1-.6l6.1 4.5a.7.7 0 0 1 0 1.2l-6.1 4.5a.7.7 0 0 1-1.1-.6v-9Z"/></svg></span>
+            <span class="tutorial-label">{{ item.label }}</span>
+            <svg class="tutorial-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+
+        <div v-else class="card-content" v-html="card.content"></div>
+      </section>
+    </div>
+
+    <p class="dashboard-note">应用、配置与任务管理，请从左侧菜单进入。</p>
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" class="dashboard-help-dialog">
+      <div class="dashboard-dialog-content">{{ dialogContent }}</div>
       <template #footer>
         <el-button @click="dialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
-  </div>
+  </main>
 
   <script>
     const { createApp, ref, onMounted } = Vue;
@@ -110,10 +263,11 @@
         ]);
 
         const cards = ref([
-          /*{
-            key: 'welcome',
-            title: '欢迎您'
-          },*/
+          // 数组顺序与视觉阅读顺序一致，键盘导航先进入操作指引，再进入教程。
+          {
+            key: 'panel',
+            title: '操作面板'
+          },
           {
               key: 'tutorial',
               title: '视频教程',
@@ -148,14 +302,10 @@
             `
           },
           {
-            key: 'panel',
-            title: '操作面板'
-          },
-          {
             key: 'tips',
             title: '更新日志',
             content: `
-              <ul style="padding-left: 18px; line-height: 1.4.1;">
+              <ul style="padding-left: 18px; line-height: 1.85;">
                 <li>链路注入进行了较大更新，修复了部分混淆应用链路注入回编译失败的问题。</li>
                 <li>壳模板最新版。</li>
                 <li>支持关键字替换。</li>

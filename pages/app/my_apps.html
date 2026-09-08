@@ -148,7 +148,7 @@
     .app-list-layout-frame {
       box-sizing: border-box;
       width: 100%;
-      max-width: calc(100vw - 40px);
+      max-width: 100%;
       min-width: 0;
       margin-top: 10px;
     }
@@ -158,27 +158,130 @@
     @media (max-width: 640px) {
       body { margin: 0; }
       #app { padding: 12px !important; }
-      .app-list-layout-frame { max-width: calc(100vw - 24px); }
+      .app-list-layout-frame { max-width: 100%; }
       .static-bucket-dialog { margin-top: 3vh !important; }
       .static-bucket-dialog .el-dialog__body { padding: 12px; }
       .static-api-toolbar { flex-direction: column; }
     }
+
+    /* 应用页仅组织现有字段；通用控件的颜色、尺寸和状态由公共主题维护。 */
+    .apps-page-header { padding: 6px 2px 4px; }
+    .apps-header-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; }
+    .apps-header-actions .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+    .apps-header-actions .toolbar .el-button + .el-button { margin-left: 0; }
+    .apps-guidance {
+      margin: 4px 0 14px;
+      padding: 0 14px;
+      background: rgb(255 250 237 / 72%);
+      border: 1px solid rgb(233 220 180 / 60%);
+      border-radius: 12px;
+    }
+    .apps-guidance summary { display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 8px 0; color: #88704d; font-size: 12px; list-style: none; cursor: pointer; }
+    .apps-guidance summary::-webkit-details-marker { display: none; }
+    .apps-guidance summary strong { flex-shrink: 0; font-weight: 600; }
+    .apps-guidance summary::after { width: 6px; height: 6px; margin: 0 4px 3px auto; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; content: ""; transform: rotate(45deg); }
+    .apps-guidance[open] summary::after { transform: rotate(225deg); }
+    .apps-guidance summary:focus-visible { outline: 2px solid #8494ce; outline-offset: 3px; border-radius: 6px; }
+    .apps-guidance-content { padding-top: 4px; }
+
+    .apps-eyebrow { margin: 0 0 6px; color: var(--admin-text-secondary, #7b879c); font-size: 11px; }
+    .apps-count {
+      flex-shrink: 0;
+      padding: 8px 13px;
+      color: var(--admin-text-secondary, #7b879c);
+      font-size: 12px;
+      background: var(--admin-panel-bg, #fff);
+      border: 1px solid var(--admin-border-glass, #e1e8f3);
+      border-radius: 12px;
+    }
+    .apps-count strong { margin-right: 4px; color: var(--admin-primary, #202c58); font-size: 17px; font-weight: 600; }
+    html.admin-v2-frame #app.apps-page > .apps-notice { padding: 10px 14px; }
+    html.admin-v2-frame .apps-notice .el-alert__title { font-size: 12px; line-height: 1.65; }
+    html.admin-v2-frame #app.apps-page > .apps-query-form {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px 16px;
+      margin-top: 16px;
+      padding: 18px;
+    }
+    html.admin-v2-frame #app.apps-page > .apps-query-form .el-form-item {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      min-width: 0;
+      margin: 0;
+    }
+    .apps-query-form .el-form-item__label { justify-content: flex-start; height: auto; padding: 0 0 6px; line-height: 20px; }
+    .apps-query-form .el-form-item__content { min-width: 0; }
+    .apps-query-form .el-select, .apps-query-form .el-input { width: 100%; }
+    .apps-query-form .apps-query-actions { justify-content: flex-end; }
+    .apps-query-actions .el-form-item__content { flex-grow: 0; flex-wrap: nowrap; }
+    .apps-page > .toolbar { justify-content: flex-start; margin: 16px 0 12px; }
+    .apps-storage {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px 16px;
+      margin-top: 12px;
+      margin-bottom: 16px;
+      padding: 14px 18px;
+      background: var(--admin-panel-bg, #fff);
+      border: 1px solid var(--admin-border-glass, #e1e8f3);
+      border-radius: var(--admin-radius-large, 20px);
+    }
+    .apps-storage-metrics { display: flex; flex: 1; flex-wrap: wrap; gap: 8px 24px; color: var(--admin-text-secondary, #7b879c); font-size: 12px; }
+    .apps-storage-metrics strong { margin-left: 6px; color: var(--admin-text-regular, #334155); font-size: 13px; font-weight: 600; }
+    .apps-storage-note { flex-basis: 100%; margin: 0; color: var(--admin-text-secondary, #7b879c); font-size: 12px; line-height: 1.6; }
+    @media (max-width: 640px) {
+      .apps-header-actions { width: 100%; justify-content: flex-start; gap: 8px; }
+      .apps-header-actions .toolbar { flex: 1; }
+      .apps-count { padding: 6px 10px; }
+      html.admin-v2-frame #app.apps-page > .apps-query-form { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 12px; }
+      .apps-storage { padding: 12px; }
+      .apps-storage-metrics { flex-basis: 100%; }
+      .apps-page-header { gap: 12px; }
+    }
   </style>
 </head>
 <body>
-  <div id="app" style="padding: 20px;">
-    <el-alert
+  <div id="app" class="apps-page" style="padding: 8px 4px 16px;">
+    <!-- 页头仅展示已有应用总量，不新增统计请求或改变列表查询合同。 -->
+    <header class="admin-page-header apps-page-header">
+      <div>
+        <p class="apps-eyebrow">应用管理</p>
+        <h1 class="admin-page-title">我的应用</h1>
+        <p class="admin-page-subtitle">管理应用、查看配置与制品，继续你的云端工作。</p>
+      </div>
+      <div class="apps-header-actions">
+        <span class="apps-count"><strong>{{ total }}</strong> 个应用</span>
+        <!-- 工具栏 -->
+    <div class="toolbar">
+      <el-button type="primary" @click="selectFile">上传要注入的APP</el-button>
+      <el-button v-if="isAdmin" type="success" @click="urlInjectDialogVisible = true">URL注入</el-button>
+      <input type="file" ref="fileInput" accept=".apk" style="display: none;" @change="handleFileChange"/>
+    </div>
+      </div>
+    </header>
+    <!-- 完整规则保留在可键盘展开的说明区，首屏突出应用操作与列表。 -->
+    <details class="apps-guidance">
+      <summary><strong>使用须知</strong><span>应用检测与安装包清理规则，展开查看</span></summary>
+      <div class="apps-guidance-content">
+<el-alert
       title="被系统识别为加固/混淆/签名校验等不受支持的应用会被删除，检测方式为：系统自动注入 + 自动真机验证 + 自动日志分析，最后人工复检，不存在误检"
       type="error"
-      style="margin-bottom: 20px;">
+      class="apps-notice"
+      style="margin-bottom: 10px;">
     </el-alert>
     <el-alert
       title="上传的应用，时间过久会清理安装包文件，不影响你的远程控制。若要重新注入，点击【重传】即可，此举是为了减少服务器储存空间占用"
       type="warning"
-      style="margin-bottom: 20px;">
+      class="apps-notice"
+      style="margin-bottom: 10px;">
     </el-alert>
+      </div>
+    </details>
     <!-- 查询表单 -->
-    <el-form :inline="true" :model="query" @submit.prevent="loadData">
+    <el-form class="apps-query-form" :inline="true" :model="query" @submit.prevent="loadData">
       <el-form-item label="APPID">
         <el-input v-model="query.appid" placeholder="APPID"></el-input>
       </el-form-item>
@@ -195,45 +298,37 @@
         <el-input v-model="query.package" placeholder="包名"></el-input>
       </el-form-item>
       <el-form-item label="配置方式">
-        <el-select v-model="query.config_mode" placeholder="全部" clearable style="width: 130px;">
+        <el-select v-model="query.config_mode" placeholder="全部" clearable>
           <el-option label="独享" value="0"></el-option>
           <el-option label="复用中" value="1"></el-option>
         </el-select>
       </el-form-item>
       <el-form-item label="可复用">
-        <el-select v-model="query.is_reusable" placeholder="全部" clearable style="width: 130px;">
+        <el-select v-model="query.is_reusable" placeholder="全部" clearable>
           <el-option label="可被复用" value="1"></el-option>
           <el-option label="未开启" value="0"></el-option>
         </el-select>
       </el-form-item>
       <el-form-item label="复用谁">
-        <el-select v-model="query.reuse_apk_id" placeholder="输名称或包名搜索" clearable filterable remote :remote-method="searchReuseTarget" :loading="reuseSearchLoading" style="width: 220px;">
+        <el-select v-model="query.reuse_apk_id" placeholder="输名称或包名搜索" clearable filterable remote :remote-method="searchReuseTarget" :loading="reuseSearchLoading">
           <el-option v-for="app in reuseSearchResults" :key="app.id" :label="`[${app.id}] ${app.name}`" :value="app.id"></el-option>
         </el-select>
       </el-form-item>
-      <el-form-item>
+      <el-form-item class="apps-query-actions">
         <el-button type="primary" @click="loadData">查询</el-button>
         <el-button @click="resetForm">重置</el-button>
       </el-form-item>
     </el-form>
 
-    <!-- 工具栏 -->
-    <div class="toolbar">
-      <el-button type="primary" @click="selectFile">上传要注入的APP</el-button>
-      <el-button v-if="isAdmin" type="success" @click="urlInjectDialogVisible = true">URL注入</el-button>
-      <input type="file" ref="fileInput" accept=".apk" style="display: none;" @change="handleFileChange"/>
-    </div>
-    
-    <div class="stats">
-        <el-space wrap>
-            <el-button type="warning" size="small" @click="expandStorageDialogVisible = true">
-              立即扩大储存空间
-            </el-button>
-            <el-tag>已用容量：{{ stats.used_storage }}GB</el-tag>
-            <el-tag type="success">总容量：{{ stats.total_storage }}GB</el-tag>
-            <el-tag type="warning">储存使用率：{{ stats.used_percent }}%</el-tag>
-            <el-tag type="danger">若储存空间不够了，可先删除一些应用的安装包，需要注入的时候再重传一下</el-tag>
-        </el-space>
+    <!-- 容量来自原列表响应；展示重排不改变扩容与安装包生命周期。 -->
+    <div class="stats apps-storage">
+      <div class="apps-storage-metrics">
+        <span>已用容量 <strong>{{ stats.used_storage }} GB</strong></span>
+        <span>总容量 <strong>{{ stats.total_storage }} GB</strong></span>
+        <span>使用率 <strong>{{ stats.used_percent }}%</strong></span>
+      </div>
+      <el-button plain size="small" @click="expandStorageDialogVisible = true">立即扩大储存空间</el-button>
+      <p class="apps-storage-note">若储存空间不够了，可先删除一些应用的安装包，需要注入的时候再重传一下。</p>
     </div>
     
     <!-- 表格 -->
@@ -250,13 +345,13 @@
             />
           </template>
       </el-table-column>
-      <el-table-column label="名称" prop="name"></el-table-column>
-      <el-table-column label="版本" prop="version"></el-table-column>
-      <el-table-column label="包名" prop="package"></el-table-column>
-      <el-table-column label="大小" prop="size" :formatter="formatSize"></el-table-column>
-      <el-table-column label="上传时间" prop="upload_time"></el-table-column>
+      <el-table-column label="名称" prop="name" min-width="140"></el-table-column>
+      <el-table-column label="版本" prop="version" min-width="86"></el-table-column>
+      <el-table-column label="包名" prop="package" min-width="180"></el-table-column>
+      <el-table-column label="大小" prop="size" min-width="86" :formatter="formatSize"></el-table-column>
+      <el-table-column label="上传时间" prop="upload_time" min-width="152"></el-table-column>
       <!-- 新增：配置方式 -->
-      <el-table-column label="配置方式">
+      <el-table-column label="配置方式" min-width="82">
         <template #default="scope">
           <span>{{ scope.row.config_mode == 1 ? '复用' : '独享' }}</span>
         </template>
@@ -269,7 +364,7 @@
       </el-table-column>
     
       <!-- 新增：复用的应用ID -->
-        <el-table-column label="复用">
+        <el-table-column label="复用" min-width="120">
           <template #default="scope">
             <span v-if="scope.row.reuse_apk_id">
               {{ scope.row.reuse_apk_id }} - {{ scope.row.reuse_apk_name }}

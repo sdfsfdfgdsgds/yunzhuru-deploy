@@ -1,0 +1,192 @@
+/**
+ * 云注入后台共享设计令牌。
+ * 外壳直接加载，业务页由公共主题导入；视觉数值仅在此维护，保持跨 iframe 一致。
+ * 字体使用系统回退，不为界面引入第三方字体请求或新增组件依赖。
+ */
+
+:root {
+  /* 业务页面共用的色板；不透明表面专供表格和浮层，避免固定列透出底层内容。 */
+  --admin-primary: #202c58;
+  --admin-primary-hover: #314174;
+  --admin-primary-soft: #eef0fa;
+  --admin-success: #16a34a;
+  --admin-warning: #d97706;
+  --admin-danger: #dc2626;
+  --admin-info: #64748b;
+  --admin-page-bg: #eef8fc;
+  --admin-page-gradient: radial-gradient(ellipse at 8% 0%, rgba(186, 222, 249, 0.55), transparent 58%),
+    radial-gradient(ellipse at 96% 92%, rgba(214, 218, 251, 0.42), transparent 55%),
+    linear-gradient(145deg, #eef8fc 0%, #f4f8fe 52%, #eff2fc 100%);
+  --admin-surface: #ffffff;
+  --admin-panel-bg: rgba(255, 255, 255, 0.82);
+  --admin-surface-glass: var(--admin-panel-bg);
+  --admin-surface-soft: #f6f8fc;
+  --admin-surface-muted: #edf2fa;
+  --admin-text-primary: #1f2430;
+  --admin-text-regular: #334155;
+  --admin-text-secondary: #7b879c;
+  --admin-text-placeholder: #94a3b8;
+  --admin-border: #e1e8f3;
+  --admin-border-light: #edf1f8;
+  --admin-border-glass: rgba(255, 255, 255, 0.88);
+  --admin-border-hover: #b6c5df;
+  --admin-row-hover: #f0f5ff;
+  --admin-radius-small: 8px;
+  --admin-radius: 12px;
+  --admin-radius-large: 20px;
+  --admin-radius-control: 10px;
+  --admin-shadow-small: 0 2px 6px rgba(51, 78, 123, 0.025), 0 12px 32px rgba(51, 78, 123, 0.035);
+  --admin-shadow-card: 0 4px 12px rgba(51, 78, 123, 0.04), 0 16px 40px rgba(51, 78, 123, 0.065);
+  --admin-shadow-overlay: 0 24px 72px rgba(30, 52, 91, 0.2);
+  --admin-focus-ring: rgba(79, 91, 173, 0.16);
+  --admin-font-size: 13px;
+  --admin-font-size-small: 12px;
+  --admin-control-height: 34px;
+  --admin-control-height-small: 28px;
+  --admin-control-height-large: 40px;
+  --admin-page-padding: 20px;
+  --admin-font-sans: Inter, "SF Pro Display", -apple-system, BlinkMacSystemFont,
+    "PingFang SC", "HarmonyOS Sans", "Microsoft YaHei", sans-serif;
+  --admin-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", monospace;
+
+  color-scheme: light;
+
+  /* Element Plus 颜色变量覆盖，保证旧页面组件与新外壳使用同一套色板。 */
+  --el-color-primary: var(--admin-primary);
+  --el-color-primary-rgb: 32, 44, 88;
+  --el-color-primary-light-3: #636b8a;
+  --el-color-primary-light-5: #8f95ab;
+  --el-color-primary-light-7: #bcbfd0;
+  --el-color-primary-light-8: #d2d5e1;
+  --el-color-primary-light-9: var(--admin-primary-soft);
+  --el-color-primary-dark-2: var(--admin-primary-hover);
+  --el-color-success: #16a34a;
+  --el-color-success-rgb: 22, 163, 74;
+  --el-color-warning: #d97706;
+  --el-color-warning-rgb: 217, 119, 6;
+  --el-color-danger: #dc2626;
+  --el-color-danger-rgb: 220, 38, 38;
+  --el-color-error: #dc2626;
+  --el-color-error-rgb: 220, 38, 38;
+  --el-color-info: #64748b;
+  --el-color-info-rgb: 100, 116, 139;
+  --el-bg-color: var(--admin-surface);
+  --el-bg-color-page: var(--admin-page-bg);
+  --el-bg-color-overlay: var(--admin-surface);
+  --el-fill-color: var(--admin-surface-muted);
+  --el-fill-color-light: var(--admin-surface-soft);
+  --el-fill-color-lighter: #fafcff;
+  --el-fill-color-extra-light: #fcfdff;
+  --el-fill-color-dark: #e2e8f0;
+  --el-fill-color-darker: #cbd5e1;
+  --el-fill-color-blank: var(--admin-surface);
+  --el-border-color: var(--admin-border);
+  --el-border-color-light: var(--admin-border);
+  --el-border-color-lighter: var(--admin-border-light);
+  --el-border-color-extra-light: #f4f6fa;
+  --el-border-color-dark: #cbd5e1;
+  --el-border-color-darker: #94a3b8;
+  --el-text-color-primary: var(--admin-text-primary);
+  --el-text-color-regular: var(--admin-text-regular);
+  --el-text-color-secondary: var(--admin-text-secondary);
+  --el-text-color-placeholder: var(--admin-text-placeholder);
+  --el-text-color-disabled: #b6c0ce;
+  --el-disabled-bg-color: #f1f5f9;
+  --el-disabled-text-color: #94a3b8;
+  --el-disabled-border-color: #e2e8f0;
+  --el-mask-color: rgba(30, 45, 73, 0.38);
+  --el-mask-color-extra-light: rgba(30, 45, 73, 0.2);
+  --el-box-shadow-light: var(--admin-shadow-card);
+  --el-box-shadow: var(--admin-shadow-card);
+  --el-box-shadow-dark: var(--admin-shadow-overlay);
+  --el-border-radius-base: var(--admin-radius-control);
+  --el-border-radius-small: var(--admin-radius-small);
+  --el-border-radius-round: 999px;
+  --el-font-family: var(--admin-font-sans);
+  --el-font-size-base: var(--admin-font-size);
+  --el-font-size-small: var(--admin-font-size-small);
+  --el-font-size-medium: 14px;
+  --el-font-size-large: 16px;
+  --el-font-size-extra-large: 20px;
+  --el-component-size: var(--admin-control-height);
+  --el-component-size-small: var(--admin-control-height-small);
+  --el-component-size-large: var(--admin-control-height-large);
+}
+
+/* 暗色语义同时作用于外壳与业务文档，组件规则继续复用同一套变量。 */
+html.dark,
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --admin-primary: #60a5fa;
+  --admin-primary-hover: #93c5fd;
+  --admin-primary-soft: rgba(37, 99, 235, 0.16);
+  --admin-success: #4ade80;
+  --admin-warning: #fbbf24;
+  --admin-danger: #f87171;
+  --admin-info: #94a3b8;
+  --admin-page-bg: #0b1120;
+  --admin-page-gradient: radial-gradient(ellipse at 8% 0%, rgba(40, 64, 112, 0.26), transparent 58%),
+    linear-gradient(145deg, #0b1120, #10192a);
+  --admin-surface: #111827;
+  --admin-panel-bg: rgba(17, 24, 39, 0.88);
+  --admin-surface-glass: var(--admin-panel-bg);
+  --admin-surface-soft: #172033;
+  --admin-surface-muted: #1e293b;
+  --admin-text-primary: #f1f5f9;
+  --admin-text-regular: #d7dee8;
+  --admin-text-secondary: #94a3b8;
+  --admin-text-placeholder: #64748b;
+  --admin-border: #263449;
+  --admin-border-light: #202c3d;
+  --admin-border-glass: rgba(75, 97, 131, 0.3);
+  --admin-border-hover: #526582;
+  --admin-row-hover: #172640;
+  --admin-focus-ring: rgba(96, 165, 250, 0.18);
+  --admin-shadow-small: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --admin-shadow-card: 0 12px 32px rgba(0, 0, 0, 0.3);
+  --admin-shadow-overlay: 0 24px 64px rgba(0, 0, 0, 0.52);
+
+  --el-color-primary: #60a5fa;
+  --el-color-primary-rgb: 96, 165, 250;
+  --el-color-primary-light-3: #4b83c7;
+  --el-color-primary-light-5: #3b6598;
+  --el-color-primary-light-7: #294668;
+  --el-color-primary-light-8: #213955;
+  --el-color-primary-light-9: #192d43;
+  --el-color-primary-dark-2: #93c5fd;
+  --el-color-success: #4ade80;
+  --el-color-warning: #fbbf24;
+  --el-color-danger: #f87171;
+  --el-color-error: #f87171;
+  --el-color-info: #94a3b8;
+  --el-bg-color: #111827;
+  --el-bg-color-page: #0b1120;
+  --el-bg-color-overlay: #111827;
+  --el-fill-color: #1e293b;
+  --el-fill-color-light: #172033;
+  --el-fill-color-lighter: #141d2c;
+  --el-fill-color-extra-light: #121a27;
+  --el-fill-color-dark: #263449;
+  --el-fill-color-darker: #334155;
+  --el-fill-color-blank: #111827;
+  --el-border-color: #263449;
+  --el-border-color-light: #202c3d;
+  --el-border-color-lighter: #1c2737;
+  --el-border-color-extra-light: #182231;
+  --el-border-color-dark: #334155;
+  --el-border-color-darker: #475569;
+  --el-text-color-primary: #f1f5f9;
+  --el-text-color-regular: #d7dee8;
+  --el-text-color-secondary: #94a3b8;
+  --el-text-color-placeholder: #64748b;
+  --el-text-color-disabled: #526174;
+  --el-disabled-bg-color: #172033;
+  --el-disabled-text-color: #64748b;
+  --el-disabled-border-color: #263449;
+  --el-mask-color: rgba(0, 0, 0, 0.72);
+  --el-mask-color-extra-light: rgba(0, 0, 0, 0.4);
+  --el-box-shadow-light: 0 12px 32px rgba(0, 0, 0, 0.3);
+  --el-box-shadow: 0 18px 44px rgba(0, 0, 0, 0.4);
+  --el-box-shadow-dark: 0 24px 64px rgba(0, 0, 0, 0.52);
+}

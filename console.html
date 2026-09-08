@@ -7,6 +7,7 @@
   <link rel="canonical" href="/console.html" />
 
   <link rel="stylesheet" href="/element/css/index.css" />
+  <link rel="stylesheet" href="/element/css/admin-design-tokens.css?v=20260909-1" />
   <script src="/element/js/vue.global.js"></script>
   <script src="/element/js/index.full.js"></script>
   <script src="/element/js/config-sync-task-history.js?v=20260908-1"></script>
@@ -15,63 +16,55 @@
   <script src="/config.js"></script>
 
   <style>
+    /* 工作空间只定义布局；色板、字体和控件变量由公共设计令牌维护。 */
     :root {
-      --admin-primary: #3b82f6;
-      --admin-primary-dark: #2563eb;
-      --admin-primary-soft: #eff6ff;
-      --admin-sidebar: #ffffff;
-      --admin-canvas: #f4f7fb;
-      --admin-border: #e7edf5;
-      --admin-text: #182230;
-      --admin-muted: #667085;
-      --admin-sidebar-width: 238px;
-      --admin-sidebar-collapsed-width: 72px;
-      --admin-topbar-height: 64px;
+      --admin-primary-dark: var(--admin-primary-hover);
+      --admin-sidebar: var(--admin-panel-bg);
+      --admin-canvas: var(--admin-page-bg);
+      --admin-text: var(--admin-text-primary);
+      --admin-muted: var(--admin-text-secondary);
+      --admin-sidebar-width: 268px;
+      --admin-sidebar-collapsed-width: 76px;
+      --admin-topbar-height: 62px;
       --admin-tabs-height: 44px;
-      --el-color-primary: var(--admin-primary);
-      --el-border-radius-base: 8px;
+      --admin-menu-active-icon: #2563eb;
+      --admin-menu-child-active-bg: #edf7ff;
+      --admin-menu-child-active-border: #dcecff;
+      --admin-menu-guide: #dce9f3;
     }
 
-    * {
-      box-sizing: border-box;
-    }
-
-    html,
-    body,
-    #app {
+    * { box-sizing: border-box; }
+    html, body, #app {
       width: 100%;
       height: 100%;
       margin: 0;
       overflow: hidden;
     }
-
     body {
       color: var(--admin-text);
       background: var(--admin-canvas);
-      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
-        "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-family: var(--admin-font-sans);
+      font-size: var(--admin-font-size);
+      line-height: 1.5;
       -webkit-font-smoothing: antialiased;
     }
-
-    button,
-    input,
-    textarea,
-    select {
-      font: inherit;
+    button, input, textarea, select { font: inherit; }
+    [v-cloak] { display: none; }
+    button:focus-visible {
+      outline: 2px solid #8494ce;
+      outline-offset: 3px;
     }
 
-    [v-cloak] {
-      display: none;
-    }
-
+    /* 背景贯穿外壳与透明业务页，避免多层白色容器包裹造成旧式后台观感。 */
     .admin-shell {
       display: flex;
+      gap: 16px;
       width: 100%;
       height: 100%;
-      background: var(--admin-canvas);
+      padding: 12px;
+      background: var(--admin-page-gradient);
+      isolation: isolate;
     }
-
-    /* 侧栏只负责导航，业务页面仍由原有同源 iframe 承载。 */
     .admin-sidebar {
       position: relative;
       z-index: 20;
@@ -80,251 +73,261 @@
       flex-direction: column;
       width: var(--admin-sidebar-width);
       height: 100%;
+      min-height: 0;
       overflow: hidden;
-      background: var(--admin-sidebar);
-      border-right: 1px solid var(--admin-border);
-      box-shadow: 5px 0 18px rgb(16 24 40 / 2%);
-      /*
-       * Element Plus 菜单树在 collapse-transition=false 时会立即切换结构。
-       * 侧栏宽度同步切换，避免子菜单已收起而外框仍在缩放的错位帧。
-       */
+      background: linear-gradient(180deg, rgb(255 255 255 / 80%), rgb(249 253 255 / 64%));
+      border: 1px solid var(--admin-border-glass);
+      border-radius: 30px;
+      box-shadow: 0 24px 64px rgb(42 102 137 / 10%), inset 0 1px 0 rgb(255 255 255 / 90%);
+      backdrop-filter: blur(22px) saturate(1.18);
+      /* 折叠时同步切换宽度和菜单树，保留原有无错位帧合同。 */
       transition: none;
     }
-
     .admin-shell.is-collapsed .admin-sidebar {
       flex-basis: var(--admin-sidebar-collapsed-width);
       width: var(--admin-sidebar-collapsed-width);
     }
-
     .brand-button {
       display: flex;
-      flex: 0 0 var(--admin-topbar-height);
+      flex: 0 0 88px;
       align-items: center;
       width: 100%;
       min-width: 0;
-      padding: 0 18px;
+      padding: 12px 25px;
       color: inherit;
       text-align: left;
       background: transparent;
       border: 0;
-      border-bottom: 1px solid var(--admin-border);
       cursor: pointer;
     }
-
     .brand-logo {
       display: grid;
-      flex: 0 0 38px;
-      width: 38px;
-      height: 38px;
+      flex: 0 0 34px;
+      width: 34px;
+      height: 34px;
       overflow: hidden;
       place-items: center;
-      color: #ffffff;
-      font-size: 18px;
-      font-weight: 800;
-      background: linear-gradient(145deg, #60a5fa, #2563eb);
-      border-radius: 11px;
-      box-shadow: 0 7px 16px rgb(37 99 235 / 22%);
+      color: var(--admin-primary);
+      background: rgb(255 255 255 / 88%);
+      border: 1px solid rgb(215 228 240 / 85%);
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgb(42 82 116 / 5%);
     }
-
-    .brand-logo img {
-      width: 24px;
-      height: 24px;
-      object-fit: contain;
-    }
-
-    .brand-copy {
-      min-width: 0;
-      margin-left: 11px;
-      white-space: nowrap;
-      transition: opacity 0.16s ease;
-    }
-
+    .brand-logo img { width: 24px; height: 24px; object-fit: contain; }
+    .brand-copy { min-width: 0; margin-left: 11px; white-space: nowrap; }
     .brand-title {
       display: block;
       overflow: hidden;
-      color: #172033;
-      font-size: 15px;
+      color: var(--admin-text-primary);
+      font-size: 14px;
       font-weight: 700;
-      line-height: 20px;
+      line-height: 21px;
       text-overflow: ellipsis;
     }
-
     .brand-subtitle {
       display: block;
-      margin-top: 1px;
-      color: #98a2b3;
-      font-size: 11px;
-      letter-spacing: 0.02em;
+      margin-top: 2px;
+      color: var(--admin-text-secondary);
+      font-size: 10px;
+      letter-spacing: .03em;
     }
-
-    .admin-shell.is-collapsed .brand-button {
-      justify-content: center;
-      padding: 0;
-    }
-
+    .admin-shell.is-collapsed .brand-button { justify-content: center; padding: 0; }
     .admin-shell.is-collapsed .brand-copy,
     .admin-shell.is-collapsed .sidebar-status-copy,
-    .admin-shell.is-collapsed .sidebar-version {
-      display: none;
-    }
-
+    .admin-shell.is-collapsed .sidebar-version,
+    .admin-shell.is-collapsed .sidebar-nav-label,
+    .admin-shell.is-collapsed .sidebar-account-copy,
+    .admin-shell.is-collapsed .sidebar-account-chevron { display: none; }
     .sidebar-scroll {
       flex: 1;
       min-height: 0;
-      padding: 12px 9px;
+      padding: 0 16px 12px;
       overflow-x: hidden;
       overflow-y: auto;
       scrollbar-width: thin;
-      scrollbar-color: #d8e1ec transparent;
+      scrollbar-color: #cbdce7 transparent;
     }
-
-    .sidebar-scroll::-webkit-scrollbar {
-      width: 5px;
+    .sidebar-scroll::-webkit-scrollbar { width: 5px; }
+    .sidebar-scroll::-webkit-scrollbar-thumb { background: #cbdce7; border-radius: 999px; }
+    .sidebar-nav-label {
+      margin: 3px 12px 9px;
+      color: #7c8b9b;
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 18px;
     }
-
-    .sidebar-scroll::-webkit-scrollbar-thumb {
-      background: #d8e1ec;
-      border-radius: 999px;
-    }
-
     .el-menu-vertical {
+      --el-menu-item-height: 40px;
+      --el-menu-sub-item-height: 40px;
+      --el-menu-base-level-padding: 12px;
       width: 100%;
       background: transparent !important;
       border-right: 0 !important;
     }
-
-    .el-menu-vertical:not(.el-menu--collapse) {
-      width: 100%;
-    }
-
+    .el-menu-vertical:not(.el-menu--collapse) { width: 100%; }
     .el-menu-vertical .el-menu-item,
     .el-menu-vertical .el-sub-menu__title {
-      height: 44px;
+      height: 40px;
       margin: 3px 0;
-      color: #475467 !important;
-      line-height: 44px;
-      border-radius: 9px;
+      color: #334155 !important;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 40px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      transition: background-color .16s ease, color .16s ease, box-shadow .16s ease;
     }
-
     .el-menu-vertical .el-menu-item:hover,
     .el-menu-vertical .el-sub-menu__title:hover {
-      color: var(--admin-primary-dark) !important;
-      background: #f5f8fd !important;
+      color: var(--admin-primary) !important;
+      background: rgb(255 255 255 / 60%) !important;
     }
-
-    .el-menu-vertical .el-menu-item.is-active {
-      color: var(--admin-primary-dark) !important;
+    .el-menu-vertical .el-menu-item.is-active,
+    .el-menu-vertical .el-sub-menu.is-active > .el-sub-menu__title {
+      color: #0f172a !important;
       font-weight: 600;
-      background: var(--admin-primary-soft) !important;
+      background: rgb(255 255 255 / 94%) !important;
+      border-color: rgb(255 255 255 / 96%);
+      box-shadow: 0 8px 22px rgb(36 82 116 / 8%), inset 0 1px 0 #fff;
     }
-
-    .el-menu-vertical .el-menu-item.is-active::before {
-      position: absolute;
-      top: 11px;
-      left: 0;
-      width: 3px;
-      height: 22px;
-      background: var(--admin-primary);
-      border-radius: 0 4px 4px 0;
-      content: "";
+    /* Element Plus 会给选中子菜单标题染蓝色底边；纵向导航统一使用完整面板。 */
+    .el-menu-vertical .el-sub-menu:not(.is-active) > .el-sub-menu__title {
+      border-bottom-color: transparent;
     }
-
-    .el-menu-vertical .el-sub-menu .el-menu {
-      background: transparent !important;
-    }
-
-    /*
-     * Element Plus 的子菜单使用 max-height/overflow 高度过渡。
-     * 建立独立的块格式化上下文，避免首尾菜单项的外边距在过渡结束时
-     * 穿透子菜单容器并发生折叠，从而消除展开/收起时的瞬时位置跳动。
-     */
-    .el-menu-vertical .el-sub-menu > .el-menu {
-      display: flow-root;
-    }
-
-    /* 保留菜单项之间的 3px 间距，但把首尾外边距收回容器内部，
-     * 让过渡前后子菜单高度和最终视觉间距保持一致。 */
-    .el-menu-vertical .el-sub-menu > .el-menu > :first-child {
-      margin-top: 0;
-    }
-
-    .el-menu-vertical .el-sub-menu > .el-menu > :last-child {
-      margin-bottom: 0;
-    }
-
+    .el-menu-vertical .el-sub-menu .el-menu { background: transparent !important; }
+    /* 保留独立块格式化上下文，避免子菜单过渡前后外边距折叠造成跳动。 */
+    .el-menu-vertical .el-sub-menu > .el-menu { display: flow-root; }
+    .el-menu-vertical .el-sub-menu > .el-menu > :first-child { margin-top: 0; }
+    .el-menu-vertical .el-sub-menu > .el-menu > :last-child { margin-bottom: 0; }
     .el-menu-vertical .el-menu-item .el-icon,
     .el-menu-vertical .el-sub-menu__title .el-icon {
-      color: #7f8da3;
+      flex-shrink: 0;
+      width: 18px;
+      margin-right: 10px;
+      color: #526173;
       font-size: 18px;
     }
-
-    .el-menu-vertical .el-menu-item.is-active .el-icon {
-      color: var(--admin-primary-dark);
+    .el-menu-vertical .el-menu-item.is-active .el-icon,
+    .el-menu-vertical .el-sub-menu.is-active > .el-sub-menu__title > .el-icon:not(.el-sub-menu__icon-arrow) {
+      color: var(--admin-menu-active-icon);
     }
-
+    /* 关闭向右、展开向下；显式覆盖组件内联旋转，箭头保持辅助色。 */
+    .el-menu-vertical .el-sub-menu > .el-sub-menu__title .el-sub-menu__icon-arrow {
+      right: 12px;
+      width: 14px;
+      margin-right: 0;
+      color: #9aa6b8;
+      font-size: 14px;
+      transform: rotate(-90deg) !important;
+    }
+    .el-menu-vertical .el-sub-menu.is-opened > .el-sub-menu__title .el-sub-menu__icon-arrow {
+      transform: rotate(0deg) !important;
+    }
+    /* 二级导航独立缩进并带竖向引导线；不应用到折叠态的外置弹出菜单。 */
+    .el-menu-vertical:not(.el-menu--collapse) .el-sub-menu > .el-menu {
+      margin: 2px 0 4px 16px;
+      padding: 0 0 0 8px;
+      border-left: 1px solid var(--admin-menu-guide);
+    }
+    .el-menu-vertical:not(.el-menu--collapse) .el-sub-menu > .el-menu > .el-menu-item,
+    .el-menu-vertical:not(.el-menu--collapse) .el-sub-menu > .el-menu > .el-sub-menu > .el-sub-menu__title {
+      height: 34px;
+      margin: 2px 0;
+      padding: 0 10px !important;
+      font-size: 11px;
+      line-height: 34px;
+      border-radius: 10px;
+    }
+    /* 保持首尾外边距收敛，避免竖线与新增缩进破坏原有展开稳态。 */
+    .el-menu-vertical:not(.el-menu--collapse) .el-sub-menu > .el-menu > :first-child { margin-top: 0; }
+    .el-menu-vertical:not(.el-menu--collapse) .el-sub-menu > .el-menu > :last-child { margin-bottom: 0; }
+    .el-menu-vertical:not(.el-menu--collapse) .el-sub-menu .el-menu-item.is-active {
+      color: #0f172a !important;
+      background: var(--admin-menu-child-active-bg) !important;
+      border-color: var(--admin-menu-child-active-border);
+      box-shadow: none;
+    }
+    .el-menu-vertical:not(.el-menu--collapse) .el-sub-menu > .el-menu .el-menu-item .el-icon {
+      width: 15px;
+      color: #334155;
+      font-size: 15px;
+    }
+    .el-menu-vertical:not(.el-menu--collapse) .el-sub-menu > .el-menu .el-menu-item.is-active .el-icon {
+      color: var(--admin-menu-active-icon);
+    }
+    /* 顶层目录作为常驻分组标题展示；深层目录继续使用原有折叠导航。 */
+    .sidebar-menu-section { margin-top: 16px; }
+    .sidebar-menu-section > .el-menu-item-group__title {
+      padding: 0 12px 6px;
+      color: #7c8b9b;
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 18px;
+    }
+    .sidebar-menu-section > ul > .el-menu-item,
+    .sidebar-menu-section > ul > .el-sub-menu > .el-sub-menu__title { padding-left: 12px !important; }
+    .admin-shell.is-collapsed .sidebar-scroll { padding-right: 9px; padding-left: 9px; }
+    .admin-shell.is-collapsed .el-menu-item,
+    .admin-shell.is-collapsed .el-sub-menu__title { padding-left: 17px !important; }
+    .admin-shell.is-collapsed .el-menu-item .el-icon,
+    .admin-shell.is-collapsed .el-sub-menu__title .el-icon { margin-right: 0; }
+    .el-menu--popup {
+      padding: 8px;
+      border: 1px solid var(--admin-border);
+      border-radius: 14px;
+      box-shadow: var(--admin-shadow-card);
+    }
+    .el-menu--popup .el-menu-item,
+    .el-menu--popup .el-sub-menu__title { height: 40px; font-size: 12px; line-height: 40px; border-radius: 10px; }
     .sidebar-footer {
       display: flex;
-      flex: 0 0 58px;
+      flex: 0 0 40px;
       align-items: center;
       min-width: 0;
-      margin: 0 10px 10px;
-      padding: 10px 11px;
-      background: #f8fafc;
-      border: 1px solid #eef2f6;
-      border-radius: 11px;
+      margin: 4px 16px 10px;
+      padding: 8px 12px;
+      background: rgb(255 255 255 / 78%);
+      border: 1px solid var(--admin-border-glass);
+      border-radius: 14px;
     }
-
     .sidebar-status {
-      flex: 0 0 8px;
-      width: 8px;
-      height: 8px;
-      background: #12b76a;
-      border: 2px solid #d1fadf;
+      flex: 0 0 6px;
+      width: 6px;
+      height: 6px;
+      background: #59a58f;
       border-radius: 50%;
-      box-shadow: 0 0 0 2px #ecfdf3;
+      box-shadow: 0 0 0 3px rgb(89 165 143 / 10%);
     }
-
-    .sidebar-status-copy {
-      min-width: 0;
-      margin-left: 10px;
-    }
-
-    .sidebar-status-title {
-      display: block;
-      color: #344054;
-      font-size: 12px;
-      font-weight: 600;
-      white-space: nowrap;
-    }
-
-    .sidebar-status-desc {
-      display: block;
-      margin-top: 2px;
-      color: #98a2b3;
-      font-size: 11px;
-      white-space: nowrap;
-    }
-
-    .sidebar-version {
-      margin-left: auto;
-      color: #98a2b3;
-      font-size: 10px;
-    }
-
-    .admin-shell.is-collapsed .sidebar-footer {
-      justify-content: center;
-      padding: 0;
-    }
-
-    .admin-workspace {
+    .sidebar-status-copy { min-width: 0; margin-left: 9px; }
+    .sidebar-status-title { display: block; color: #526173; font-size: 11px; font-weight: 500; white-space: nowrap; }
+    .sidebar-status-desc { display: none; }
+    .sidebar-version { margin-left: auto; color: #7c8b9b; font-size: 10px; }
+    .sidebar-account-dropdown { display: block; margin: 0 16px 16px; }
+    .sidebar-account-trigger {
       display: flex;
-      flex: 1;
-      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
       min-width: 0;
-      height: 100%;
-      overflow: hidden;
+      height: 58px;
+      padding: 0 12px;
+      color: #334155;
+      background: rgb(255 255 255 / 86%);
+      border: 1px solid var(--admin-border-glass);
+      border-radius: 16px;
+      box-shadow: 0 8px 24px rgb(28 84 122 / 6%);
+      cursor: pointer;
     }
+    .sidebar-account-trigger .el-avatar { background: #edf2ff; color: #5264bd; border-radius: 11px; }
+    .sidebar-account-copy { flex: 1; min-width: 0; text-align: left; }
+    .sidebar-account-copy .user-name { max-width: 136px; font-size: 12px; }
+    .sidebar-account-copy .user-role { max-width: 136px; font-size: 11px; }
+    .sidebar-account-chevron { color: #94a3b8; font-size: 12px; }
+    .admin-shell.is-collapsed .sidebar-footer { justify-content: center; margin-right: 12px; margin-left: 12px; padding: 0; }
+    .admin-shell.is-collapsed .sidebar-account-dropdown { margin-right: 9px; margin-left: 9px; }
+    .admin-shell.is-collapsed .sidebar-account-trigger { justify-content: center; padding: 0; }
 
+    .admin-workspace { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
     .topbar {
       position: relative;
       z-index: 15;
@@ -333,234 +336,84 @@
       align-items: center;
       justify-content: space-between;
       height: var(--admin-topbar-height);
-      padding: 0 22px;
-      background: rgb(255 255 255 / 96%);
-      border-bottom: 1px solid var(--admin-border);
-      backdrop-filter: blur(12px);
+      padding: 0 4px 6px;
+      background: transparent;
     }
-
-    .topbar-left,
-    .topbar-actions,
-    .user-trigger,
-    .avatar-wrap {
-      display: flex;
-      align-items: center;
-    }
-
-    .topbar-left {
-      min-width: 0;
-      gap: 14px;
-    }
-
+    .topbar-left, .topbar-actions, .user-trigger, .avatar-wrap { display: flex; align-items: center; }
+    .topbar-left { min-width: 0; gap: 16px; }
     .shell-icon-button {
       display: inline-grid;
+      flex-shrink: 0;
       width: 36px;
       height: 36px;
       padding: 0;
       place-items: center;
-      color: #475467;
-      background: #ffffff;
-      border: 1px solid #e4eaf2;
-      border-radius: 9px;
+      color: #526173;
+      background: rgb(255 255 255 / 90%);
+      border: 1px solid #cfe3ef;
+      border-radius: 12px;
       cursor: pointer;
-      transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+      transition: color .16s ease, border-color .16s ease, background .16s ease;
     }
+    .topbar-left > .el-tooltip__trigger,
+    .topbar-left > .shell-icon-button { width: 40px; height: 40px; border-radius: 14px; box-shadow: 0 8px 22px rgb(36 88 128 / 8%); }
+    .shell-icon-button:hover { color: var(--admin-primary); background: #fff; border-color: #b6cce0; }
+    .shell-icon-button .el-icon { font-size: 18px; }
+    .breadcrumb-wrap { min-width: 0; }
+    .workspace-eyebrow { display: block; margin-bottom: 4px; color: #8191a1; font-size: 10px; font-weight: 500; }
+    .breadcrumb-wrap .el-breadcrumb__inner { color: #8191a1; font-size: 12px; font-weight: 400; }
+    .breadcrumb-wrap .el-breadcrumb__item:last-child .el-breadcrumb__inner { color: #334155; font-weight: 600; }
+    .topbar-actions { gap: 8px; }
+    .top-action-button { position: relative; }
+    .top-action-button img { width: 18px; height: 18px; object-fit: contain; }
+    .message-badge .el-badge__content { border: 2px solid #fff; transform: translate(55%, -46%) scale(.86); }
+    .topbar-divider { display: none; }
+    .header-account-menu { display: none; }
+    .user-trigger { min-width: 0; padding: 4px 7px 4px 5px; border-radius: 10px; cursor: pointer; outline: none; }
+    .user-trigger:hover { background: rgb(255 255 255 / 65%); }
+    .avatar-wrap { position: relative; justify-content: center; }
+    .vip-mark { position: absolute; right: -4px; bottom: -2px; width: 17px; height: 10px; object-fit: contain; }
+    .user-copy { min-width: 0; margin: 0 9px; line-height: 1.2; }
+    .user-name { display: block; max-width: 112px; overflow: hidden; color: #334155; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+    .user-role { display: block; max-width: 112px; margin-top: 3px; overflow: hidden; color: #8191a1; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 
-    .shell-icon-button:hover {
-      color: var(--admin-primary-dark);
-      background: #f8fbff;
-      border-color: #bfdbfe;
-    }
-
-    .shell-icon-button .el-icon {
-      font-size: 18px;
-    }
-
-    .breadcrumb-wrap {
-      min-width: 0;
-    }
-
-    .breadcrumb-wrap .el-breadcrumb__inner {
-      color: #98a2b3;
-      font-size: 13px;
-      font-weight: 400;
-    }
-
-    .breadcrumb-wrap .el-breadcrumb__item:last-child .el-breadcrumb__inner {
-      color: #344054;
-      font-weight: 600;
-    }
-
-    .topbar-actions {
-      gap: 8px;
-    }
-
-    .top-action-button {
-      position: relative;
-    }
-
-    .top-action-button img {
-      width: 18px;
-      height: 18px;
-      object-fit: contain;
-    }
-
-    .message-badge .el-badge__content {
-      border: 2px solid #ffffff;
-      transform: translate(55%, -46%) scale(0.86);
-    }
-
-    .topbar-divider {
-      width: 1px;
-      height: 25px;
-      margin: 0 4px;
-      background: #e6ebf2;
-    }
-
-    .user-trigger {
-      min-width: 0;
-      padding: 4px 7px 4px 5px;
-      border-radius: 10px;
-      cursor: pointer;
-      outline: none;
-      transition: background 0.16s ease;
-    }
-
-    .user-trigger:hover {
-      background: #f5f8fd;
-    }
-
-    .avatar-wrap {
-      position: relative;
-      justify-content: center;
-    }
-
-    .vip-mark {
-      position: absolute;
-      right: -4px;
-      bottom: -2px;
-      width: 17px;
-      height: 10px;
-      object-fit: contain;
-    }
-
-    .user-copy {
-      min-width: 0;
-      margin: 0 9px;
-      line-height: 1.2;
-    }
-
-    .user-name {
-      display: block;
-      max-width: 112px;
-      overflow: hidden;
-      color: #344054;
-      font-size: 13px;
-      font-weight: 600;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .user-role {
-      display: block;
-      max-width: 112px;
-      margin-top: 3px;
-      overflow: hidden;
-      color: #98a2b3;
-      font-size: 10px;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
+    /* 标签继续常驻保活，只更换轻量胶囊样式，不调整其导航和关闭合同。 */
     .workspace-tabs {
       display: flex;
       flex: 0 0 var(--admin-tabs-height);
-      align-items: flex-end;
+      align-items: center;
       min-width: 0;
       height: var(--admin-tabs-height);
-      padding: 0 16px;
+      padding: 0 2px 8px;
       overflow-x: auto;
       overflow-y: hidden;
-      background: #ffffff;
-      border-bottom: 1px solid var(--admin-border);
+      background: transparent;
       scrollbar-width: none;
     }
-
-    .workspace-tabs::-webkit-scrollbar {
-      display: none;
-    }
-
+    .workspace-tabs::-webkit-scrollbar { display: none; }
     .workspace-tab {
       position: relative;
       display: inline-flex;
       flex: 0 0 auto;
       align-items: center;
-      height: 35px;
-      margin-right: 5px;
+      height: 32px;
+      margin-right: 6px;
       padding: 0 12px;
-      color: #667085;
+      color: #6c7b8d;
       font-size: 12px;
       white-space: nowrap;
-      background: transparent;
-      border: 0;
-      border-radius: 8px 8px 0 0;
+      background: rgb(255 255 255 / 32%);
+      border: 1px solid transparent;
+      border-radius: 10px;
       cursor: pointer;
     }
-
-    .workspace-tab:hover {
-      color: #344054;
-      background: #f7f9fc;
-    }
-
-    .workspace-tab.is-active {
-      color: var(--admin-primary-dark);
-      font-weight: 600;
-      background: #f1f6ff;
-    }
-
-    .workspace-tab.is-active::after {
-      position: absolute;
-      right: 9px;
-      bottom: 0;
-      left: 9px;
-      height: 2px;
-      background: var(--admin-primary);
-      border-radius: 2px 2px 0 0;
-      content: "";
-    }
-
-    .tab-dot {
-      width: 6px;
-      height: 6px;
-      margin-right: 7px;
-      background: #c5ced9;
-      border-radius: 50%;
-    }
-
-    .workspace-tab.is-active .tab-dot {
-      background: var(--admin-primary);
-      box-shadow: 0 0 0 3px rgb(59 130 246 / 12%);
-    }
-
-    .tab-close {
-      display: inline-grid;
-      width: 17px;
-      height: 17px;
-      margin-left: 7px;
-      place-items: center;
-      color: #98a2b3;
-      border-radius: 5px;
-    }
-
-    .tab-close:hover {
-      color: #344054;
-      background: #dce8f9;
-    }
-
-    .tab-close .el-icon {
-      font-size: 12px;
-    }
-
+    .workspace-tab:hover { color: #334155; background: rgb(255 255 255 / 68%); }
+    .workspace-tab.is-active { color: var(--admin-primary); font-weight: 600; background: rgb(255 255 255 / 94%); border-color: var(--admin-border-glass); box-shadow: 0 4px 12px rgb(36 82 116 / 5%); }
+    .tab-dot { width: 5px; height: 5px; margin-right: 7px; background: #becbd6; border-radius: 50%; }
+    .workspace-tab.is-active .tab-dot { background: #5264bd; box-shadow: 0 0 0 3px rgb(82 100 189 / 8%); }
+    .tab-close { display: inline-grid; width: 18px; height: 18px; margin-left: 7px; place-items: center; color: #94a3b8; border-radius: 5px; }
+    .tab-close:hover { color: #334155; background: #edf1f8; }
+    .tab-close .el-icon { font-size: 12px; }
     .close-other-tabs {
       --el-button-text-color: #334155;
       --el-button-outline-color: #a6c8fb;
@@ -569,56 +422,28 @@
       flex: 0 0 auto;
       align-items: center;
       justify-content: center;
-      min-width: 86px;
+      min-width: 76px;
       height: 32px;
       margin-left: 6px;
-      padding: 8px 15px;
+      padding: 8px 12px;
       color: #334155;
-      font-size: 14px;
+      font-size: 12px;
       font-weight: 500;
       line-height: 1;
       white-space: nowrap;
       background: transparent;
       border: 0;
-      border-radius: 8px;
+      border-radius: 10px;
       cursor: pointer;
       transition: all 0.1s;
     }
-
-    .close-other-tabs:hover {
-      color: #334155;
-      background: #f8fafc;
-    }
-
-    .close-other-tabs:focus-visible {
-      outline: 2px solid #a6c8fb;
-      outline-offset: 1px;
-    }
-
-    .content-stage {
-      position: relative;
-      display: flex;
-      flex: 1;
-      min-height: 0;
-      padding: 12px 14px 10px;
-      overflow: hidden;
-      background:
-        radial-gradient(circle at 100% 0, rgb(219 234 254 / 45%), transparent 27%),
-        var(--admin-canvas);
-    }
-
-    .iframe-card {
-      position: relative;
-      flex: 1;
-      min-width: 0;
-      min-height: 0;
-      overflow: hidden;
-      background: #ffffff;
-      border: 1px solid #e4eaf2;
-      border-radius: 12px;
-      box-shadow: 0 7px 22px rgb(16 24 40 / 4%);
-    }
-
+    .close-other-tabs:hover { color: #334155; background: #f8fafc; }
+    .close-other-tabs:focus-visible { outline: 2px solid #a6c8fb; outline-offset: 1px; }
+    .content-stage { position: relative; display: flex; flex: 1; min-height: 0; padding: 0; overflow: hidden; background: transparent; }
+    .iframe-card { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: transparent; border: 0; border-radius: 20px; }
+    /* 页面加载使用轻遮罩，弹窗背景遮罩继续由 Element Plus 独立管理。 */
+    .iframe-card > .el-loading-mask { background: rgb(242 248 253 / 82%); backdrop-filter: blur(3px); }
+    .iframe-card > .el-loading-mask .el-loading-text { color: var(--admin-text-secondary); font-size: 12px; }
     .iframe-wrapper {
       position: absolute;
       inset: 0;
@@ -629,71 +454,29 @@
       visibility: hidden;
       opacity: 0;
       pointer-events: none;
-      background: #ffffff;
+      background: transparent;
       border: 0;
       scrollbar-width: none;
     }
-
-    /* 子页统一主题加载完成后再显示，避免刷新时闪过旧样式。 */
-    .iframe-wrapper.is-active.is-ready {
-      visibility: visible;
-      opacity: 1;
-      pointer-events: auto;
-    }
-
-    .iframe-wrapper::-webkit-scrollbar {
-      display: none;
-    }
-
-    .workspace-footer {
-      display: flex;
-      flex: 0 0 27px;
-      align-items: center;
-      justify-content: center;
-      color: #98a2b3;
-      font-size: 10px;
-      background: var(--admin-canvas);
-    }
-
-    .mobile-nav-drawer .el-drawer__body {
-      display: flex;
-      flex-direction: column;
-      padding: 0;
-      overflow: hidden;
-      background: #ffffff;
-    }
-
-    .mobile-drawer-menu {
-      flex: 1;
-      min-height: 0;
-      padding: 12px 9px;
-      overflow-y: auto;
-    }
-
-    .mobile-drawer-footer {
-      margin: 10px 14px 14px;
-      color: #98a2b3;
-      font-size: 11px;
-      text-align: center;
-    }
-
-    .rotate-half-ccw {
-      animation: rotate-half-ccw 0.4s linear;
-    }
-
-    @keyframes rotate-half-ccw {
-      from {
-        transform: rotate(0deg);
-      }
-      to {
-        transform: rotate(-180deg);
-      }
+    /* 主题及滚动稳定器均就绪后再显示当前业务页，保留防闪白合同。 */
+    .iframe-wrapper.is-active.is-ready { visibility: visible; opacity: 1; pointer-events: auto; }
+    .iframe-wrapper::-webkit-scrollbar { display: none; }
+    .workspace-footer { display: flex; flex: 0 0 20px; align-items: flex-end; justify-content: center; color: #8191a1; font-size: 10px; background: transparent; }
+    .mobile-nav-drawer .el-drawer__body { display: flex; flex-direction: column; padding: 0; overflow: hidden; background: var(--admin-page-bg); }
+    .mobile-drawer-menu { flex: 1; min-height: 0; padding: 0 16px 12px; overflow-y: auto; }
+    .mobile-drawer-footer { margin: 10px 14px 14px; color: #8191a1; font-size: 11px; text-align: center; }
+    .rotate-half-ccw { animation: rotate-half-ccw .4s linear; }
+    @keyframes rotate-half-ccw { from { transform: rotate(0deg); } to { transform: rotate(-180deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .el-menu-vertical .el-menu-item, .el-menu-vertical .el-sub-menu__title, .shell-icon-button, .close-other-tabs { transition: none; }
+      .rotate-half-ccw { animation: none; }
     }
 
     /* 对旧弹窗只做外观与响应式收口，字段和请求合同继续沿用原实现。 */
     .el-dialog {
       max-width: min(900px, 90vw);
-      border-radius: 13px;
+      border-radius: 20px;
+      box-shadow: var(--admin-shadow-overlay);
     }
 
     /* Element Plus 确认框也遵循同一留白合同。 */
@@ -1182,12 +965,14 @@
     }
 
     @media (max-width: 900px) {
+      .admin-shell { padding: 8px; gap: 0; }
+      .header-account-menu { display: inline-flex; }
       .admin-sidebar {
         display: none;
       }
 
       .topbar {
-        padding: 0 14px;
+        padding: 0 4px 6px;
       }
 
       .breadcrumb-wrap {
@@ -1201,11 +986,11 @@
       }
 
       .content-stage {
-        padding: 8px;
+        padding: 0;
       }
 
       .iframe-card {
-        border-radius: 9px;
+        border-radius: 16px;
       }
     }
 
@@ -1216,7 +1001,7 @@
       }
 
       .topbar {
-        padding: 0 10px;
+        padding: 0 2px 6px;
       }
 
       .topbar-left {
@@ -1241,7 +1026,7 @@
       }
 
       .workspace-tabs {
-        padding: 0 8px;
+        padding: 0 0 6px;
       }
 
       .workspace-tab {
@@ -1307,6 +1092,7 @@
         </button>
 
         <div class="sidebar-scroll">
+          <div class="sidebar-nav-label" v-if="!isCollapse">工作空间</div>
           <el-menu
             :default-active="activeMenu"
             class="el-menu-vertical"
@@ -1319,7 +1105,7 @@
             :default-openeds="defaultOpeneds"
           >
             <template v-for="item in menuList" :key="item.id">
-              <menu-item :item="item"></menu-item>
+              <menu-item :item="item" :sectioned="!isCollapse"></menu-item>
             </template>
           </el-menu>
         </div>
@@ -1332,6 +1118,30 @@
           </span>
           <span class="sidebar-version">v{{ appVersion }}</span>
         </div>
+
+        <!-- 桌面账户入口归入侧栏；移动端仍由顶部账户菜单承载同一套操作。 -->
+        <el-dropdown class="sidebar-account-dropdown" placement="top-start" @command="handleUserCommand">
+          <button class="sidebar-account-trigger" type="button" aria-label="打开账户菜单">
+            <span class="avatar-wrap">
+              <el-avatar :src="adminInfo.profile" :size="34">{{ (adminInfo.name || '管').slice(0, 1) }}</el-avatar>
+              <img v-if="adminInfo.vip_days > 0" class="vip-mark" src="/images/vip-icon.png" alt="VIP" />
+            </span>
+            <span class="sidebar-account-copy">
+              <span class="user-name">{{ adminInfo.name || '管理员' }}</span>
+              <span class="user-role">{{ adminInfo.role || '控制台用户' }}</span>
+            </span>
+            <el-icon class="sidebar-account-chevron"><arrow-up></arrow-up></el-icon>
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="profile">个人中心</el-dropdown-item>
+              <el-dropdown-item command="lanzou">蓝奏云盘</el-dropdown-item>
+              <el-dropdown-item command="s3">S3 桶配置</el-dropdown-item>
+              <el-dropdown-item command="password">修改密码</el-dropdown-item>
+              <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </aside>
 
       <section class="admin-workspace">
@@ -1358,6 +1168,7 @@
             </el-popover>
 
             <div class="breadcrumb-wrap" aria-label="面包屑导航">
+              <span class="workspace-eyebrow">云注入工作空间</span>
               <el-breadcrumb separator="/">
                 <el-breadcrumb-item @click="goHome">控制台</el-breadcrumb-item>
                 <el-breadcrumb-item
@@ -1418,7 +1229,7 @@
 
             <span class="topbar-divider"></span>
 
-            <el-dropdown @command="handleUserCommand">
+            <el-dropdown class="header-account-menu" @command="handleUserCommand">
               <span class="user-trigger">
                 <span class="avatar-wrap">
                   <el-avatar :src="adminInfo.profile" :size="34">
@@ -1537,7 +1348,7 @@
           :default-openeds="defaultOpeneds"
         >
           <template v-for="item in menuList" :key="'mobile-' + item.id">
-            <menu-item :item="item"></menu-item>
+            <menu-item :item="item" :sectioned="true"></menu-item>
           </template>
         </el-menu>
       </div>
@@ -2361,9 +2172,10 @@
         const activeMenu = ref(initialMenu);
         // 主题等待器按书签隔离，一个页面的迟到事件不会干扰另一个页面。
         const iframeThemeCleanups = new Map();
-        // 两个公共资源使用同一版本标识，确保旧书签刷新后同步拿到稳定宽度合同。
+        // 视觉资源独立换代；滚动稳定器沿用已验证版本，避免样式更新误触其生命周期。
+        const ADMIN_THEME_ASSET_VERSION = '20260909-1';
         const ADMIN_FRAME_ASSET_VERSION = '20260902-1';
-        const adminThemeUrl = `/element/css/admin-theme-v2.css?v=${ADMIN_FRAME_ASSET_VERSION}`;
+        const adminThemeUrl = `/element/css/admin-theme-v2.css?v=${ADMIN_THEME_ASSET_VERSION}`;
         const adminScrollLockUrl = `/element/js/admin-scroll-lock-stabilizer.js?v=${ADMIN_FRAME_ASSET_VERSION}`;
         const isMobileViewport = ref(window.innerWidth <= 900);
         const mobileMenuVisible = ref(false);
@@ -4131,10 +3943,10 @@ function handleIframeLoaded(event, tab) {
     // 从当前文档 load 开始计时；主题失败时也会在有界时间内恢复页面操作。
     fallbackTimer = window.setTimeout(revealAfterAssetTimeout, 3000);
 
-    frameDocument.documentElement.classList.add('admin-v2-frame');
+    frameDocument.documentElement.classList.add('admin-v2-frame', 'admin-v2-embedded');
     frameDocument.documentElement.dataset.theme = 'light';
     if (frameDocument.body) {
-      frameDocument.body.classList.add('admin-v2-frame');
+      frameDocument.body.classList.add('admin-v2-frame', 'admin-v2-embedded');
       frameDocument.body.dataset.theme = 'light';
     }
 
@@ -4862,13 +4674,23 @@ async function clearS3Config() {
 
     app.use(ElementPlus);
 
-    // 注册递归组件
+    // 递归导航保留原始权限树，仅把展开态的无路径顶层目录显示为分组标题。
     app.component('menu-item', {
-  props: ['item'],
+  props: ['item', 'sectioned'],
   setup(props) {
     return () => {
       const h = Vue.h;
       const item = props.item;
+
+      // 分组仅改变呈现层，不修改菜单路径、权限或子树顺序。
+      if (props.sectioned && !item.path && item.menu && item.menu.length) {
+        return h(ElementPlus.ElMenuItemGroup, {
+          title: item.name,
+          class: 'sidebar-menu-section'
+        }, () => item.menu.map(child =>
+          h(app._context.components['menu-item'], { item: child, key: child.id })
+        ));
+      }
 
       if (item.menu && item.menu.length) {
         return h(
@@ -4877,7 +4699,7 @@ async function clearS3Config() {
           {
             title: () => [
               item.icon
-                ? h(ElementPlus.ElIcon, { style: 'margin-right: 5px' }, () =>
+                ? h(ElementPlus.ElIcon, {}, () =>
                     h(app._context.components[item.icon])
                   )
                 : null,
