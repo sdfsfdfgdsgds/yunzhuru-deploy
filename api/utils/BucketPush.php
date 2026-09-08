@@ -5,6 +5,7 @@
  */
 
 require_once __DIR__ . '/S3Client.php';
+require_once __DIR__ . '/ConfigUploadRetry.php';
 require_once __DIR__ . '/Auth.php';
 require_once __DIR__ . '/DeletedApp.php';
 require_once __DIR__ . '/BucketFeature.php';
@@ -313,15 +314,38 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3, 
                 $b['bucket'],
                 $b['region'] ?: 'auto'
             );
-            $result = $client->putObject(
-                $objectKey,
-                $encrypted,
-                'application/octet-stream',
-                [
-                    // 配置 URL 固定，禁止 CDN/浏览器继续缓存删除或覆盖前的旧对象。
-                    'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
-                ]
+            $result = configUploadRetryPut(
+                static function () use ($client, $objectKey, $encrypted): array {
+                    // 每次尝试使用同一 key/密文/对象头，只更新请求签名；前一 PUT
+                    // 即使已经写入但响应丢失，重复写入的最终对象内容仍保持一致。
+                    return $client->putObject($objectKey, $encrypted, 'application/octet-stream', [
+                        'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+                    ], ['timeout_seconds' => 20, 'connect_timeout_seconds' => 5]);
+                },
+                static function () use ($pdo, $appId, $initialReuseStateToken): ?array {
+                    if (!bucketPushAppAvailable($pdo, $appId)) {
+                        return ['code' => 410, 'message' => "应用 {$appId} 不存在或已删除，停止旧配置重试"];
+                    }
+                    if (bucketPushReuseStateToken($pdo, $appId) !== $initialReuseStateToken) {
+                        return ['code' => 409, 'message' => '应用复用状态已变更，停止旧配置重试'];
+                    }
+                    return null;
+                }
             );
+
+            if (!empty($result['state_changed'])) {
+                $stateChanged = true;
+                $results[] = [
+                    'bucket_id' => (int)($b['id'] ?? 0), 'bucket' => $b['name'],
+                    'provider' => $b['provider'] ?? '', 'object_key' => $objectKey,
+                    'code' => (int)$result['code'], 'message' => $result['message'],
+                    'attempts' => (int)$result['attempts'], 'curl_errno' => (int)$result['curl_errno'],
+                    'elapsed_ms' => (int)$result['elapsed_ms'],
+                ];
+                // 复用变更仍重建整份快照，删除仍清理旧对象，不让传输重试绕开
+                // 下方既有状态变更收敛与 tombstone 回滚合同。
+                break;
+            }
 
             if (bucketPushReuseStateToken($pdo, $appId) !== $initialReuseStateToken) {
                 $stateChanged = true;
@@ -361,8 +385,10 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3, 
                 'code' => $result['code'],
                 'message' => $result['message'],
             ];
-            if (array_key_exists('http_code', $result)) {
-                $results[count($results) - 1]['http_code'] = (int)$result['http_code'];
+            foreach (['http_code', 'attempts', 'curl_errno', 'elapsed_ms'] as $metric) {
+                if (array_key_exists($metric, $result)) {
+                    $results[count($results) - 1][$metric] = (int)$result[$metric];
+                }
             }
             recordBucketPushOutcome(
                 $pdo,
@@ -504,7 +530,7 @@ function pushConfigToBuckets(PDO $pdo, int $appId, int $stateRetry = 3, ?array $
     }
 
     $lockName = 'yunzhuru_cfg_push_' . $appId;
-    // 每个桶请求都可能等待 5 秒，状态抖动时还会重建整轮。
+    // 配置对象请求含有界网络重试，状态抖动时还会重建整轮。
     // 给等待 writer 充足时间；它取锁后会从数据库重新生成最新快照，不会沿用等待前的内容。
     $stmt = $pdo->prepare('SELECT GET_LOCK(:lock_name, 600)');
     $stmt->execute([':lock_name' => $lockName]);

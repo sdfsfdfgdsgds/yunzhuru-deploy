@@ -1,8 +1,8 @@
 # yunzhuru-deploy
 
 云注入 Railway 生产部署仓。此仓库是独立的 Docker 构建上下文，和主源码仓
-`/Users/yyh/Documents/Codex/云注入/源码仓` 分开维护。当前 GitHub 远程同步前，production
-deployment trigger 已删除，生产发布使用显式 `railway up`。
+`/Users/yyh/Documents/Codex/云注入/源码仓` 分开维护。2026-09-08 已核对 production
+的 GitHub deployment trigger 生效，远程 `main` 与当前生产部署提交保持一致。
 
 ## 生产合同
 
@@ -22,15 +22,13 @@ deployment trigger 已删除，生产发布使用显式 `railway up`。
 php -l router.php
 php -l api/index.php
 git diff --check
-railway up \
-  --project a1a520ff-d0b2-4e47-9c79-a0a9f3f9297d \
-  --environment production \
-  --service yunzhuru-app \
-  --detach
+git add <本次生产文件>
+git commit -m '部署：本次变更说明'
+git push origin main
 ```
 
-GitHub 远程 `main` 同步到当前部署提交后，再重新创建 production trigger。重建前，
-上面的固定目标 `railway up` 是唯一生产发布路径。一次提交只走一条路径，发布后
+发布前先核对 GitHub trigger、远程 `main` 与当前 deployment 的来源；正常使用上述 push 触发。
+仅在确认 trigger 停用时，才选用固定项目、环境、服务的 `railway up`，同一提交不重复发布。
 保存 deployment ID 并执行线上验收。Railway CLI 当前提示 `railway.json` 将在
 2026-12-01 后停止作为配置入口，迁移到 `.railway/railway.ts` 前先单独执行
 `railway config plan`，不要和业务变更一起切换。

@@ -43,9 +43,10 @@ class S3Client {
      * @param string $content      文件内容
      * @param string $contentType  MIME 类型
      * @param array $extraHeaders  额外对象响应头，例如 Cache-Control
+     * @param array $requestOptions 仅本次请求的 timeout_seconds/connect_timeout_seconds，默认保持 5/3 秒
      * @return array ['code' => 200|500, 'message' => string]
      */
-    public function putObject($objectKey, $content, $contentType = 'application/octet-stream', array $extraHeaders = []) {
+    public function putObject($objectKey, $content, $contentType = 'application/octet-stream', array $extraHeaders = [], array $requestOptions = []) {
         $objectKey = ltrim($objectKey, '/');
         $uri = '/' . $this->bucket . '/' . $objectKey;
         $encodedUri = $this->uriEncodePath($uri);
@@ -114,7 +115,10 @@ class S3Client {
         foreach ($headers as $key => $value) {
             $curlHeaders[] = "{$key}: {$value}";
         }
-        return $this->curlRequest('PUT', $url, $content, $curlHeaders);
+        // 配置小对象可显式放宽预算；桶探测及其他旧调用保留原来的 5/3 秒合同。
+        return $this->curlRequest('PUT', $url, $content, $curlHeaders, false,
+            $requestOptions['timeout_seconds'] ?? 5,
+            $requestOptions['connect_timeout_seconds'] ?? 3);
     }
 
     /**
@@ -658,14 +662,14 @@ class S3Client {
     }
 
     /**
-     * 执行 curl 请求
+     * 执行一次 curl 请求并返回结构化传输结果；重试由配置对象调用方单独控制。
      */
-    private function curlRequest($method, $url, $body, $headers, $includeResponseBody = false, $timeoutSeconds = 5) {
+    private function curlRequest($method, $url, $body, $headers, $includeResponseBody = false, $timeoutSeconds = 5, $connectTimeoutSeconds = 3) {
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_CUSTOMREQUEST  => $method,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CONNECTTIMEOUT => 3,
+            CURLOPT_CONNECTTIMEOUT => max(1, (int)$connectTimeoutSeconds),
             CURLOPT_TIMEOUT        => max(1, (int)$timeoutSeconds),
             CURLOPT_HTTPHEADER     => $headers,
             CURLOPT_SSL_VERIFYPEER => true,
@@ -677,14 +681,19 @@ class S3Client {
 
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $errno = curl_errno($ch);
+        $elapsedMs = max(0, (int)round((float)curl_getinfo($ch, CURLINFO_TOTAL_TIME) * 1000));
         $error = curl_error($ch);
         curl_close($ch);
 
-        if ($httpCode >= 200 && $httpCode < 300) {
+        // 已收到 2xx 响应头但正文传输随后失败时，也应作为传输失败交给调用方。
+        if ($response !== false && $errno === 0 && $httpCode >= 200 && $httpCode < 300) {
             $result = [
                 'code' => 200,
                 'message' => '操作成功',
                 'http_code' => $httpCode,
+                'curl_errno' => $errno,
+                'elapsed_ms' => $elapsedMs,
             ];
             if ($includeResponseBody) {
                 $result['body'] = $response === false ? '' : (string)$response;
@@ -705,6 +714,8 @@ class S3Client {
             'code' => 500,
             'message' => $errorMsg,
             'http_code' => $httpCode,
+            'curl_errno' => $errno,
+            'elapsed_ms' => $elapsedMs,
         ];
     }
 }
