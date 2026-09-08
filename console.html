@@ -4674,6 +4674,99 @@ async function clearS3Config() {
 
     app.use(ElementPlus);
 
+    // 历史菜单仅给顶层目录配置图标；路径映射只服务于展示，不写回菜单或会话快照。
+    const MENU_ICON_BY_PATH = Object.freeze({
+      dashboard: 'House',
+      'app/my_apps': 'Box',
+      'app/injected': 'Upload',
+      'app/cert': 'Key',
+      'app/shell': 'Files',
+      'app/template_html': 'Document',
+      'config/base': 'Switch',
+      'config/popup/image': 'Picture',
+      'config/popup/message': 'ChatLineSquare',
+      'config/popup/input': 'EditPen',
+      'config/popup/html': 'Document',
+      'config/sp/put': 'EditPen',
+      'config/sp/get': 'Search',
+      'config/sp/override': 'Files',
+      'config/window/kill': 'Monitor',
+      'config/window/class': 'Monitor',
+      'config/window/activity': 'Monitor',
+      'config/keyword': 'Search',
+      'config/view': 'Monitor',
+      'config/uri': 'Link',
+      'config/dex': 'Cpu',
+      'config/kami': 'Key',
+      'config/silent': 'Warning',
+      'config/resource/image': 'Picture',
+      'config/resource/click_param': 'Link',
+      'stat/detail': 'DataAnalysis',
+      'stat/region': 'Location',
+      'stat/problem': 'QuestionFilled',
+      'admin/service': 'Cpu',
+      'admin/ws': 'Connection',
+      'admin/release': 'Files',
+      'admin/useless': 'Delete',
+      'admin/appstore': 'Box',
+      'admin/user_apps': 'Warning',
+      'admin/violation': 'Warning',
+      'admin/redirect': 'Link',
+      'admin/blackpkg': 'Warning',
+      'admin/jiagu': 'Search',
+      'admin/invoke': 'Search',
+      'admin/users': 'User',
+      'admin/dns': 'Connection',
+      'admin/system': 'Tools',
+      'admin/bucket': 'FolderOpened',
+      'admin/config_delivery': 'Connection',
+      'admin/android': 'Cellphone'
+    });
+
+    /**
+     * 返回已加载的 Element Plus 图标名称：有效后端值优先，其次按业务路径兜底。
+     * 无路径目录根据后代路径的共同前缀选择图标，避免依赖菜单名称或固定数据库 ID。
+     * 本函数只读取节点，菜单权限、顺序、折叠状态及缓存快照均保持原有合同。
+     */
+    function resolveMenuIconName(item) {
+      const configuredIcon = typeof item.icon === 'string' ? item.icon.trim() : '';
+      if (configuredIcon && Object.prototype.hasOwnProperty.call(ElementPlusIconsVue, configuredIcon)) {
+        return configuredIcon;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(MENU_ICON_BY_PATH, item.path)) {
+        return MENU_ICON_BY_PATH[item.path];
+      }
+
+      const children = Array.isArray(item.menu) ? item.menu : [];
+      if (!children.length) {
+        return 'Document';
+      }
+
+      const descendantPaths = [];
+      const collectPaths = nodes => {
+        for (const node of nodes) {
+          if (typeof node.path === 'string' && node.path) descendantPaths.push(node.path);
+          if (Array.isArray(node.menu)) collectPaths(node.menu);
+        }
+      };
+      collectPaths(children);
+      const directoryIcons = [
+        ['config/popup/', 'ChatDotSquare'],
+        ['config/sp/', 'Files'],
+        ['config/window/', 'Monitor'],
+        ['config/resource/', 'FolderOpened'],
+        ['config/', 'Setting'],
+        ['app/', 'Grid'],
+        ['stat/', 'DataAnalysis'],
+        ['admin/', 'Tools']
+      ];
+      const matchedDirectory = descendantPaths.length && directoryIcons.find(([prefix]) =>
+        descendantPaths.every(path => path.startsWith(prefix))
+      );
+      return matchedDirectory ? matchedDirectory[1] : 'FolderOpened';
+    }
+
     // 递归导航保留原始权限树，仅把展开态的无路径顶层目录显示为分组标题。
     app.component('menu-item', {
   props: ['item', 'sectioned'],
@@ -4692,17 +4785,20 @@ async function clearS3Config() {
         ));
       }
 
+      const menuIconName = resolveMenuIconName(item);
+      const renderMenuIcon = () => h(
+        ElementPlus.ElIcon,
+        { 'data-menu-icon': menuIconName },
+        () => h(ElementPlusIconsVue[menuIconName])
+      );
+
       if (item.menu && item.menu.length) {
         return h(
           ElementPlus.ElSubMenu,
           { index: item.id },
           {
             title: () => [
-              item.icon
-                ? h(ElementPlus.ElIcon, {}, () =>
-                    h(app._context.components[item.icon])
-                  )
-                : null,
+              renderMenuIcon(),
               h('span', item.name)
             ],
             default: () =>
@@ -4719,11 +4815,7 @@ async function clearS3Config() {
               },
               {
                 default: () => [
-                  item.icon
-                    ? h(ElementPlus.ElIcon, {}, () =>
-                        h(app._context.components[item.icon])
-                      )
-                    : null,
+                  renderMenuIcon(),
                   h('span', {}, item.name)
                 ]
               }
