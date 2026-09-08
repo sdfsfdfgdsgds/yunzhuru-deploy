@@ -771,7 +771,7 @@
         <el-button type="primary" @click="showAddDialog">添加存储桶</el-button>
         <el-button type="primary" plain @click="openStatsDetail(null)">统计详情</el-button>
         <el-button :loading="loading || overviewLoading" @click="refreshPage">刷新</el-button>
-        <el-button type="warning" :loading="pushing" @click="pushAll(false)">同步全部配置</el-button>
+        <el-button type="warning" :loading="pushing" :disabled="syncManualDisabled" @click="pushAll(false)">同步全部配置</el-button>
       </div>
     </header>
 
@@ -1439,7 +1439,7 @@
         </div>
         <div class="drawer-actions">
           <el-button :loading="filesLoading" @click="loadBucketFiles">刷新文件</el-button>
-          <el-button type="warning" :loading="pushing" @click="pushAll(true)">同步全部配置</el-button>
+          <el-button type="warning" :loading="pushing" :disabled="syncManualDisabled" @click="pushAll(true)">同步全部配置</el-button>
           <el-button @click="filesVisible = false">关闭</el-button>
         </div>
       </div>
@@ -1731,6 +1731,12 @@
       <section v-if="syncHasResultData" class="config-sync-center__results">
         <div class="config-sync-center__results-toolbar">
           <div class="config-sync-center__results-title">同步操作明细</div>
+          <el-button
+            v-if="syncRetryableFailureCount > 0 && !syncBusy"
+            type="warning" plain size="small"
+            :loading="syncRetrying" :disabled="syncRetrying"
+            @click="retryFailedSyncBuckets"
+          >{{ syncRetrying ? '重试中…' : '重试失败桶（' + syncRetryableFailureCount + '）' }}</el-button>
           <div class="config-sync-center__results-filters" role="tablist" aria-label="同步结果筛选">
             <button type="button" class="config-sync-center__results-filter" :class="{ 'is-active': syncResultFilter === 'all' }" @click="syncResultFilter = 'all'">全部 {{ syncResultItems.length }}</button>
             <button type="button" class="config-sync-center__results-filter" :class="{ 'is-active': syncResultFilter === 'success' }" @click="syncResultFilter = 'success'">成功项 {{ syncSuccessItems.length }}</button>
@@ -1858,8 +1864,10 @@ createApp({
       syncStarting.value
       || ['queued', 'running'].includes(String(syncProgress.status || ''))
     ));
+    // 独立同步中心的重试与手工全量互斥，避免同一窗口交叉提交。
+    const syncRetrying = ref(false);
     const syncManualDisabled = computed(() => (
-      syncStarting.value || String(syncProgress.status || '') === 'running'
+      syncStarting.value || syncRetrying.value || String(syncProgress.status || '') === 'running'
     ));
     const syncStatusLabel = computed(() => ({
       queued: '排队中', running: '同步中', completed: '已完成',
@@ -2809,6 +2817,52 @@ createApp({
       return error && error.message ? error.message : fallback;
     }
 
+    /** 仅普通配置上传的失败桶对象可重试，回滚和清理操作保留各自处理语义。 */
+    function syncCanRetryItem(item) {
+      if (!item || !item.is_failure) return false;
+      if (String(item.item_kind || '').toLowerCase() === 'app') return false;
+      if (String(item.phase || 'sync').toLowerCase() !== 'sync') return false;
+      return Number(item.app_id || 0) > 0 && Number(item.bucket_id || 0) > 0;
+    }
+    const syncRetryableFailureCount = computed(() => (
+      syncFailureItems.value.filter(syncCanRetryItem).length
+    ));
+
+    /** 独立桶页复用统一失败桶接口，只提交当前任务编号并沿用持久快照轮询。 */
+    async function retryFailedSyncBuckets() {
+      if (syncBusy.value || syncRetrying.value || syncRetryableFailureCount.value <= 0) return;
+      syncRetrying.value = true;
+      try {
+        const json = await api('retryFailedBuckets', {
+          job_id: String(syncProgress.job_id || '')
+        });
+        if (![200, 202, 409].includes(Number(json.code))) {
+          throw new Error(json.message || '失败桶重试提交失败');
+        }
+        const result = json.data || json;
+        const snapshot = result.sync_job || result;
+        if (snapshot.job_id || snapshot.status) applySyncSnapshot(snapshot);
+        notifyGlobalSyncChange(snapshot);
+        syncStatusSupported.value = true;
+        scheduleSyncStatusPoll(0);
+        const status = String(snapshot.status || '');
+        const message = snapshot.message || json.message || '失败桶重试已完成';
+        if (status === 'failed') {
+          ElementPlus.ElMessage.error(message);
+        } else if (['partial_failure', 'partial', 'partial_success'].includes(status) || Number(json.code) === 409) {
+          ElementPlus.ElMessage.warning(message);
+        } else if (['queued', 'running'].includes(status)) {
+          ElementPlus.ElMessage.info(message);
+        } else {
+          ElementPlus.ElMessage.success(message);
+        }
+      } catch (error) {
+        ElementPlus.ElMessage.error(getErrorMessage(error, '失败桶重试提交失败'));
+      } finally {
+        syncRetrying.value = false;
+      }
+    }
+
     /**
      * 将桶配置变更通知控制台父页；payload 直接使用 API data，父层可据此刷新唯一同步中心。
      * 同源 targetOrigin 限制消息接收范围；独立打开桶页或旧浏览器没有父窗口时静默忽略。
@@ -3730,6 +3784,7 @@ createApp({
      * json.data.message 为摘要，json.data.data 为按 APPID 组织的结果。
      */
     async function pushAll(refreshFilesAfter, skipConfirm) {
+      if (syncManualDisabled.value) return;
       // 页面顶部按钮保留确认步骤；右下角中心按崩溃系统习惯直接启动，避免重复确认。
       if (!skipConfirm) {
         const confirmed = await ElementPlus.ElMessageBox.confirm(
@@ -3739,6 +3794,8 @@ createApp({
         ).catch(function () { return false; });
         if (!confirmed) return;
       }
+      // 确认框等待期间可能开始了重试或收到运行快照，提交前再次检查。
+      if (syncManualDisabled.value) return;
       pushing.value = true;
       syncStarting.value = true;
       syncStatusSupported.value = true;
@@ -3882,7 +3939,7 @@ createApp({
       filesVisible, filesLoading, filesLoaded, fileSearch, activeBucket, fileData,
       filePage, missingFilePage, filePageSize,
       syncCenterVisible, syncStarting, syncProgress, syncBusy, syncManualDisabled, syncTotal, syncCurrent,
-      syncHostedByGlobalCenter,
+      syncHostedByGlobalCenter, syncRetrying, syncRetryableFailureCount, retryFailedSyncBuckets,
       syncProgressPercent, syncStatusLabel, syncDebounceRemaining, syncDebounceLabel, syncStatusTagType, syncLauncherType,
       syncBadgeValue, syncStatusDotClass, syncFailureItems, syncResultItems, syncSuccessItems,
       syncPartialItems, syncPartialApps, syncSkippedItems, syncResultSummary,

@@ -1234,3 +1234,135 @@ if (!function_exists('configSyncStateScheduleWorker')) {
         ];
     }
 }
+
+if (!function_exists('configSyncStateRetryBucketIds')) {
+    /** 只选择普通上传失败；清理、作废快照与缺少桶 ID 的历史记录保持原处理边界。 */
+    function configSyncStateRetryBucketIds(array $app, int $targetBucketId = 0): array
+    {
+        $buckets = !empty($app['buckets']) && is_array($app['buckets']) ? $app['buckets'] : ($app['results'] ?? []);
+        $ids = [];
+        foreach (is_array($buckets) ? $buckets : [] as $bucket) {
+            if (!is_array($bucket) || (int)($bucket['code'] ?? 500) === 200) continue;
+            if ((string)($bucket['phase'] ?? 'sync') !== 'sync' || !empty($bucket['discarded'])) continue;
+            $id = (int)($bucket['bucket_id'] ?? 0);
+            if ($id > 0 && ($targetBucketId <= 0 || $id === $targetBucketId)) $ids[$id] = $id;
+        }
+        return array_values($ids);
+    }
+}
+
+if (!function_exists('configSyncStateMergeBucketRetry')) {
+    /**
+     * 仅替换本次失败目标的明细，完整保留其他桶成功证据与新发生的清理错误。
+     * 预检未产生 PUT 时写入本次原因，避免把旧超时报错误当成当前重试结果。
+     */
+    function configSyncStateMergeBucketRetry(array $app, array $retry, array $targetIds): array
+    {
+        $buckets = !empty($app['buckets']) && is_array($app['buckets']) ? $app['buckets'] : ($app['results'] ?? []);
+        $buckets = is_array($buckets) ? $buckets : [];
+        $byId = [];
+        foreach (($retry['results'] ?? []) as $item) {
+            if (is_array($item)) $byId[(int)($item['bucket_id'] ?? 0)] = $item;
+        }
+        foreach ($buckets as &$item) {
+            if (!is_array($item)) continue;
+            $id = (int)($item['bucket_id'] ?? 0);
+            if (!in_array($id, $targetIds, true) || (int)($item['code'] ?? 500) === 200
+                || (string)($item['phase'] ?? 'sync') !== 'sync') continue;
+            if (isset($byId[$id])) {
+                $item = $byId[$id];
+            } else {
+                $code = (int)($retry['code'] ?? 500);
+                $item['code'] = $code >= 400 ? $code : 409;
+                $item['status'] = 'failed';
+                $item['message'] = '本次未上传：' . (string)($retry['message'] ?? '目标桶已停用或已解除关联');
+                unset($item['http_code']);
+            }
+        }
+        unset($item);
+        $cleanup = is_array($app['cleanup_results'] ?? null) ? $app['cleanup_results'] : [];
+        foreach (($retry['cleanup_results'] ?? []) as $item) {
+            if (!is_array($item)) continue;
+            $id = (int)($item['bucket_id'] ?? 0);
+            $cleanup = array_values(array_filter($cleanup, static function ($old) use ($id): bool {
+                return !is_array($old) || (int)($old['bucket_id'] ?? 0) !== $id;
+            }));
+            $cleanup[] = $item;
+        }
+        $app['results'] = $buckets;
+        $app['buckets'] = $buckets;
+        $app['cleanup_results'] = $cleanup;
+        $app['code'] = 200;
+        $outcome = configSyncStateClassifyAppResult($app);
+        $app['code'] = $outcome['bucket_fail'] > 0 ? 500 : 200;
+        $app['status'] = $app['outcome'] = $outcome['status'];
+        foreach (['bucket_total', 'bucket_success', 'bucket_fail', 'cleanup_total', 'cleanup_fail', 'has_successful_bucket', 'has_failed_bucket'] as $field) {
+            $app[$field] = $outcome[$field];
+        }
+        $app['successful_bucket_count'] = $outcome['bucket_success'];
+        $app['failed_bucket_count'] = $app['failed_count'] = $outcome['bucket_fail'];
+        $app['partial_failure'] = $outcome['bucket_fail'] + $outcome['cleanup_fail'] > 0 ? 1 : 0;
+        $app['partial_success'] = $outcome['status'] === 'partial' ? 1 : 0;
+        $app['message'] = $app['partial_failure'] ? '失败桶重试处理完成，仍有失败项' : '失败桶重试成功';
+        return $app;
+    }
+}
+
+if (!function_exists('configSyncStateBuildRetryResult')) {
+    /** 从合并后的权威 APP 明细重算全部别名，清除上一轮 code=500 造成的虚假任务失败。 */
+    function configSyncStateBuildRetryResult(array $result, int $retryCount): array
+    {
+        $result['code'] = 200;
+        $details = configSyncStateNormalizeResultSummary($result);
+        $summary = $details['result_summary'];
+        $hasFailure = $summary['app_failed_count'] + $summary['bucket_failed_count'] + $summary['cleanup_failed_count'] > 0;
+        $hasSuccess = $summary['app_successful_count'] > 0 || $summary['bucket_success_count'] > 0;
+        $result['code'] = $hasFailure ? 500 : 200;
+        $result['status'] = $hasFailure ? ($hasSuccess ? 'partial_failure' : 'failed') : 'completed';
+        $result['partial_failure'] = $hasFailure ? 1 : 0;
+        $result['total'] = $summary['app_total'];
+        $result['success'] = $summary['app_success_count'];
+        $result['partial'] = $result['partial_success'] = $summary['app_partial_count'];
+        $result['fail'] = $summary['app_failed_count'];
+        $result['skipped'] = $summary['app_skipped_count'];
+        $result['bucket_success'] = $summary['bucket_success_count'];
+        $result['bucket_fail'] = $summary['bucket_failed_count'];
+        $result['bucket_total'] = $summary['bucket_total'];
+        $result['cleanup_fail'] = $summary['cleanup_failed_count'];
+        foreach (['app_success_count', 'app_partial_count', 'app_failed_count', 'app_skipped_count',
+            'bucket_success_count', 'bucket_failed_count', 'cleanup_failed_count'] as $field) $result[$field] = $summary[$field];
+        $result['message'] = '失败桶重试处理 ' . $retryCount . ' 个目标；应用全成功 ' . $result['success']
+            . '、部分成功 ' . $result['partial'] . '、全部失败 ' . $result['fail']
+            . '；桶对象成功 ' . $result['bucket_success'] . '、失败 ' . $result['bucket_fail']
+            . ($result['cleanup_fail'] > 0 ? '；清理失败 ' . $result['cleanup_fail'] : '');
+        return array_merge($result, $details);
+    }
+}
+
+if (!function_exists('configSyncStatePersistRetry')) {
+    /** 按任务代次保存重试终态，新配置排队后保留新任务，不覆盖其结果。 */
+    function configSyncStatePersistRetry(PDO $pdo, string $jobId, array $result): array
+    {
+        ensureConfigSyncStateSchema($pdo);
+        $status = (string)$result['status'];
+        $stmt = $pdo->prepare("UPDATE cainiao_config_sync_state SET
+            status=:status, phase='finished', phase_label=:phase_label, message=:message,
+            success=:success, fail=:fail, finished_at=UTC_TIMESTAMP(), updated_at=UTC_TIMESTAMP(),
+            result_json=:result_json WHERE id=1 AND job_id=:job_id
+              AND status NOT IN ('queued','running')");
+        $stmt->execute([
+            ':status' => $status,
+            ':phase_label' => $status === 'completed' ? '同步完成' : ($status === 'partial_failure' ? '部分失败' : '同步失败'),
+            ':message' => mb_substr((string)$result['message'], 0, 255, 'UTF-8'),
+            ':success' => (int)$result['success'],
+            ':fail' => (int)$result['fail'],
+            ':result_json' => configSyncStateJson($result, '{}'),
+            ':job_id' => $jobId,
+        ]);
+        $snapshot = configSyncStateRead($pdo);
+        // 相同失败重复点击可能产生完全相同的 JSON，rowCount=0 也需区别于新任务抢占。
+        $snapshot['retry_applied'] = (string)($snapshot['job_id'] ?? '') === $jobId
+            && !in_array((string)($snapshot['status'] ?? ''), ['queued', 'running'], true) ? 1 : 0;
+        return $snapshot;
+    }
+}

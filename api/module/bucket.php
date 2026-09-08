@@ -1125,6 +1125,95 @@ function getSyncStatus(PDO $pdo, array $input) {
 }
 
 /**
+ * 仅重试当前终态中失败的配置对象，成功对象保持不动。
+ *
+ * 复用全量同步锁保证两种写入互斥；拿锁后重读权威快照，每个应用执行前再次
+ * 检查任务代次。配置修改创建新任务后，本请求结束旧重试并保留新任务状态。
+ */
+function retryFailedBuckets(PDO $pdo, array $input) {
+    bucketRequireAdmin($pdo);
+    require_once __DIR__ . '/../utils/BucketPush.php';
+    $jobId = trim((string)($input['job_id'] ?? $input['source_job_id'] ?? ''));
+    if ($jobId === '') throw new InvalidArgumentException('请指定同步任务编号');
+    $targetAppId = (int)($input['app_id'] ?? 0);
+    $targetBucketId = (int)($input['bucket_id'] ?? 0);
+    if ($targetAppId < 0 || $targetBucketId < 0) throw new InvalidArgumentException('重试目标格式错误');
+    $retryLock = false;
+    $retryLockName = 'yunzhuru_cfg_push_all';
+    if ((string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
+        $lockStmt = $pdo->prepare('SELECT GET_LOCK(:lock_name, 0)');
+        $lockStmt->execute([':lock_name' => $retryLockName]);
+        if ((int)$lockStmt->fetchColumn() !== 1) throw new RuntimeException('配置同步或失败桶重试正在执行，请稍后查看结果');
+        $retryLock = true;
+    }
+    try {
+        // 先取锁再读快照，避免等待期间使用已被其他重试更新过的失败列表。
+        $snapshot = configSyncStateRead($pdo);
+        if (!hash_equals((string)($snapshot['job_id'] ?? ''), $jobId)) {
+            throw new InvalidArgumentException('同步任务已过期，请刷新同步状态');
+        }
+        if (in_array((string)($snapshot['status'] ?? ''), ['queued', 'running'], true)) {
+            throw new RuntimeException('同步任务正在运行，请等待本轮结束后再重试');
+        }
+        $raw = is_array($snapshot['result'] ?? null) ? $snapshot['result'] : [];
+        $data = is_array($raw['data'] ?? null) && $raw['data'] ? $raw['data'] : ($raw['app_results'] ?? []);
+        if (!is_array($data)) $data = [];
+        $retryCount = 0;
+        $retryApps = [];
+        foreach ($data as $key => &$appResult) {
+            if (!is_array($appResult)) continue;
+            $appId = (int)($appResult['app_id'] ?? $key);
+            if ($appId <= 0 || ($targetAppId > 0 && $appId !== $targetAppId)) continue;
+            $failedIds = configSyncStateRetryBucketIds($appResult, $targetBucketId);
+            if (!$failedIds) continue;
+            $gate = configSyncStateReadGate($pdo);
+            if ((string)($gate['job_id'] ?? '') !== $jobId
+                || in_array((string)($gate['status'] ?? ''), ['queued', 'running'], true)) {
+                throw new RuntimeException('重试期间出现新同步任务，请刷新查看最新进度');
+            }
+            $retry = pushConfigToBuckets($pdo, $appId, 1, $failedIds);
+            $appResult = configSyncStateMergeBucketRetry($appResult, $retry, $failedIds);
+            $retryCount += count($failedIds);
+            $retryApps[$appId] = true;
+            // 每个应用完成即持久化，后续请求中断仍保留已完成的重试证据。
+            $raw['data'] = $data;
+            $raw = configSyncStateBuildRetryResult($raw, $retryCount);
+            $saved = configSyncStatePersistRetry($pdo, $jobId, $raw);
+            if (empty($saved['retry_applied'])) {
+                throw new RuntimeException('同步任务已更新，重试结果未覆盖新任务，请刷新查看');
+            }
+        }
+        unset($appResult);
+        if ($retryCount === 0) {
+            return array_merge($snapshot, ['retry_count' => 0, 'retry_scheduled' => 0, 'message' => '当前没有可重试的失败桶对象']);
+        }
+        $result = configSyncStateRead($pdo);
+        $result['retry_count'] = $retryCount;
+        $result['retry_app_count'] = count($retryApps);
+        $result['retry_scheduled'] = 0;
+        return $result;
+    } finally {
+        if ($retryLock) {
+            try {
+                $release = $pdo->prepare('SELECT RELEASE_LOCK(:lock_name)');
+                $release->execute([':lock_name' => $retryLockName]);
+                $release->fetchColumn();
+            } catch (Throwable $ignored) {
+                // 连接释放时 MySQL 也会释放协作锁。
+            }
+        }
+    }
+}
+
+/** 单桶入口必须同时指定应用和桶，避免漏传参数扩大重试范围。 */
+function retryConfigSyncBucket(PDO $pdo, array $input) {
+    if ((int)($input['app_id'] ?? 0) <= 0 || (int)($input['bucket_id'] ?? 0) <= 0) {
+        throw new InvalidArgumentException('请指定应用和配置桶');
+    }
+    return retryFailedBuckets($pdo, $input);
+}
+
+/**
  * 手工启动全局配置同步并立即返回排队快照。
  *
  * 实际写入由独立 worker 执行，避免同步中心按钮长时间占用管理请求；重复点击

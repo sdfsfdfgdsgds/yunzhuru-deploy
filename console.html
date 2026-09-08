@@ -1075,6 +1075,20 @@
       overflow-wrap: anywhere;
     }
 
+    /* 失败桶只重试当前 APP/桶/对象，不重新触发整轮同步。 */
+    .global-config-sync__retry-button {
+      min-height: 26px;
+      padding: 3px 10px;
+      border: 1px solid #f59e0b;
+      border-radius: 6px;
+      background: #fff;
+      color: #b45309;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .global-config-sync__retry-button:hover { background: #fffbeb; }
+    .global-config-sync__retry-button:disabled { cursor: wait; opacity: .65; }
+
     .global-config-sync__result-card.is-failure .global-config-sync__result-card-message {
       color: #991b1b;
     }
@@ -1681,6 +1695,13 @@
         <section v-if="globalSyncHasResultData" class="global-config-sync__results">
           <div class="global-config-sync__results-toolbar">
             <div class="global-config-sync__results-title">同步操作明细</div>
+            <button
+              v-if="globalSyncRetryableFailureCount > 0 && !globalSyncBusy"
+              type="button"
+              class="global-config-sync__retry-button"
+              :disabled="globalSyncRetryingKey === '__all__'"
+              @click="retryGlobalFailedBuckets"
+            >{{ globalSyncRetryingKey === '__all__' ? '重试中…' : '重试失败桶（' + globalSyncRetryableFailureCount + '）' }}</button>
             <div class="global-config-sync__results-filters" role="tablist" aria-label="同步结果筛选">
               <button
                 type="button"
@@ -2535,7 +2556,8 @@
           || ['queued', 'running'].includes(String(globalSyncProgress.status || ''))
         ));
         const globalSyncManualDisabled = computed(() => (
-          globalSyncStarting.value || String(globalSyncProgress.status || '') === 'running'
+          globalSyncStarting.value || !!globalSyncRetryingKey.value
+          || String(globalSyncProgress.status || '') === 'running'
         ));
         const globalSyncStatusLabel = computed(() => ({
           queued: '排队中', running: '同步中', completed: '已完成',
@@ -2606,6 +2628,8 @@
         });
         const globalSyncResultFilter = ref('all');
         const globalSyncResultQuery = ref('');
+        // 批量失败桶重试期间锁定同步写入口，结果列表仍可查看。
+        const globalSyncRetryingKey = ref('');
 
         /** 从多版本接口字段中取第一个有效值，兼容旧的字符串和新的对象结构。 */
         function firstGlobalSyncValue(...values) {
@@ -3033,6 +3057,55 @@
 
         function globalSyncErrorMessage(error, fallback) {
           return error && error.message ? error.message : fallback;
+        }
+
+        /** 仅桶级失败项计入重试；应用级失败需通过全量同步处理。 */
+        function globalSyncCanRetryItem(item) {
+          if (!item || !item.is_failure) return false;
+          if (String(item.item_kind || '').toLowerCase() === 'app') return false;
+          if (String(item.phase || 'sync').toLowerCase() !== 'sync') return false;
+          return Number(item.app_id || 0) > 0 && Number(item.bucket_id || 0) > 0;
+        }
+        const globalSyncRetryableFailureCount = computed(() => (
+          globalSyncFailureItems.value.filter(globalSyncCanRetryItem).length
+        ));
+
+        /** 调用后端失败桶重试接口；后端按上一轮快照筛选全部失败桶并逐桶执行。 */
+        async function retryGlobalFailedBuckets() {
+          if (globalSyncBusy.value || globalSyncRetryableFailureCount.value <= 0 || globalSyncRetryingKey.value) return;
+          const retryKey = '__all__';
+          globalSyncRetryingKey.value = retryKey;
+          try {
+            const json = await globalSyncApi('retryFailedBuckets', {
+              job_id: String(globalSyncProgress.job_id || '')
+            });
+            if (Number(json.code) !== 200 && Number(json.code) !== 202 && Number(json.code) !== 409) {
+              throw new Error(json.message || '失败桶重试提交失败');
+            }
+            const result = json.data || json;
+            if (result && (result.sync_job || result.job_id || result.status)) {
+              applyGlobalSyncSnapshot(result.sync_job || result);
+            }
+            globalSyncStatusSupported.value = true;
+            scheduleGlobalSyncStatusPoll(0);
+            // 接口接收成功与桶重试成功分开提示，部分失败保留警告色。
+            const snapshot = result.sync_job || result;
+            const status = String(snapshot.status || '');
+            const message = snapshot.message || json.message || '失败桶重试已完成';
+            if (status === 'failed') {
+              ElementPlus.ElMessage.error(message);
+            } else if (['partial_failure', 'partial', 'partial_success'].includes(status) || Number(json.code) === 409) {
+              ElementPlus.ElMessage.warning(message);
+            } else if (['queued', 'running'].includes(status)) {
+              ElementPlus.ElMessage.info(message);
+            } else {
+              ElementPlus.ElMessage.success(message);
+            }
+          } catch (error) {
+            ElementPlus.ElMessage.error(globalSyncErrorMessage(error, '失败桶重试提交失败'));
+          } finally {
+            if (globalSyncRetryingKey.value === retryKey) globalSyncRetryingKey.value = '';
+          }
         }
 
         /** 调用桶同步接口；同步中心只接收任务摘要，不读取配置正文或桶凭据。 */
@@ -4739,6 +4812,8 @@ async function clearS3Config() {
           globalSyncStatusDotClass,
           globalSyncResultFilter,
           globalSyncResultQuery,
+          globalSyncRetryingKey,
+          globalSyncRetryableFailureCount,
           globalSyncResultItems,
           globalSyncSuccessItems,
           globalSyncFailureItems,
@@ -4753,6 +4828,8 @@ async function clearS3Config() {
           globalSyncHasResultData,
           openGlobalSyncCenter,
           startGlobalConfigSync,
+          globalSyncCanRetryItem,
+          retryGlobalFailedBuckets,
           observeGlobalSyncMutation,
           handleAndroidClick
         };

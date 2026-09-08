@@ -79,9 +79,10 @@ if (!function_exists('bucketPushReuseStateToken')) {
  * 推送单个应用的配置到所有启用的桶
  * @param PDO $pdo 数据库连接
  * @param int $appId 应用ID
+ * @param array|null $onlyBucketIds 重试目标桶；null 使用正常范围，空数组不上传
  * @return array 推送结果
  */
-function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3): array {
+function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3, ?array $onlyBucketIds = null): array {
     ensureBucketFeatureSchema($pdo);
     $stateRetry = max(0, min(3, $stateRetry));
     // 确保 ConfigHelper 中的函数可用（fetchCol/fetchMap 依赖 global $pdo）
@@ -122,8 +123,22 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3):
     }
     $allBucketIds = array_unique(array_map('intval', $allBucketIds));
 
-    // 有指定桶则只推这些桶，否则回退到全局 enabled=1（兼容旧任务）
-    if (!empty($allBucketIds)) {
+    // 重试场景可显式限定失败桶；常规同步仍沿用任务桶并集/全局启用桶逻辑。
+    $retryBucketIds = null;
+    if (is_array($onlyBucketIds)) {
+        $retryBucketIds = array_values(array_unique(array_filter(array_map('intval', $onlyBucketIds), static fn(int $id): bool => $id > 0)));
+        // 重试范围仍受当前应用的桶归属约束，避免向已解除关联的旧桶重新写入。
+        if ($allBucketIds) $retryBucketIds = array_values(array_intersect($retryBucketIds, $allBucketIds));
+    }
+    if ($retryBucketIds !== null) {
+        if (!$retryBucketIds) $buckets = [];
+        else {
+            $placeholders = implode(',', array_fill(0, count($retryBucketIds), '?'));
+            $bucketStmt = $pdo->prepare("SELECT * FROM cainiao_s3_bucket WHERE id IN ($placeholders) AND enabled = 1");
+            $bucketStmt->execute($retryBucketIds);
+            $buckets = $bucketStmt->fetchAll(PDO::FETCH_ASSOC);
+        }
+    } elseif (!empty($allBucketIds)) {
         $placeholders = implode(',', array_fill(0, count($allBucketIds), '?'));
         $buckets = $pdo->prepare("SELECT * FROM cainiao_s3_bucket WHERE id IN ($placeholders) AND enabled = 1");
         $buckets->execute(array_values($allBucketIds));
@@ -371,7 +386,7 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3):
 
     // 状态变更后从第一个桶重新生成/覆盖，避免各桶落在不同快照。
     if ($stateChanged && $stateRetry > 0 && bucketPushAppAvailable($pdo, $appId)) {
-        $freshResult = pushConfigToBucketsUnlocked($pdo, $appId, $stateRetry - 1);
+        $freshResult = pushConfigToBucketsUnlocked($pdo, $appId, $stateRetry - 1, $onlyBucketIds);
         $freshResult['state_retry'] = true;
         $freshResult['discarded_results'] = $results;
         return $freshResult;
@@ -482,10 +497,10 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3):
 /**
  * 同一 APPID 的桶推送串行化，防止旧 writer 的回滚/删除覆盖新 writer。
  */
-function pushConfigToBuckets(PDO $pdo, int $appId, int $stateRetry = 3): array {
+function pushConfigToBuckets(PDO $pdo, int $appId, int $stateRetry = 3, ?array $onlyBucketIds = null): array {
     $driver = (string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
     if ($driver !== 'mysql') {
-        return pushConfigToBucketsUnlocked($pdo, $appId, $stateRetry);
+        return pushConfigToBucketsUnlocked($pdo, $appId, $stateRetry, $onlyBucketIds);
     }
 
     $lockName = 'yunzhuru_cfg_push_' . $appId;
@@ -506,7 +521,7 @@ function pushConfigToBuckets(PDO $pdo, int $appId, int $stateRetry = 3): array {
     }
 
     try {
-        return pushConfigToBucketsUnlocked($pdo, $appId, $stateRetry);
+        return pushConfigToBucketsUnlocked($pdo, $appId, $stateRetry, $onlyBucketIds);
     } finally {
         try {
             $release = $pdo->prepare('SELECT RELEASE_LOCK(:lock_name)');
