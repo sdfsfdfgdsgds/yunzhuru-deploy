@@ -1,14 +1,15 @@
 # yunzhuru-deploy
 
 云注入 Railway 生产部署仓。此仓库是独立的 Docker 构建上下文，和主源码仓
-`/Users/yyh/Documents/Codex/云注入/源码仓` 分开维护。2026-09-08 已核对 production
-的 GitHub deployment trigger 生效，远程 `main` 与当前生产部署提交保持一致。
+`/Users/yyh/Documents/Codex/云注入/源码仓` 分开维护。production 的 GitHub deployment
+trigger 指向本仓 `main`；发布前仍需核对真实状态和活动部署来源，推送成功不等于上线成功。
 
 ## 生产合同
 
 - Railway 项目：`a1a520ff-d0b2-4e47-9c79-a0a9f3f9297d`
 - 环境/服务：`production` / `yunzhuru-app`
 - 构建入口：`railway.json` → 根目录 `Dockerfile`
+- Debian 安全源：`Dockerfile` 固定官方 Snapshot 日期，绕开 Bullseye 索引与包文件不同步的 404；只对历史源关闭有效期检查，签名验证保留。此配置用于重现当前旧运行环境，后续 PHP/Debian 升级单独验收。
 - 健康探针：`/healthz`（轻量进程探针，超时 120 秒）
 - 运行资产：`/var/www/html/uploads` 持久卷；模板、签名文件和发布产物按启动脚本规则保留
 
@@ -21,6 +22,7 @@
 ```bash
 php -l router.php
 php -l api/index.php
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 git diff --check
 git add <本次生产文件>
 git commit -m '部署：本次变更说明'

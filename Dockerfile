@@ -1,9 +1,13 @@
 FROM php:7.4-cli-bullseye
 
 # 系统依赖（含 Android 注入工具链）
-# Railway 构建机偶发 Debian 源连接重置，apt 增加重试和缺失包修复，避免临时网络抖动导致发布失败。
-RUN apt-get -o Acquire::Retries=5 update \
-    && apt-get -o Acquire::Retries=5 install -y --fix-missing --no-install-recommends \
+# Bullseye 安全源出现索引仍在、安装包已移除的 404；固定官方快照恢复构建。
+# 仅关闭该历史源的有效期检查，保留仓库签名验证；不更换 PHP 或主仓版本。
+RUN sed -i -E 's|^deb https?://deb.debian.org/debian-security bullseye-security main$|deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260901T000000Z/ bullseye-security main|' /etc/apt/sources.list \
+    && grep -Fq 'https://snapshot.debian.org/archive/debian-security/' /etc/apt/sources.list \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get -o Acquire::Retries=5 -o APT::Update::Error-Mode=any update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
     libfreetype6-dev libjpeg62-turbo-dev libpng-dev libwebp-dev libzip-dev \
     supervisor \
     aapt zipalign default-jre-headless \
