@@ -43,6 +43,7 @@ SUPPORTED_ARTIFACT_KINDS = (ARTIFACT_KIND_TEMPLATE, ARTIFACT_KIND_INJECTED)
 CONTRACT_MANIFEST_SHELL_VERSION = "manifest_shell_version"
 CONTRACT_TEMPLATE_CONFIG_PLACEHOLDERS = "cn.shell.Config_template_placeholders"
 CONTRACT_TEMPLATE_PRIMARY_DEX = "template_primary_dex_namespaces"
+CONTRACT_TEMPLATE_DEPENDENCIES = "template_no_legacy_multidex"
 SHELL_PROTOCOL_MARKER_FIELD = "SHELL_PROTOCOL_MARKER"
 SHELL_PROTOCOL_MARKER_PREFIX = "YUNZHURU_SHELL_PROTOCOL_V1:"
 PRIMARY_DEX_ENTRY = "classes.dex"
@@ -152,6 +153,7 @@ class ArtifactEvidence:
     """两遍顺序扫描之间保留的紧凑跨 DEX 合同证据。"""
 
     protocol_marker_candidates: Dict[str, int] = field(default_factory=dict)
+    template_dependency_violations: List[ContractViolation] = field(default_factory=list)
     config_class_count: int = 0
     config_field_values: Dict[str, Optional[str]] = field(default_factory=dict)
     primary_dex_definition_locations: Dict[str, List[str]] = field(
@@ -166,6 +168,7 @@ class DexFirstPassSnapshot:
     class_count: int
     classes: Dict[str, ClassInfo]
     protocol_marker_candidates: Dict[str, int]
+    template_dependency_violations: List[ContractViolation] = field(default_factory=list)
     config_class_count: int = 0
     config_field_values: Dict[str, Optional[str]] = field(default_factory=dict)
     primary_dex_definition_locations: Dict[str, List[str]] = field(
@@ -774,6 +777,7 @@ def collect_dex_first_pass_snapshot(
     config_class_count = 0
     config_field_values: Dict[str, Optional[str]] = {}
     primary_locations: Dict[str, List[str]] = {}
+    dependency_violations: List[ContractViolation] = []
     try:
         dex_classes = dex.get_classes()
     except Exception as exc:
@@ -792,6 +796,21 @@ def collect_dex_first_pass_snapshot(
 
         if not include_template_contracts:
             continue
+        # 壳只支持 API 21 及以上；兼容库会与目标包同名类碰撞。
+        # 只限制模板定义，目标 APK 自带的 multidex 类保持原有扫描合同。
+        if info.descriptor.startswith("Landroidx/multidex/"):
+            dependency_violations.append(
+                ContractViolation(
+                    code="TEMPLATE_LEGACY_MULTIDEX_CLASS",
+                    location=f"{dex_entry}:{info.descriptor}",
+                    message=(
+                        "壳模板携带旧 multidex 兼容库，注入后可能与目标类冲突；"
+                        "API 21 起应使用系统原生多 DEX 支持。"
+                    ),
+                    expected="模板不含 androidx.multidex 类定义",
+                    actual=info.descriptor,
+                )
+            )
         if info.descriptor == CONFIG_CLASS:
             config_class_count += 1
             config_field_values.update(_read_config_fields_from_class(dex_class))
@@ -805,6 +824,7 @@ def collect_dex_first_pass_snapshot(
         class_count=class_count,
         classes=classes,
         protocol_marker_candidates=marker_candidates,
+        template_dependency_violations=dependency_violations,
         config_class_count=config_class_count,
         config_field_values=config_field_values,
         primary_dex_definition_locations=primary_locations,
@@ -828,6 +848,9 @@ def merge_first_pass_snapshot(
             evidence.protocol_marker_candidates.get(marker, 0) + count
         )
     evidence.config_class_count += snapshot.config_class_count
+    evidence.template_dependency_violations.extend(
+        snapshot.template_dependency_violations
+    )
     evidence.config_field_values.update(snapshot.config_field_values)
     for descriptor, entries in snapshot.primary_dex_definition_locations.items():
         evidence.primary_dex_definition_locations.setdefault(descriptor, []).extend(
@@ -1184,7 +1207,7 @@ def apply_artifact_contracts(report: ScanReport, evidence: ArtifactEvidence) -> 
     根据制品阶段应用合同。
 
     壳模板的 Manifest 版本、`cn.shell.Config` 占位符和未改名命名空间
-    属于注入前合同；注入成品跳过这三项，但仍要求跨全部 DEX 的
+    以及兼容库依赖约束属于注入前合同；注入成品跳过这些项，但仍要求跨全部 DEX 的
     版本 marker、APK/DEX 完整性和已知高危引用类型合同。
     """
 
@@ -1202,12 +1225,14 @@ def apply_artifact_contracts(report: ScanReport, evidence: ArtifactEvidence) -> 
                 CONTRACT_MANIFEST_SHELL_VERSION,
                 CONTRACT_TEMPLATE_CONFIG_PLACEHOLDERS,
                 CONTRACT_TEMPLATE_PRIMARY_DEX,
+                CONTRACT_TEMPLATE_DEPENDENCIES,
             ]
         )
         return
     if report.artifact_kind != ARTIFACT_KIND_TEMPLATE:
         raise GateExecutionError(f"未识别的制品类型：{report.artifact_kind}")
 
+    report.contract_violations.extend(evidence.template_dependency_violations)
     report.contract_violations.extend(
         validate_shell_version_contract(
             expected_version=report.expected_shell_version,
