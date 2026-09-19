@@ -1257,25 +1257,28 @@ $applicationlin=[];
 
 
     }
-    echo "==================================开始修复可能存在的desugar问题\n";
-    if($preserveResourceMode){
-        echo "保资源注入模式：跳过desugar融合，保持目标DEX字节不变\n";
-    }else{
-        echo "检测目标应用底包的desugar库是否缺失hashCode方法，如果缺了，则从本平台的库中移植这个方法进去确保兼容，只移植这一个方法即可,不然可能出现其他不可预知的问题\n";
-        $found = dexedit_ac($dexedit, $xmx, $apk_file[1], "j$.util.Objects");
-        if($found == false){
-            echo "该应用无desugar库，无需修复\n";
-        } else {
-            echo "该应用存在desugar库，需要检修\n";
-            $result = dexedit_mergedex($dexedit, $xmx, $de_apk2."/".$found, $de_apk1."/classes2.dex", $de_apk2."/".$found);
-
-            if ($result) {
-                echo "desugar库融合修复 成功\n";
-            } else {
-                echo "desugar库融合修复 失败\n";
-            }
-        }
+    echo "==================================检查并统一desugar库\n";
+    // 目标 APK 可能携带另一版 j$ 脱糖库。若继续无条件复制壳 classes2.dex，
+    // 同名 class_defs 会跨 DEX 重复，ART 和最终 DEX 门禁都会拒绝成品。
+    // 保留目标 APK 的实现，只从壳 DEX 删除与目标重复的脱糖类，避免覆盖目标
+    // 应用自己的 desugar 映射；壳独有的脱糖类仍会随 DEX 一并保留。
+    $desugarPreparation = prepareDesugarDexCompatibility(
+        $de_apk2,
+        $de_apk1,
+        $baksmali,
+        $smali,
+        $xmx
+    );
+    if (!$desugarPreparation['ok']) {
+        echo "desugar库兼容处理失败：{$desugarPreparation['error']}\n";
+        updateTaskStatus($pdo, $task['id'], '注入失败');
+        updateTaskInfo($pdo, $task['id'], '目标与壳的desugar库无法安全合并：' . $desugarPreparation['error']);
+        safeDeleteDirectory($temp_dir);
+        del_osstemp($oss_temp, $localSavePath);
+        return;
     }
+    $desugarShellDexEntries = $desugarPreparation['skip_shell_entries'];
+    echo $desugarPreparation['message'] . "\n";
     //去找入口类所在的dex文件
     echo "==================================寻找入口类所在的dex文件，准备插桩,此功能在部分应用上存在BUG\n";//插桩功能先暂时不启用，因为壳模板还有混用，多迭代几个壳版本后再开启这个功能
     /*if($task['apk_size'] >= 1024 * 1024 * 3 && $task['user_id'] == 1){
@@ -1482,7 +1485,7 @@ $applicationlin=[];
 
 
     echo "==================================开始复制剩余dex文件\n";
-    $result = mergeDexFiles($de_apk2, $de_apk1);
+    $result = mergeDexFiles($de_apk2, $de_apk1, $desugarShellDexEntries);
     print_r($result);
     echo "==================================开始修改AndroidManifest入口\n";
     if($mode == 0 || $reflectionEntryMode){
@@ -3457,13 +3460,294 @@ function generate_fake_so($size = 30720) {
 
 
 /**
- * 将目录2中的dex文件（classes.dex除外）复制到目录1，并根据目录1中现有dex文件递增命名
+ * 返回目录中的标准 DEX 文件，并按 classes.dex、classes2.dex... 稳定排序。
+ *
+ * 注入链只处理 APK 根目录下的标准 DEX 条目；忽略目录、临时文件和非标准名称，
+ * 避免把解包目录中的其他文件误当成可加载的 DEX。
+ */
+function listStandardDexFiles($dir) {
+    $files = [];
+    if (!is_dir($dir)) {
+        return $files;
+    }
+
+    foreach (scandir($dir) as $file) {
+        if ($file === 'classes.dex') {
+            $files[] = $file;
+            continue;
+        }
+        if (preg_match('/^classes(\d+)\.dex$/', $file, $matches)) {
+            $files[] = $file;
+        }
+    }
+
+    usort($files, static function ($left, $right) {
+        $leftIndex = $left === 'classes.dex' ? 1 : (int)preg_replace('/\D/', '', $left);
+        $rightIndex = $right === 'classes.dex' ? 1 : (int)preg_replace('/\D/', '', $right);
+        return $leftIndex <=> $rightIndex;
+    });
+    return $files;
+}
+
+/**
+ * 读取 DEX 的 class_defs，并识别其中的脱糖类。
+ *
+ * 壳的 core library desugaring（核心库脱糖）产物主要是 Lj$/ 类，同时可能带有
+ * Ljava/util/function/ 接口。class_defs 是真实的类定义集合，不能用字符串池搜索替代。
+ */
+function inspectDesugarDex($dexPath) {
+    $parsed = parseDexClassDefinitions($dexPath);
+    if (!$parsed['ok']) {
+        return [
+            'ok' => false,
+            'error' => $parsed['error'],
+            'classes' => [],
+            'is_desugar_only' => false,
+            'has_desugar' => false,
+        ];
+    }
+
+    $classes = array_keys($parsed['classes']);
+    $hasDesugar = false;
+    $nonDesugarClasses = [];
+    foreach ($classes as $descriptor) {
+        $isDesugarClass = strpos($descriptor, 'Lj$/') === 0
+            || strpos($descriptor, 'Ljava/util/function/') === 0;
+        if (strpos($descriptor, 'Lj$/') === 0) {
+            $hasDesugar = true;
+        }
+        if (!$isDesugarClass) {
+            $nonDesugarClasses[] = $descriptor;
+        }
+    }
+
+    return [
+        'ok' => true,
+        'error' => '',
+        'classes' => $classes,
+        'is_desugar_only' => $hasDesugar && empty($nonDesugarClasses),
+        'has_desugar' => $hasDesugar,
+    ];
+}
+
+/**
+ * 从壳脱糖 DEX 中删除目标已经定义的脱糖类，并保留壳独有类。
+ *
+ * 目标与壳可能使用不同的 R8/desugar 映射；直接用壳 DEX 覆盖目标版本会改变
+ * 目标调用的接口和方法签名。这里不改目标 DEX，而是反编译壳 DEX，删除交集类，
+ * 再回编译到原路径。过滤后的壳类仍可引用交集类，因为 ART 会从目标 DEX 解析它们。
+ * 返回值中的 skip_shell_entries 只用于过滤后为空的 DEX。
+ */
+function prepareDesugarDexCompatibility($targetDir, $shellDir, $baksmaliPath, $smaliPath, $xmx) {
+    $result = [
+        'ok' => true,
+        'error' => '',
+        'message' => '目标未发现与壳重复的 j$ 脱糖类，保留壳脱糖 DEX。',
+        'skip_shell_entries' => [],
+    ];
+
+    $targetDefinitions = [];
+    foreach (listStandardDexFiles($targetDir) as $file) {
+        $inspection = inspectDesugarDex($targetDir . DIRECTORY_SEPARATOR . $file);
+        if (!$inspection['ok']) {
+            return [
+                'ok' => false,
+                'error' => '目标 ' . $file . ' 解析失败：' . $inspection['error'],
+                'message' => '',
+                'skip_shell_entries' => [],
+            ];
+        }
+        foreach ($inspection['classes'] as $descriptor) {
+            $targetDefinitions[$descriptor] = true;
+        }
+    }
+
+    $removedClassCount = 0;
+    foreach (listStandardDexFiles($shellDir) as $file) {
+        // classes.dex 会在后续流程反编译、重新编译；这里处理的是随后直接复制的壳 DEX。
+        if ($file === 'classes.dex') {
+            continue;
+        }
+        $sourcePath = $shellDir . DIRECTORY_SEPARATOR . $file;
+        $inspection = inspectDesugarDex($sourcePath);
+        if (!$inspection['ok']) {
+            return [
+                'ok' => false,
+                'error' => '壳 ' . $file . ' 解析失败：' . $inspection['error'],
+                'message' => '',
+                'skip_shell_entries' => [],
+            ];
+        }
+
+        $overlap = [];
+        foreach ($inspection['classes'] as $descriptor) {
+            $isDesugarClass = strpos($descriptor, 'Lj$/') === 0
+                || strpos($descriptor, 'Ljava/util/function/') === 0;
+            if ($isDesugarClass && isset($targetDefinitions[$descriptor])) {
+                $overlap[] = $descriptor;
+            }
+        }
+        if (empty($overlap)) {
+            continue;
+        }
+
+        $filterResult = filterOverlappingDesugarDex(
+            $sourcePath,
+            $overlap,
+            $baksmaliPath,
+            $smaliPath,
+            $xmx,
+            $targetDefinitions
+        );
+        if (!$filterResult['ok']) {
+            return [
+                'ok' => false,
+                'error' => '壳 ' . $file . ' 过滤重复脱糖类失败：' . $filterResult['error'],
+                'message' => '',
+                'skip_shell_entries' => [],
+            ];
+        }
+        $removedClassCount += $filterResult['removed_count'];
+        if ($filterResult['class_count'] === 0) {
+            $result['skip_shell_entries'][] = $file;
+        }
+    }
+
+    if ($removedClassCount === 0) {
+        return $result;
+    }
+    $result['message'] = '已从壳 DEX 过滤 ' . $removedClassCount
+        . ' 个与目标重复的 j$ 脱糖类，保留目标实现和壳独有类。';
+    if (!empty($result['skip_shell_entries'])) {
+        $result['message'] .= ' 空 DEX 已跳过：' . implode('、', $result['skip_shell_entries']) . '。';
+    }
+    return $result;
+}
+
+/**
+ * 用 baksmali/smali 过滤一个壳 DEX 中的重复脱糖类。
+ *
+ * 临时目录放在当前解包任务目录下，便于任务清理和安全删除。回编译后再次解析
+ * class_defs，确认没有把目标已有的描述符重新写回去。
+ */
+function filterOverlappingDesugarDex(
+    $dexPath,
+    array $overlap,
+    $baksmaliPath,
+    $smaliPath,
+    $xmx,
+    array $targetDefinitions
+) {
+    $workspace = dirname($dexPath) . DIRECTORY_SEPARATOR . '.desugar-filter-' . uniqid('', true);
+    $smaliDir = $workspace . DIRECTORY_SEPARATOR . 'smali';
+    $outputDex = $workspace . DIRECTORY_SEPARATOR . 'filtered.dex';
+    $heap = preg_match('/\A[0-9]+[KMG]\z/i', (string)$xmx) === 1 ? (string)$xmx : '512M';
+
+    if (!mkdir($workspace, 0700, true)) {
+        return ['ok' => false, 'error' => '无法创建过滤临时目录', 'removed_count' => 0, 'class_count' => 0];
+    }
+
+    try {
+        $disassembleCommand = 'java -Xmx' . $heap . ' -jar ' . escapeshellarg($baksmaliPath)
+            . ' disassemble ' . escapeshellarg($dexPath)
+            . ' -o ' . escapeshellarg($smaliDir) . ' 2>&1';
+        $disassembleOutput = [];
+        $disassembleExitCode = 0;
+        exec($disassembleCommand, $disassembleOutput, $disassembleExitCode);
+        if ($disassembleExitCode !== 0 || !is_dir($smaliDir)) {
+            return [
+                'ok' => false,
+                'error' => 'baksmali 退出码 ' . $disassembleExitCode . '：' . implode("\n", $disassembleOutput),
+                'removed_count' => 0,
+                'class_count' => 0,
+            ];
+        }
+
+        foreach ($overlap as $descriptor) {
+            $relativePath = substr($descriptor, 1, -1) . '.smali';
+            $smaliPathForClass = $smaliDir . DIRECTORY_SEPARATOR
+                . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
+            if (!is_file($smaliPathForClass)) {
+                return [
+                    'ok' => false,
+                    'error' => '找不到重复类的 smali 文件：' . $descriptor,
+                    'removed_count' => 0,
+                    'class_count' => 0,
+                ];
+            }
+            if (!unlink($smaliPathForClass)) {
+                return [
+                    'ok' => false,
+                    'error' => '删除重复类的 smali 文件失败：' . $descriptor,
+                    'removed_count' => 0,
+                    'class_count' => 0,
+                ];
+            }
+        }
+
+        $assembleCommand = 'java -Xmx' . $heap . ' -jar ' . escapeshellarg($smaliPath)
+            . ' a ' . escapeshellarg($smaliDir)
+            . ' -o ' . escapeshellarg($outputDex) . ' 2>&1';
+        $assembleOutput = [];
+        $assembleExitCode = 0;
+        exec($assembleCommand, $assembleOutput, $assembleExitCode);
+        if ($assembleExitCode !== 0 || !is_file($outputDex)) {
+            return [
+                'ok' => false,
+                'error' => 'smali 退出码 ' . $assembleExitCode . '：' . implode("\n", $assembleOutput),
+                'removed_count' => 0,
+                'class_count' => 0,
+            ];
+        }
+
+        $filteredInspection = inspectDesugarDex($outputDex);
+        if (!$filteredInspection['ok']) {
+            return [
+                'ok' => false,
+                'error' => '回编译 DEX 解析失败：' . $filteredInspection['error'],
+                'removed_count' => 0,
+                'class_count' => 0,
+            ];
+        }
+        foreach ($filteredInspection['classes'] as $descriptor) {
+            if (isset($targetDefinitions[$descriptor])) {
+                return [
+                    'ok' => false,
+                    'error' => '回编译 DEX 仍包含目标类：' . $descriptor,
+                    'removed_count' => 0,
+                    'class_count' => 0,
+                ];
+            }
+        }
+        if (!copy($outputDex, $dexPath)) {
+            return [
+                'ok' => false,
+                'error' => '无法写回过滤后的 DEX',
+                'removed_count' => 0,
+                'class_count' => 0,
+            ];
+        }
+
+        return [
+            'ok' => true,
+            'error' => '',
+            'removed_count' => count($overlap),
+            'class_count' => count($filteredInspection['classes']),
+        ];
+    } finally {
+        safeDeleteDirectory($workspace);
+    }
+}
+
+/**
+ * 将目录2中的 dex 文件（classes.dex 除外）复制到目录1，并根据目录1中现有 dex 文件递增命名。
  *
  * @param string $dir1 目标目录
  * @param string $dir2 源目录
- * @return array 返回复制前后文件名映射，例如 ['classes2.dex' => 'classes5.dex']
+ * @param array $skipSourceEntries 已在目标目录处理过、不可再次复制的源 DEX 条目
+ * @return array 返回复制前后文件名映射，例如 ['classes3.dex' => 'classes5.dex']
  */
-function mergeDexFiles($dir1, $dir2) {
+function mergeDexFiles($dir1, $dir2, array $skipSourceEntries = []) {
     $copyMap = []; // 用于记录复制详情
 
     // 获取目录1中所有标准命名的dex文件，确定最大数字
@@ -3479,17 +3763,19 @@ function mergeDexFiles($dir1, $dir2) {
     }
 
     // 遍历目录2的标准命名dex文件
-    $files2 = scandir($dir2);
+    $files2 = listStandardDexFiles($dir2);
     foreach ($files2 as $file) {
         if ($file === 'classes.dex') {
             continue; // 不复制classes.dex
         }
-        if (preg_match('/^classes(\d*)\.dex$/', $file)) {
-            $maxNum++;
-            $newName = 'classes' . $maxNum . '.dex';
-            copy($dir2 . DIRECTORY_SEPARATOR . $file, $dir1 . DIRECTORY_SEPARATOR . $newName);
-            $copyMap[$file] = $newName; // 记录复制详情
+        if (in_array($file, $skipSourceEntries, true)) {
+            $copyMap[$file] = null;
+            continue;
         }
+        $maxNum++;
+        $newName = 'classes' . $maxNum . '.dex';
+        copy($dir2 . DIRECTORY_SEPARATOR . $file, $dir1 . DIRECTORY_SEPARATOR . $newName);
+        $copyMap[$file] = $newName; // 记录复制详情
     }
 
     return $copyMap;
