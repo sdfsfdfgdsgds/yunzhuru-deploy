@@ -28,18 +28,11 @@ register_shutdown_function(static function () use (&$bootstrapped, &$jobId): voi
     }
 });
 $pdo = null;
-$watcherLockName = '';
-$watcherLockHeld = false;
-$releaseWatcherLock = static function () use (&$pdo, &$watcherLockName, &$watcherLockHeld): void {
-    if (!$watcherLockHeld || $watcherLockName === '') return;
-    try {
-        $release = $pdo->prepare('SELECT RELEASE_LOCK(:lock_name)');
-        $release->execute([':lock_name' => $watcherLockName]);
-        $release->fetchColumn();
-    } catch (Throwable $ignored) {
-        // 数据库连接断开时 MySQL 会自动释放该等待锁。
-    }
-    $watcherLockHeld = false;
+$jobLockHeld = false;
+$releaseJobLock = static function () use (&$pdo, &$jobId, &$jobLockHeld): void {
+    if (!$jobLockHeld || $jobId === '') return;
+    configSyncWorkerReleaseJobLock($pdo, $jobId);
+    $jobLockHeld = false;
 };
 try {
     require_once __DIR__ . '/../config/db.php';
@@ -52,26 +45,25 @@ try {
     // 调度器会把 job_id 作为参数传入；没有参数时兼容旧手工执行并接管当前排队任务。
     $state = configSyncStateRead($pdo);
     if ($jobId === '') $jobId = (string)($state['job_id'] ?? '');
-    // 排队期的每次修改都可启动一个接替 watcher，用于覆盖首个请求在 exec
-    // 前退出的窗口；同一 job 只允许一个进程持有该零等待 advisory lock，
-    // 其余进程立即结束，因此不会形成大量驻留进程或重复上传。
+    // 同一 job 只允许一个进程从防抖等待到终态持有生命周期锁；调度器看到
+    // 任务仍 running 但此锁无人持有时，才有资格进行失主恢复。
     if ($jobId !== '' && (string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
-        $watcherLockName = configSyncWorkerWaiterLockName($jobId);
-        $watcherLock = $pdo->prepare('SELECT GET_LOCK(:lock_name, 0)');
-        $watcherLock->execute([':lock_name' => $watcherLockName]);
-        if ((int)$watcherLock->fetchColumn() !== 1) {
-            configSyncWorkerLog('waiter_already_owned', $jobId);
+        if (!configSyncWorkerAcquireJobLock($pdo, $jobId)) {
+            configSyncWorkerLog('job_lock_busy', $jobId);
             exit(0);
         }
-        $watcherLockHeld = true;
-        configSyncWorkerLog('waiter_acquired', $jobId, ['pid' => getmypid()]);
+        $jobLockHeld = true;
+        configSyncWorkerLog('job_lock_acquired', $jobId, ['pid' => getmypid()]);
     }
     // 自动触发采用防抖：只有最后一次修改后的截止时间到达，worker 才会
-    // 抢占 running。等待期间每次重读数据库，因此连续保存会继续向后延迟。
+    // 抢占 running。生命周期锁在等待期间保持，避免 dispatcher 将存活 worker
+    // 误判为失主并重置同一代次。
     if (function_exists('configSyncStateWaitForDue')) {
+        // 首轮只能接管 queued。失主 running 必须先由 dispatcher 在双锁下
+        // 恢复并重新置 dirty，避免直接执行时把中断前已消费的 dirty 当成完成。
         $ready = configSyncStateWaitForDue($pdo, $jobId, true);
         if (empty($ready['ready'])) {
-            $releaseWatcherLock();
+            $releaseJobLock();
             configSyncWorkerLog('waiter_not_claimed', $jobId);
             exit(0);
         }
@@ -80,20 +72,18 @@ try {
         $runningState = configSyncStateMarkRunning($pdo, $jobId);
         if ($jobId !== '' && ((string)($runningState['job_id'] ?? '') !== $jobId
             || !in_array((string)($runningState['status'] ?? ''), ['queued', 'running'], true))) {
+            $releaseJobLock();
             configSyncWorkerLog('stale_job', $jobId);
             exit(0);
         }
     }
-    // 状态已经由本进程 CAS 切换为 running；之后的新修改会加入当前运行
-    // 任务而不是再启动 watcher，此处即可释放排队期专用锁。
-    $releaseWatcherLock();
-
     // 全局配置保存可在短时间连续触发，false 表示按 dirty 标记合并重复任务。
     // 每次 push 只持全局锁执行一个快照；新修改由本外层循环在释放锁后等满
     // 新的 60 秒防抖窗口，然后继续同一 job，不限制变更轮数。
     while (true) {
         $result = pushAllConfigsToBuckets($pdo, false, $jobId);
         if (!empty($result['stale_job'])) {
+            $releaseJobLock();
             configSyncWorkerLog('stale_job', $jobId);
             exit(0);
         }
@@ -104,6 +94,7 @@ try {
                 ? configSyncStateWaitForDue($pdo, $jobId, false)
                 : ['ready' => true];
             if (empty($ready['ready'])) {
+                $releaseJobLock();
                 configSyncWorkerLog('stale_job', $jobId);
                 exit(0);
             }
@@ -121,16 +112,17 @@ try {
                 ? configSyncStateWaitForDue($pdo, $jobId, false)
                 : ['ready' => true];
             if (empty($ready['ready'])) {
+                $releaseJobLock();
                 configSyncWorkerLog('stale_job', $jobId);
                 exit(0);
             }
             continue;
         }
         configSyncWorkerLog('finished', $jobId, is_array($result) ? $result : []);
+        $releaseJobLock();
         break;
     }
 } catch (Throwable $e) {
-    $releaseWatcherLock();
     try {
         $failedSnapshot = configSyncStateRead($pdo);
         // 保留 worker 已经逐 APP 写入的公开结果；异常终态不能把此前成功
@@ -141,10 +133,16 @@ try {
         $failureResult['success'] = (int)($failedSnapshot['success'] ?? 0);
         $failureResult['fail'] = max(1, (int)($failedSnapshot['fail'] ?? 0));
         $failureResult['message'] = $e->getMessage();
-        configSyncStateMarkFinished($pdo, $failureResult,
-            $jobId, $e, true);
+        // 失败终态必须在仍持有生命周期锁时固化，否则 dispatcher 可在此
+        // 窗口把 running 恢复 queued，随后被旧进程写成失败。旧 job 不覆盖新任务。
+        if ((string)($failedSnapshot['job_id'] ?? '') === $jobId
+            && (string)($failedSnapshot['status'] ?? '') === 'running') {
+            configSyncStateMarkFinished($pdo, $failureResult, $jobId, $e, true);
+        }
     } catch (Throwable $ignored) {
         // 状态固化失败不覆盖原始同步异常；主日志仍保留具体原因。
+    } finally {
+        $releaseJobLock();
     }
     configSyncWorkerLog('failed', $jobId, ['error_code' => $e->getCode(), 'error_line' => $e->getLine()]);
     exit(1);

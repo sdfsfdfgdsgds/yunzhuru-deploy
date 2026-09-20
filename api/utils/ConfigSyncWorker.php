@@ -1,15 +1,71 @@
 <?php
 /**
- * 配置同步进程启动与遗留排队任务接管。
+ * 配置同步进程启动、生命周期所有权与失主任务恢复。
  *
- * 本工具只读取既有任务并确保等待进程存活，绝不登记新配置变更，因而恢复
- * 操作保持原 job_id、防抖截止时间、变更原因和 dirty 标记不变。
+ * 启动器只读取既有任务；失主恢复在双锁下沿用原 job_id、防抖截止时间、
+ * 变更原因和历史结果，并重新标记 dirty，保证未完成批次真正重跑。
  */
 
-/** 返回与同步 worker 共用的 MySQL 等待锁名称。 */
+/** 返回与同步 worker 共用的 MySQL 生命周期锁名称，沿用旧等待锁命名。 */
 function configSyncWorkerWaiterLockName(string $jobId): string
 {
     return 'yunzhuru_cfg_wait_' . substr(hash('sha256', $jobId), 0, 32);
+}
+
+/** 返回全量对象写入所用的 MySQL advisory lock 名称。 */
+function configSyncWorkerPushLockName(): string
+{
+    return 'yunzhuru_cfg_push_all';
+}
+
+/**
+ * 取得同步任务生命周期锁。
+ *
+ * 新 worker 从防抖等待、running、重试到终态都持有同一把任务锁；调度器
+ * 只有在此锁无人持有时才会进入失主恢复。非 MySQL 环境保留原有无锁兼容行为。
+ */
+function configSyncWorkerAcquireJobLock(PDO $pdo, string $jobId): bool
+{
+    if ($jobId === '') return false;
+    if ((string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') return true;
+    $statement = $pdo->prepare('SELECT GET_LOCK(:lock_name, 0)');
+    $statement->execute([':lock_name' => configSyncWorkerWaiterLockName($jobId)]);
+    return (int)$statement->fetchColumn() === 1;
+}
+
+/** 释放同步任务生命周期锁；数据库断开时 MySQL 会自动释放。 */
+function configSyncWorkerReleaseJobLock(PDO $pdo, string $jobId): void
+{
+    if ($jobId === '' || (string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') return;
+    try {
+        $statement = $pdo->prepare('SELECT RELEASE_LOCK(:lock_name)');
+        $statement->execute([':lock_name' => configSyncWorkerWaiterLockName($jobId)]);
+        $statement->fetchColumn();
+    } catch (Throwable $ignored) {
+        // 连接断开时锁已由 MySQL 自动回收。
+    }
+}
+
+/** 尝试无等待取得全量对象写入锁，供失主恢复先完成并发安全核验。 */
+function configSyncWorkerAcquirePushLock(PDO $pdo): bool
+{
+    if ((string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') return true;
+    $statement = $pdo->prepare('SELECT GET_LOCK(:lock_name, 0)');
+    $statement->execute([':lock_name' => configSyncWorkerPushLockName()]);
+    return (int)$statement->fetchColumn() === 1;
+}
+
+/** 释放失主恢复临时持有的全量对象写入锁。 */
+function configSyncWorkerReleasePushLock(PDO $pdo): void
+{
+    if ((string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') return;
+    try {
+        $statement = $pdo->prepare('SELECT RELEASE_LOCK(:lock_name)');
+        $statement->execute([':lock_name' => configSyncWorkerPushLockName()]);
+        $statement->fetchColumn();
+    } catch (Throwable $ignored) {
+        // 连接断开时锁已由 MySQL 自动回收。
+    }
 }
 
 /** 返回运行日志路径；默认复用受路由保护的 temp 目录。 */
@@ -113,7 +169,7 @@ function configSyncWorkerReadState(PDO $pdo): array
         ->fetch(PDO::FETCH_ASSOC) ?: [];
 }
 
-/** 查询既有等待锁，不占有它；真正所有权只由 worker 持有的 GET_LOCK 决定。 */
+/** 查询既有生命周期锁，不占有它；恢复前仍须实际取得 GET_LOCK 确认所有权。 */
 function configSyncWorkerHasWaiter(PDO $pdo, string $jobId): bool
 {
     if ((string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') return false;
@@ -123,11 +179,94 @@ function configSyncWorkerHasWaiter(PDO $pdo, string $jobId): bool
 }
 
 /**
+ * 在持有任务锁和全量写锁时，把失去执行者的 running 任务安全退回 queued。
+ *
+ * 只有两把锁都由当前 dispatcher 连接持有，且状态行仍是同一 job 的 running，
+ * 才允许恢复；因此不会抢占仍在上传的 worker，也不会凭 updated_at 猜测失主。
+ * 原 job_id、原因、防抖截止时间、进度和 result_json 全部保留，只把 dirty 置回
+ * 1，强制下一轮真正重跑未完成批次而不是被 pushAllConfigsToBuckets 合并掉。
+ */
+function configSyncWorkerRecoverRunning(PDO $pdo, string $jobId): array
+{
+    $result = ['recovered' => false, 'reason' => 'unsupported', 'job_id' => $jobId];
+    if ($jobId === '' || (string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') {
+        return $result;
+    }
+    if (!configSyncWorkerAcquireJobLock($pdo, $jobId)) {
+        $result['reason'] = 'job_owned';
+        return $result;
+    }
+    $pushLockHeld = false;
+    $transaction = false;
+    try {
+        // 与 worker 的 job -> push 锁顺序一致，避免恢复与正常上传互相死锁。
+        if (!configSyncWorkerAcquirePushLock($pdo)) {
+            $result['reason'] = 'push_owned';
+            return $result;
+        }
+        $pushLockHeld = true;
+        $pdo->beginTransaction();
+        $transaction = true;
+        $stateStmt = $pdo->prepare("SELECT job_id,status,debounce_until,
+            CASE WHEN debounce_until IS NOT NULL AND debounce_until > UTC_TIMESTAMP()
+                THEN 1 ELSE 0 END AS debounce_pending
+            FROM cainiao_config_sync_state WHERE id=1 LIMIT 1 FOR UPDATE");
+        $stateStmt->execute();
+        $state = $stateStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        if ((string)($state['job_id'] ?? '') !== $jobId
+            || (string)($state['status'] ?? '') !== 'running') {
+            $pdo->rollBack();
+            $transaction = false;
+            $result['reason'] = 'state_changed';
+            return $result;
+        }
+        // 与 markQueued/pushAllConfigsToBuckets 使用相同的状态行 -> dirty 行顺序。
+        $dirtyStmt = $pdo->prepare("SELECT key_value FROM cainiao_config_delivery_meta
+            WHERE key_name='distribution_dirty' LIMIT 1 FOR UPDATE");
+        $dirtyStmt->execute();
+        $hasDebounce = !empty($state['debounce_pending']);
+        $recover = $pdo->prepare("UPDATE cainiao_config_sync_state SET
+            status='queued', phase=:phase, phase_label=:phase_label,
+            message='同步执行进程已退出，正在恢复未完成批次', finished_at=NULL,
+            updated_at=UTC_TIMESTAMP()
+            WHERE id=1 AND job_id=:job_id AND status='running'");
+        $recover->execute([
+            ':phase' => $hasDebounce ? 'debounce' : 'queued',
+            ':phase_label' => $hasDebounce ? '等待修改稳定' : '等待同步',
+            ':job_id' => $jobId,
+        ]);
+        if ($recover->rowCount() !== 1) {
+            $pdo->rollBack();
+            $transaction = false;
+            $result['reason'] = 'state_changed';
+            return $result;
+        }
+        $dirtyUpsert = $pdo->prepare("INSERT INTO cainiao_config_delivery_meta (key_name,key_value)
+            VALUES ('distribution_dirty','1')
+            ON DUPLICATE KEY UPDATE key_value='1'");
+        $dirtyUpsert->execute();
+        $pdo->commit();
+        $transaction = false;
+        $result['recovered'] = true;
+        $result['reason'] = 'owner_missing';
+        return $result;
+    } catch (Throwable $error) {
+        if ($transaction && $pdo->inTransaction()) $pdo->rollBack();
+        $result['reason'] = 'recovery_failed';
+        return $result;
+    } finally {
+        if ($pushLockHeld) configSyncWorkerReleasePushLock($pdo);
+        configSyncWorkerReleaseJobLock($pdo, $jobId);
+    }
+}
+
+/**
  * 确保指定的既有 queued 任务有进程处理；onlyDue 用于常驻恢复调度。
  *
- * running 只承认已有任务，不盲目抢占；queued 已有等待锁时 scheduled=true、
- * started=false、owned=true。并发启动的窄窗口仍由 worker 的同一等待锁和
- * queued→running 条件更新去重，不在本函数内修改任何业务状态。
+ * running 只承认已有任务，不盲目抢占；running 的失主恢复由 dispatcher 在
+ * 双锁和行锁保护下单独完成。queued 已有等待锁时 scheduled=true、started=false、
+ * owned=true。并发启动的窄窗口仍由 worker 的同一任务锁和 queued→running 条件
+ * 更新去重，不在本函数内修改任何业务状态。
  */
 function configSyncWorkerEnsureStarted(PDO $pdo, string $jobId, bool $onlyDue = false): array
 {
