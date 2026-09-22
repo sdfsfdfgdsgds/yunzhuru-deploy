@@ -2510,6 +2510,8 @@ function selectFile() {
       dangerouslyUseHTMLString: true
     }
   ).then(() => {
+    // 普通上传入口明确清除上一次“重传”选择，避免用户取消文件选择后误替换应用。
+    replaceTargetApp.value = null;
     fileInput.value.click(); // 用户确认后再触发文件选择
   }).catch(() => {
     // 用户取消，不做任何处理
@@ -2570,91 +2572,139 @@ async function replaceApk(row) {
   fileInput.value.click();
 }
 
-// 修改 handleFileChange 方法，支持替换逻辑
+/**
+ * 调用分片上传接口并解析统一 API 响应。
+ * 分片上传使用独立请求，避免单个公网请求超过 Railway 的请求时限；老的
+ * uploadApk/replaceApk 接口仍由服务端保留，页面只在这里走新的分片协议。
+ */
+function uploadChunkRequest(action, body, loading, progressHandler) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/index.php?module=app&method=uploadApkChunk', true);
+    if (!(body instanceof FormData)) {
+      xhr.setRequestHeader('Content-Type', 'application/json');
+    }
+    xhr.onload = function () {
+      let json;
+      try {
+        json = JSON.parse(xhr.responseText || '{}');
+      } catch (error) {
+        reject(new Error('服务器返回了无法解析的结果'));
+        return;
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && json.code === 200) {
+        resolve(json.data || json);
+        return;
+      }
+      reject(new Error(json.message || `分片${action}失败（HTTP ${xhr.status}）`));
+    };
+    xhr.onerror = function () {
+      reject(new Error(`分片${action}网络请求失败`));
+    };
+    if (progressHandler) {
+      xhr.upload.onprogress = progressHandler;
+    }
+    if (body instanceof FormData) {
+      body.append('action', action);
+    } else {
+      body = JSON.stringify(Object.assign({ action }, body || {}));
+    }
+    xhr.send(body);
+  });
+}
+
+/**
+ * 对单个分片执行有限次重试。网络抖动时只重传当前分片，不重复上传已完成内容。
+ */
+async function uploadChunkWithRetry(uploadId, chunkIndex, chunk, totalSize, uploadedBefore, loading) {
+  const maxAttempts = 3;
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const formData = new FormData();
+    formData.append('upload_id', uploadId);
+    formData.append('chunk_index', String(chunkIndex));
+    formData.append('file', chunk, `part-${chunkIndex}.apk`);
+    try {
+      await uploadChunkRequest('chunk', formData, loading, (event) => {
+        if (!event.lengthComputable) return;
+        const current = uploadedBefore + event.loaded;
+        const percent = Math.min(99, Math.round((current / totalSize) * 100));
+        loading.setText(`上传中 ${percent}%（第 ${chunkIndex + 1} 片）`);
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts) {
+        loading.setText(`第 ${chunkIndex + 1} 片上传失败，${attempt + 1} 秒后重试（${attempt}/${maxAttempts}）`);
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+      }
+    }
+  }
+  throw lastError || new Error(`第 ${chunkIndex + 1} 片上传失败`);
+}
+
+// 分片上传同时支持新上传与替换上传；替换目标在 init 阶段传递给服务端。
 async function handleFileChange(event) {
   const file = event.target.files[0];
-  if (!file || !file.name.endsWith('.apk')) {
+  const replaceTarget = replaceTargetApp.value;
+  event.target.value = '';
+  if (!file || !/\.apk$/i.test(file.name)) {
     ElementPlus.ElMessage.warning('请选择 APK 文件');
+    replaceTargetApp.value = null;
     return;
   }
-
-  const formData = new FormData();
-  formData.append('file', file);
-
-  // 判断是否是替换逻辑
-  if (replaceTargetApp.value) {
-    formData.append('apk_id', replaceTargetApp.value.id); // 传入被替换的 id
+  if (file.size <= 0) {
+    ElementPlus.ElMessage.warning('APK 文件为空，无法上传');
+    replaceTargetApp.value = null;
+    return;
   }
 
   const loading = ElementPlus.ElLoading.service({
     lock: true,
-    text: '上传中 0%',
+    text: '正在准备分片上传',
     background: 'rgba(0, 0, 0, 0.5)'
   });
 
   try {
-    await new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
+    const initData = await uploadChunkRequest('init', {
+      file_name: file.name,
+      file_size: file.size,
+      ...(replaceTarget ? { apk_id: replaceTarget.id } : {})
+    }, loading);
+    const uploadId = initData.upload_id;
+    const chunkSize = Number(initData.chunk_size);
+    const totalChunks = Number(initData.total_chunks);
+    if (!uploadId || !Number.isSafeInteger(chunkSize) || chunkSize <= 0 ||
+        !Number.isSafeInteger(totalChunks) || totalChunks <= 0) {
+      throw new Error('服务器返回的分片参数无效');
+    }
 
-      const method = replaceTargetApp.value ? 'replaceApk' : 'uploadApk';
+    let uploadedBytes = 0;
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+      const start = chunkIndex * chunkSize;
+      const end = Math.min(file.size, start + chunkSize);
+      const chunk = file.slice(start, end);
+      await uploadChunkWithRetry(uploadId, chunkIndex, chunk, file.size, uploadedBytes, loading);
+      uploadedBytes = end;
+      loading.setText(`上传中 ${Math.min(99, Math.round((uploadedBytes / file.size) * 100))}%`);
+    }
 
-      xhr.open('POST', `/api/index.php?module=app&method=${method}`, true);
-
-      xhr.upload.onprogress = function (e) {
-        if (e.lengthComputable) {
-          const percent = Math.round((e.loaded / e.total) * 100);
-          if (percent >= 100) {
-            loading.setText('等待服务器处理');
-          } else {
-            loading.setText(`上传中 ${percent}%`);
-          }
-        }
-      };
-
-      xhr.onload = function () {
-        if (xhr.status === 200) {
-          try {
-            const json = JSON.parse(xhr.responseText);
-            if (json.code === 200) {
-              ElementPlus.ElMessageBox.alert('上传成功,点击注入,即可注入该应用', '提示', {
-                type: 'success',
-                confirmButtonText: '确定'
-              }).then(() => {
-                loadData();
-                resolve();
-              });
-            } else {
-              ElementPlus.ElMessageBox.alert(json.message || '上传失败', '提示', {
-                type: 'error',
-                confirmButtonText: '确定'
-              }).then(() => {
-                reject();
-              });
-            }
-
-          } catch {
-            ElementPlus.ElMessage.error('返回解析失败');
-            reject();
-          }
-        } else {
-          ElementPlus.ElMessage.error('上传失败');
-          reject();
-        }
-      };
-
-      xhr.onerror = function () {
-        ElementPlus.ElMessage.error('上传失败');
-        reject();
-      };
-
-      xhr.send(formData);
+    loading.setText('分片已上传，正在校验并处理 APK');
+    const result = await uploadChunkRequest('complete', { upload_id: uploadId }, loading);
+    await ElementPlus.ElMessageBox.alert(
+      result.message || '上传成功，点击注入即可注入该应用',
+      '提示',
+      { type: 'success', confirmButtonText: '确定' }
+    );
+    loadData();
+  } catch (error) {
+    ElementPlus.ElMessageBox.alert(error.message || '上传失败，请稍后重试', '上传失败', {
+      type: 'error',
+      confirmButtonText: '确定'
     });
-  } catch (err) {
-    // 已提示
   } finally {
     loading.close();
-    event.target.value = '';
-    replaceTargetApp.value = null; // 上传完重置替换状态
+    replaceTargetApp.value = null;
   }
 }
 

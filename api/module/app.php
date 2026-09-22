@@ -2680,6 +2680,367 @@ function clearAppFile(PDO $pdo, array $input)
 
 
 
+/**
+ * 消费分片完成阶段在本次请求内注入的 APK 临时文件。
+ *
+ * 该状态只存在于当前 PHP 请求的全局变量中，避免把服务器路径作为外部参数
+ * 传给 uploadApk/replaceApk，原有整包接口仍严格依赖 $_FILES。
+ */
+function appConsumeInternalApkFile(): ?array
+{
+    if (empty($GLOBALS['yunzhuru_internal_apk_file']) || !is_array($GLOBALS['yunzhuru_internal_apk_file'])) {
+        return null;
+    }
+    $file = $GLOBALS['yunzhuru_internal_apk_file'];
+    unset($GLOBALS['yunzhuru_internal_apk_file']);
+    if (empty($file['tmp_name']) || !is_file($file['tmp_name'])) {
+        return null;
+    }
+    return $file;
+}
+
+/**
+ * 保存上传文件。分片组装文件不是 PHP HTTP 上传临时文件，因此不能调用
+ * move_uploaded_file；只有 endpoint 内部明确标记的文件才允许走 rename。
+ */
+function appMoveApkUpload(string $source, string $target, bool $internal): bool
+{
+    if ($internal) {
+        return @rename($source, $target);
+    }
+    return move_uploaded_file($source, $target);
+}
+
+function appChunkBaseDir(): string
+{
+    return rtrim(__DIR__ . '/../../temp/apk_chunks', '/');
+}
+
+function appChunkRemoveDir(string $dir): void
+{
+    if (!is_dir($dir)) {
+        return;
+    }
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST
+    );
+    foreach ($iterator as $item) {
+        if ($item->isDir()) {
+            @rmdir($item->getPathname());
+        } else {
+            @unlink($item->getPathname());
+        }
+    }
+    @rmdir($dir);
+}
+
+/** 清理异常中断后遗留的分片，避免持久卷被未完成上传长期占用。 */
+function appChunkCleanupExpired(): void
+{
+    $base = appChunkBaseDir();
+    if (!is_dir($base)) {
+        return;
+    }
+    $now = time();
+    foreach (glob($base . '/*', GLOB_ONLYDIR) ?: [] as $dir) {
+        $metaPath = $dir . '/meta.json';
+        $mtime = is_file($metaPath) ? (int)@filemtime($metaPath) : (int)@filemtime($dir);
+        // 48 小时足够覆盖弱网重试窗口；完成请求会主动清理分片文件。
+        if ($mtime > 0 && $mtime < $now - 172800) {
+            appChunkRemoveDir($dir);
+        }
+    }
+}
+
+function appChunkReadMeta(string $uploadId): array
+{
+    if (!preg_match('/^[a-f0-9]{32}$/', $uploadId)) {
+        throw new Exception('分片上传标识无效');
+    }
+    $dir = appChunkBaseDir() . '/' . $uploadId;
+    $metaPath = $dir . '/meta.json';
+    if (!is_file($metaPath)) {
+        throw new Exception('分片上传不存在或已过期');
+    }
+    $meta = json_decode((string)@file_get_contents($metaPath), true);
+    if (!is_array($meta) || ($meta['upload_id'] ?? '') !== $uploadId) {
+        throw new Exception('分片上传元数据损坏');
+    }
+    return $meta;
+}
+
+function appChunkWriteMeta(string $dir, array $meta): void
+{
+    $tmp = $dir . '/meta.json.tmp.' . bin2hex(random_bytes(4));
+    if (@file_put_contents($tmp, json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX) === false || !@rename($tmp, $dir . '/meta.json')) {
+        @unlink($tmp);
+        throw new Exception('保存分片上传状态失败');
+    }
+}
+
+function appChunkUserCanAccess(PDO $pdo, array $meta, array $user): void
+{
+    if ((int)($meta['user_id'] ?? 0) !== (int)$user['id']) {
+        throw new Exception('无权限操作该分片上传');
+    }
+    if (!empty($meta['apk_id'])) {
+        $stmt = $pdo->prepare("SELECT user_id FROM cainiao_apk WHERE id = :id LIMIT 1");
+        $stmt->execute([':id' => (int)$meta['apk_id']]);
+        $owner = $stmt->fetchColumn();
+        if ($owner === false) {
+            throw new Exception('应用不存在');
+        }
+        if ((int)$owner !== (int)$user['id'] && ($user['role'] ?? '') !== 'admin') {
+            throw new Exception('无权限操作该应用');
+        }
+    }
+}
+
+/**
+ * 分片 APK 上传协议：
+ * init  创建上传会话；chunk 写入一个分片；complete 合并后复用整包业务校验。
+ * 每个请求只传输一个 8 MiB 分片，绕开公网网关对单个请求体的时间限制。
+ */
+function uploadApkChunk(PDO $pdo, array $input)
+{
+    set_time_limit(600);
+    $user = Auth::check($pdo);
+    $userId = (int)$user['id'];
+    $action = strtolower(trim((string)($_POST['action'] ?? $input['action'] ?? '')));
+    $base = appChunkBaseDir();
+    if (!is_dir($base) && !@mkdir($base, 0700, true) && !is_dir($base)) {
+        throw new Exception('分片临时目录不可用');
+    }
+    appChunkCleanupExpired();
+
+    if ($action === 'init') {
+        $fileName = trim((string)($_POST['file_name'] ?? $input['file_name'] ?? ''));
+        $fileSize = (int)($_POST['file_size'] ?? $input['file_size'] ?? 0);
+        $fileSha256 = strtolower(trim((string)($_POST['file_sha256'] ?? $input['file_sha256'] ?? '')));
+        $apkId = (int)($_POST['apk_id'] ?? $input['apk_id'] ?? 0);
+        $safeName = basename($fileName);
+        if ($safeName === '' || strpos($safeName, "\0") !== false || strtolower(pathinfo($safeName, PATHINFO_EXTENSION)) !== 'apk') {
+            throw new Exception('仅支持 .apk 文件');
+        }
+        if ($fileSize <= 0 || $fileSize > 4 * 1024 * 1024 * 1024) {
+            throw new Exception('文件大小无效');
+        }
+        if ($fileSha256 !== '' && !preg_match('/^[a-f0-9]{64}$/', $fileSha256)) {
+            throw new Exception('文件 SHA-256 格式无效');
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $isVip = isset($user['vip_expire_time']) && $user['vip_expire_time'] > $now;
+        if (($user['role'] ?? '') !== 'admin') {
+            $maxfile = (int)Auth::getSetting($pdo, $isVip ? 'vipmaxfile' : 'maxfile', $isVip ? '256' : '150');
+            if ($fileSize > $maxfile * 1024 * 1024) {
+                throw new Exception("文件过大，最大支持 {$maxfile}MB");
+            }
+        }
+        if ($apkId > 0) {
+            $stmt = $pdo->prepare("SELECT user_id FROM cainiao_apk WHERE id = :id LIMIT 1");
+            $stmt->execute([':id' => $apkId]);
+            $owner = $stmt->fetchColumn();
+            if ($owner === false) {
+                throw new Exception('应用不存在');
+            }
+            if ((int)$owner !== $userId && ($user['role'] ?? '') !== 'admin') {
+                throw new Exception('无权限操作该应用');
+            }
+        }
+
+        $chunkSize = 8 * 1024 * 1024;
+        $totalChunks = (int)ceil($fileSize / $chunkSize);
+        $uploadId = bin2hex(random_bytes(16));
+        $dir = $base . '/' . $uploadId;
+        if (!@mkdir($dir . '/parts', 0700, true)) {
+            throw new Exception('创建分片临时目录失败');
+        }
+        $meta = [
+            'upload_id' => $uploadId,
+            'user_id' => $userId,
+            'apk_id' => $apkId,
+            'file_name' => $safeName,
+            'file_size' => $fileSize,
+            'file_sha256' => $fileSha256,
+            'chunk_size' => $chunkSize,
+            'total_chunks' => $totalChunks,
+            'chunks' => [],
+            'status' => 'uploading',
+            'created_at' => time(),
+        ];
+        appChunkWriteMeta($dir, $meta);
+        return ['message' => '分片上传已初始化', 'upload_id' => $uploadId, 'chunk_size' => $chunkSize, 'total_chunks' => $totalChunks];
+    }
+
+    $uploadId = trim((string)($_POST['upload_id'] ?? $input['upload_id'] ?? ''));
+    $meta = appChunkReadMeta($uploadId);
+    appChunkUserCanAccess($pdo, $meta, $user);
+    $dir = $base . '/' . $uploadId;
+
+    if ($action === 'chunk') {
+        if (($meta['status'] ?? '') !== 'uploading') {
+            throw new Exception('该分片上传已结束');
+        }
+        $indexRaw = $_POST['chunk_index'] ?? $input['chunk_index'] ?? null;
+        if ($indexRaw === null || !preg_match('/^\d+$/', (string)$indexRaw)) {
+            throw new Exception('分片序号无效');
+        }
+        $index = (int)$indexRaw;
+        $totalChunks = (int)$meta['total_chunks'];
+        if ($index < 0 || $index >= $totalChunks) {
+            throw new Exception('分片序号超出范围');
+        }
+        $chunkFile = $_FILES['file'] ?? ($_FILES['chunk'] ?? null);
+        if (!is_array($chunkFile) || ($chunkFile['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+            throw new Exception('分片文件上传失败');
+        }
+        $expectedSize = ($index === $totalChunks - 1) ? ((int)$meta['file_size'] - $index * (int)$meta['chunk_size']) : (int)$meta['chunk_size'];
+        $actualSize = (int)($chunkFile['size'] ?? 0);
+        if ($actualSize !== $expectedSize) {
+            throw new Exception("分片大小不正确，期望 {$expectedSize} 字节，实际 {$actualSize} 字节");
+        }
+        $providedHash = strtolower(trim((string)($_POST['chunk_sha256'] ?? $input['chunk_sha256'] ?? '')));
+        if ($providedHash !== '' && !preg_match('/^[a-f0-9]{64}$/', $providedHash)) {
+            throw new Exception('分片 SHA-256 格式无效');
+        }
+        $partPath = $dir . '/parts/' . $index . '.part';
+        // 即使客户端未提供摘要也计算服务端摘要，确保重试同一序号时不能用同大小的
+        // 不同内容覆盖原分片，并为后续完整性审计保留每片指纹。
+        $hash = hash_file('sha256', $chunkFile['tmp_name']);
+        if ($hash === false) {
+            throw new Exception('读取分片摘要失败');
+        }
+        if ($providedHash !== '' && !hash_equals($providedHash, $hash)) {
+            throw new Exception('分片 SHA-256 校验失败');
+        }
+        if (is_file($partPath)) {
+            $oldHash = (string)($meta['chunks'][(string)$index]['sha256'] ?? '');
+            if ((int)@filesize($partPath) !== $actualSize || ($oldHash !== '' && !hash_equals($oldHash, $hash))) {
+                throw new Exception('重复分片内容不一致');
+            }
+        } else {
+            $tmpPart = $partPath . '.tmp.' . bin2hex(random_bytes(4));
+            if (!@move_uploaded_file($chunkFile['tmp_name'], $tmpPart)) {
+                if (!@copy($chunkFile['tmp_name'], $tmpPart)) {
+                    @unlink($tmpPart);
+                    throw new Exception('保存分片失败');
+                }
+            }
+            if ((int)@filesize($tmpPart) !== $actualSize || !@rename($tmpPart, $partPath)) {
+                @unlink($tmpPart);
+                throw new Exception('保存分片失败');
+            }
+        }
+        $lock = @fopen($dir . '/meta.lock', 'c');
+        if (!$lock || !@flock($lock, LOCK_EX)) {
+            if (is_resource($lock)) @fclose($lock);
+            throw new Exception('分片状态锁定失败');
+        }
+        try {
+            $latest = appChunkReadMeta($uploadId);
+            $latest['chunks'][(string)$index] = ['size' => $actualSize, 'sha256' => $hash];
+            appChunkWriteMeta($dir, $latest);
+            $received = count($latest['chunks']);
+        } finally {
+            @flock($lock, LOCK_UN);
+            @fclose($lock);
+        }
+        return ['message' => '分片上传成功', 'upload_id' => $uploadId, 'chunk_index' => $index, 'received_chunks' => $received, 'total_chunks' => $totalChunks];
+    }
+
+    if ($action !== 'complete') {
+        throw new Exception('分片上传操作无效');
+    }
+    $lock = @fopen($dir . '/complete.lock', 'c');
+    if (!$lock || !@flock($lock, LOCK_EX)) {
+        if (is_resource($lock)) @fclose($lock);
+        throw new Exception('分片合并锁定失败');
+    }
+    try {
+        if (($meta['status'] ?? '') === 'completed' && isset($meta['result']) && is_array($meta['result'])) {
+            return $meta['result'];
+        }
+        if (($meta['status'] ?? '') !== 'uploading') {
+            throw new Exception('该分片上传状态无效');
+        }
+        $assembled = $dir . '/assembled.apk';
+        $out = @fopen($assembled . '.tmp', 'wb');
+        if (!$out) {
+            throw new Exception('创建合并文件失败');
+        }
+        $totalSize = 0;
+        try {
+            for ($i = 0; $i < (int)$meta['total_chunks']; $i++) {
+                $part = $dir . '/parts/' . $i . '.part';
+                if (!is_file($part)) {
+                    throw new Exception('分片尚未全部上传');
+                }
+                $in = @fopen($part, 'rb');
+                if (!$in) {
+                    throw new Exception('读取分片失败');
+                }
+                while (!feof($in)) {
+                    $buffer = fread($in, 1024 * 1024);
+                    if ($buffer === false) {
+                        @fclose($in);
+                        throw new Exception('读取分片失败');
+                    }
+                    if ($buffer !== '') {
+                        fwrite($out, $buffer);
+                        $totalSize += strlen($buffer);
+                    }
+                }
+                @fclose($in);
+            }
+        } finally {
+            @fclose($out);
+        }
+        if ($totalSize !== (int)$meta['file_size'] || !@rename($assembled . '.tmp', $assembled)) {
+            @unlink($assembled . '.tmp');
+            throw new Exception('合并文件大小不正确');
+        }
+        if (!empty($meta['file_sha256'])) {
+            $actualHash = hash_file('sha256', $assembled);
+            if (!hash_equals($meta['file_sha256'], $actualHash)) {
+                throw new Exception('文件 SHA-256 校验失败');
+            }
+        }
+
+        $GLOBALS['yunzhuru_internal_apk_file'] = [
+            'name' => $meta['file_name'],
+            'tmp_name' => $assembled,
+            'size' => (int)$meta['file_size'],
+            'error' => UPLOAD_ERR_OK,
+            'type' => 'application/vnd.android.package-archive',
+        ];
+        $oldPost = $_POST;
+        if (!empty($meta['apk_id'])) {
+            $_POST['apk_id'] = (int)$meta['apk_id'];
+            $result = replaceApk($pdo, []);
+        } else {
+            $result = uploadApk($pdo, []);
+        }
+        $_POST = $oldPost;
+        $meta['status'] = 'completed';
+        $meta['result'] = $result;
+        $meta['completed_at'] = time();
+        $meta['chunks'] = [];
+        @unlink($assembled);
+        appChunkRemoveDir($dir . '/parts');
+        appChunkWriteMeta($dir, $meta);
+        return $result;
+    } catch (Throwable $e) {
+        unset($GLOBALS['yunzhuru_internal_apk_file']);
+        appChunkRemoveDir($dir);
+        throw $e;
+    } finally {
+        @flock($lock, LOCK_UN);
+        @fclose($lock);
+    }
+}
+
 //上传应用
 function uploadApk(PDO $pdo, array $input)
 {
@@ -2698,11 +3059,15 @@ function uploadApk(PDO $pdo, array $input)
     if(!Auth::getSetting($pdo,"upload","1")){
         throw new Exception('文件上传功能已关闭');
     }
-    if (empty($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
+    // 分片完成请求会在同一进程内注入一个受控的临时文件；外部请求仍然只能使用 $_FILES。
+    $internalFile = appConsumeInternalApkFile();
+    if ($internalFile !== null) {
+        $file = $internalFile;
+    } elseif (empty($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
         throw new Exception('文件上传失败');
+    } else {
+        $file = $_FILES['file'];
     }
-
-    $file = $_FILES['file'];
     $originalName = $file['name'];
     $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
 
@@ -2842,7 +3207,7 @@ function uploadApk(PDO $pdo, array $input)
     $stmt->execute([':user_id' => $userId, ':path' => $fileName]);
 
     if ((int)$stmt->fetchColumn() === 0) {
-        if (!move_uploaded_file($tmpPath, $savedPath)) {
+        if (!appMoveApkUpload($tmpPath, $savedPath, $internalFile !== null)) {
             throw new Exception('保存文件失败');
         }
 
@@ -3016,11 +3381,15 @@ function replaceApk(PDO $pdo, array $input)
         }
     }
 
-    if (empty($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
+    // 分片完成请求使用后端刚刚组装的受控临时文件，普通请求继续走 PHP 上传校验。
+    $internalFile = appConsumeInternalApkFile();
+    if ($internalFile !== null) {
+        $file = $internalFile;
+    } elseif (empty($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
         throw new Exception('文件上传失败');
+    } else {
+        $file = $_FILES['file'];
     }
-
-    $file = $_FILES['file'];
     $originalName = $file['name'];
     $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
 
@@ -3123,7 +3492,7 @@ function replaceApk(PDO $pdo, array $input)
         mkdir($uploadDir, 0755, true);
     }
 
-    if (!move_uploaded_file($tmpPath, $savedPath)) {
+    if (!appMoveApkUpload($tmpPath, $savedPath, $internalFile !== null)) {
         throw new Exception('保存文件失败');
     }
     
