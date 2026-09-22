@@ -267,6 +267,17 @@ function handleInjectionTasks(PDO $pdo, $oss)
 
     updateTaskInfo($pdo, $task['id'], '正在反编译');
     $temp_dir = create_unique_temp_subdir(realpath(__DIR__ . '/../temp/'));//为每次任务创建一个子目录
+    // 在任何 DEX 改写前保存原包字节基线。后续只保留任务内的基线文件，
+    // 最终门禁据此区分原包自带冲突与注入新增冲突，不延长 OSS 原包缓存寿命。
+    $inputDexBaselinePath = $temp_dir . DIRECTORY_SEPARATOR . 'input-dex-baseline.json';
+    $inputDexBaselineResult = prepare_injected_dex_baseline($apk_file[1], $inputDexBaselinePath);
+    if (!$inputDexBaselineResult[0]) {
+        updateTaskStatus($pdo, $task['id'], '任务失败');
+        updateTaskInfo($pdo, $task['id'], $inputDexBaselineResult[1]);
+        safeDeleteDirectory($temp_dir);
+        del_osstemp($oss_temp, $localSavePath);
+        return;
+    }
     $decompile = decompile_apks($apktool_jar, $apk_file, $temp_dir);//反编译,此时是不反编译res资源和dex的，包括AndroidManifest
     //壳反编译失败
     if(!$decompile[0][0]){
@@ -1823,7 +1834,8 @@ $applicationlin=[];
                 // APK 完整性检测
                 $verifyResult = verify_apk_installable(
                     $signed_apk,
-                    $task['template_version'] ?? null
+                    $task['template_version'] ?? null,
+                    $inputDexBaselinePath
                 );
                 if (!$verifyResult[0]) {
                     echo "APK 完整性检测未通过：" . $verifyResult[1] . "\n";
@@ -1887,7 +1899,8 @@ $applicationlin=[];
     echo "==================================APK完整性检测\n";
     $verifyResult = verify_apk_installable(
         $signed_apk,
-        $task['template_version'] ?? null
+        $task['template_version'] ?? null,
+        $inputDexBaselinePath
     );
     if (!$verifyResult[0]) {
         echo "APK 完整性检测未通过：" . $verifyResult[1] . "\n";

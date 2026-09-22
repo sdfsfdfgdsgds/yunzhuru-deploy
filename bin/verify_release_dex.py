@@ -159,6 +159,8 @@ class ArtifactEvidence:
     primary_dex_definition_locations: Dict[str, List[str]] = field(
         default_factory=dict
     )
+    class_definition_locations: Dict[str, List[str]] = field(default_factory=dict)
+    preserved_input_conflicts: Dict[str, List[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -198,6 +200,9 @@ class ScanReport:
     dex_files: List[DexStats] = field(default_factory=list)
     contract_violations: List[ContractViolation] = field(default_factory=list)
     findings: List[Finding] = field(default_factory=list)
+    input_apk_sha256: Optional[str] = None
+    input_dex_baseline_matched: Optional[bool] = None
+    preserved_input_conflicts: Dict[str, List[str]] = field(default_factory=dict)
 
     @property
     def passed(self) -> bool:
@@ -230,6 +235,9 @@ class ScanReport:
                 asdict(item) for item in self.contract_violations
             ],
             "findings": [asdict(item) for item in self.findings],
+            "input_apk_sha256": self.input_apk_sha256,
+            "input_dex_baseline_matched": self.input_dex_baseline_matched,
+            "preserved_input_conflicts": self.preserved_input_conflicts,
         }
 
 
@@ -359,6 +367,14 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _dex_entry_sort_key(name: str) -> Tuple[int, str]:
+    """统一原包基线与最终 APK 的标准 DEX 序号排序。"""
+
+    if name == "classes.dex":
+        return (1, name)
+    return (int(name[len("classes") : -len(".dex")]), name)
+
+
 def discover_dex_entries(archive: zipfile.ZipFile) -> List[str]:
     """返回 APK 根目录下全部 classes*.dex，并按实际 DEX 序号排序。"""
 
@@ -370,12 +386,7 @@ def discover_dex_entries(archive: zipfile.ZipFile) -> List[str]:
     if len(entries) != len(set(entries)):
         raise GateExecutionError("APK 内存在重复的 classes*.dex 条目。")
 
-    def sort_key(name: str) -> Tuple[int, str]:
-        if name == "classes.dex":
-            return (1, name)
-        return (int(name[len("classes") : -len(".dex")]), name)
-
-    return sorted(entries, key=sort_key)
+    return sorted(entries, key=_dex_entry_sort_key)
 
 
 def validate_dex_container(data: bytes, entry: str) -> None:
@@ -404,9 +415,75 @@ def validate_dex_container(data: bytes, entry: str) -> None:
         raise GateExecutionError(f"{entry} 的 DEX Adler32 校验失败。")
 
 
-def _operand_registers(instruction: Any) -> List[int]:
+def _instruction_operands(instruction: Any) -> Sequence[Tuple[Any, ...]]:
+    """补齐 Androguard 4.1.4 未实现的双引用调用，不把未知缺失当作无操作数。
+
+    invoke-polymorphic 的方法引用给出接收者类型，而独立 proto 引用
+    才是调用点参数与返回类型；必须结合两者继续执行引用类型检查。
+    packed/sparse-switch 等载荷正常返回空列表，不需要特殊豁免。
+    """
+
+    name = str(instruction.get_name())
+    try:
+        operands = instruction.get_operands()
+        if operands is not None:
+            return operands
+        if name not in ("invoke-polymorphic", "invoke-polymorphic/range"):
+            raise GateExecutionError(f"{name} 返回缺失的操作数，无法完成扫描。")
+
+        manager = instruction.cm
+        method = manager.get_method_ref(instruction.BBBB)
+        owner = str(method.get_class_name())
+        method_name = str(method.get_name())
+        proto = manager.get_proto(instruction.HHHH)
+        if not isinstance(proto, (list, tuple)) or len(proto) != 2:
+            raise ValueError("调用点 proto 必须包含参数与返回类型")
+        if not all(isinstance(part, str) for part in proto):
+            raise ValueError("调用点 proto 含非字符串类型")
+        descriptor = "".join(proto).replace(" ", "")
+        parameters, return_type = parse_method_descriptor(descriptor)
+        if not (owner.startswith("L") and REFERENCE_DESCRIPTOR_RE.fullmatch(owner)):
+            raise ValueError("方法引用的接收者类型无效")
+        if not method_name or method_name == "None":
+            raise ValueError("方法引用缺少方法名")
+        if return_type not in tuple("VZBSCIJFD") and not _is_reference(return_type):
+            raise ValueError("调用点返回类型无效")
+
+        if name == "invoke-polymorphic":
+            count = int(instruction.A)
+            if not 1 <= count <= 5:
+                raise ValueError("45cc 调用必须包含接收者且最多使用五个寄存器字")
+            registers = [instruction.C, instruction.D, instruction.E,
+                         instruction.F, instruction.G][:count]
+        else:
+            count = int(instruction.AA)
+            first = int(instruction.CCCC)
+            if not 1 <= count <= 255 or first < 0 or first + count > 65536:
+                raise ValueError("4rcc 调用寄存器范围无效")
+            registers = list(range(first, first + count))
+        expected = _expanded_invoke_types(owner, parameters, is_static=False)
+        if len(registers) != len(expected):
+            raise ValueError("调用寄存器字数与接收者及 proto 参数字数不一致")
+        # 256 是 Androguard 的方法引用操作数类别。这里组合调用点描述符，
+        # 让既有 invoke 检查按真实 proto 检查参数，而非 MethodHandle 的声明签名。
+        return [(REGISTER_OPERAND, int(register)) for register in registers] + [
+            (256, instruction.BBBB, f"{owner}->{method_name}{descriptor}")
+        ]
+    except GateExecutionError:
+        raise
+    except Exception as exc:
+        raise GateExecutionError(f"{name} 操作数解析失败：{exc}") from exc
+
+
+def _operand_registers(
+    instruction: Any, operands: Optional[Sequence[Tuple[Any, ...]]] = None
+) -> List[int]:
+    """从已解码操作数提取寄存器，空列表表示合法的无操作数指令。"""
+
+    if operands is None:
+        operands = _instruction_operands(instruction)
     registers: List[int] = []
-    for operand in instruction.get_operands():
+    for operand in operands:
         try:
             kind = int(operand[0])
         except (TypeError, ValueError):
@@ -416,10 +493,16 @@ def _operand_registers(instruction: Any) -> List[int]:
     return registers
 
 
-def _referenced_texts(instruction: Any) -> List[str]:
+def _referenced_texts(
+    instruction: Any, operands: Optional[Sequence[Tuple[Any, ...]]] = None
+) -> List[str]:
+    """提取引用文本，与寄存器读取共用兼容解码，避免漏掉双引用调用。"""
+
+    if operands is None:
+        operands = _instruction_operands(instruction)
     return [
         str(operand[2])
-        for operand in instruction.get_operands()
+        for operand in operands
         if len(operand) >= 3 and isinstance(operand[2], str)
     ]
 
@@ -675,8 +758,15 @@ def scan_method(
 
     for instruction in instructions:
         name = str(instruction.get_name())
-        registers = _operand_registers(instruction)
-        referenced_texts = _referenced_texts(instruction)
+        try:
+            operands = _instruction_operands(instruction)
+            registers = _operand_registers(instruction, operands)
+            referenced_texts = _referenced_texts(instruction, operands)
+        except Exception as exc:
+            raise GateExecutionError(
+                f"{dex_entry} {class_info.descriptor}->{method_name}{method_descriptor} "
+                f"@0x{offset // 2:x} 指令 {name} 操作数解析失败：{exc}"
+            ) from exc
 
         if name == "new-instance" and registers:
             allocation_type = _first_type_reference(instruction)
@@ -932,14 +1022,32 @@ def merge_first_pass_snapshot(
     classes: Dict[str, ClassInfo],
     evidence: ArtifactEvidence,
     snapshot: DexFirstPassSnapshot,
+    *,
+    dex_entry: Optional[str] = None,
+    preserved_input_entries: Sequence[str] = (),
 ) -> None:
-    """把单 DEX 紧凑快照合并进全 APK 证据，不保留解析器对象。"""
+    """合并紧凑证据，仅保留经完整原包字节对照证明未改变的既有冲突。"""
 
     for descriptor, info in snapshot.classes.items():
         previous = classes.get(descriptor)
-        if previous is not None and previous != info:
-            raise GateExecutionError(f"多个 DEX 定义了冲突类 {descriptor}。")
-        classes[descriptor] = info
+        locations = evidence.class_definition_locations.setdefault(descriptor, [])
+        if dex_entry is not None:
+            locations.append(dex_entry)
+        if (previous is not None and previous != info) or (
+            descriptor in evidence.preserved_input_conflicts
+        ):
+            # 必须包含每一份定义；新增的第三份即使结构等同第一份也不能
+            # 借原包冲突豁免。所有原 DEX 已先验证名称、顺序和完整字节。
+            if not (
+                dex_entry is not None
+                and len(locations) >= 2
+                and all(entry in preserved_input_entries for entry in locations)
+            ):
+                raise GateExecutionError(f"多个 DEX 定义了冲突类 {descriptor}。")
+            evidence.preserved_input_conflicts[descriptor] = list(locations)
+        # 标准加载顺序先遇到的定义优先；保留重复类不能变成后写覆盖。
+        if previous is None:
+            classes[descriptor] = info
     for marker, count in snapshot.protocol_marker_candidates.items():
         evidence.protocol_marker_candidates[marker] = (
             evidence.protocol_marker_candidates.get(marker, 0) + count
@@ -1375,6 +1483,106 @@ def validate_scan_options(
         )
 
 
+def build_input_dex_baseline(apk_path: Path) -> Dict[str, Any]:
+    """在注入开始前记录所有原 DEX 字节，基线只能由服务端从原包生成。"""
+
+    before = sha256_file(apk_path)
+    dex_files = []
+    try:
+        with zipfile.ZipFile(apk_path) as archive:
+            entries = discover_dex_entries(archive)
+            if not entries:
+                raise GateExecutionError("原 APK 没有 classes*.dex，不能生成基线。")
+            for entry in entries:
+                data = archive.read(entry)
+                validate_dex_container(data, entry)
+                dex_files.append({
+                    "entry": entry,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "byte_size": len(data),
+                })
+                del data
+    except (zipfile.BadZipFile, RuntimeError) as exc:
+        raise GateExecutionError(f"原 APK 基线读取失败：{exc}") from exc
+    if sha256_file(apk_path) != before:
+        raise GateExecutionError("原 APK 在生成基线期间发生变化。")
+    return {
+        "schema_version": 1,
+        "kind": "input_dex_baseline",
+        "apk_sha256": before,
+        "dex_files": dex_files,
+    }
+
+
+def load_input_dex_baseline(path: Path) -> Dict[str, Any]:
+    """读取任务私有基线；损坏或缺失时停止，不能静默变成兼容白名单。"""
+
+    try:
+        if path.stat().st_size > 1024 * 1024:
+            raise ValueError("基线过大")
+        baseline = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(baseline, dict) or (
+            set(baseline) != {"schema_version", "kind", "apk_sha256", "dex_files"}
+            or type(baseline.get("schema_version")) is not int
+            or baseline.get("schema_version") != 1
+            or baseline.get("kind") != "input_dex_baseline"
+            or not isinstance(baseline.get("apk_sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", str(baseline.get("apk_sha256", "")))
+        ):
+            raise ValueError("基线版本或原包摘要无效")
+        records = baseline.get("dex_files")
+        if not isinstance(records, list) or not records:
+            raise ValueError("基线 DEX 列表为空或格式无效")
+        names = []
+        for record in records:
+            if not isinstance(record, dict) or set(record) != {"entry", "sha256", "byte_size"}:
+                raise ValueError("基线 DEX 记录无效")
+            name = record.get("entry")
+            if (
+                not isinstance(name, str) or not DEX_ENTRY_RE.fullmatch(name)
+                or type(record.get("byte_size")) is not int
+                or record["byte_size"] < 0x70
+                or not isinstance(record.get("sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", str(record.get("sha256", "")))
+            ):
+                raise ValueError("基线 DEX 名称、尺寸或摘要无效")
+            names.append(name)
+        if len(names) != len(set(names)):
+            raise ValueError("基线含重复 DEX 条目")
+        if names != sorted(names, key=_dex_entry_sort_key):
+            raise ValueError("基线 DEX 顺序无效")
+        return baseline
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise GateExecutionError(f"原 APK DEX 基线无效：{exc}") from exc
+
+
+def match_input_dex_baseline(
+    archive: zipfile.ZipFile, baseline: Mapping[str, Any]
+) -> Tuple[str, ...]:
+    """证明原 DEX 全部原样保留；普通链路改写不匹配时回到严格冲突规则。
+
+    所有原 DEX 都必须保持，而非只确认已发现冲突的两份文件，避免遗漏
+    第三份定义或改变加载顺序。新增壳 DEX 不属于返回的可信原包条目。
+    """
+
+    records = baseline["dex_files"]
+    original_names = tuple(record["entry"] for record in records)
+    original_set = set(original_names)
+    if tuple(n for n in discover_dex_entries(archive) if n in original_set) != original_names:
+        return ()
+    for record in records:
+        entry = record["entry"]
+        if archive.getinfo(entry).file_size != record["byte_size"]:
+            return ()
+        digest = hashlib.sha256()
+        with archive.open(entry) as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != record["sha256"]:
+            return ()
+    return original_names
+
+
 def _parse_first_pass_dex(
     DEX: Any,
     data: bytes,
@@ -1414,11 +1622,12 @@ def _scan_second_pass_dex(
     for dex_class in dex.get_classes():
         second_pass_class_count += 1
         descriptor = str(dex_class.get_name())
-        class_info = classes.get(descriptor)
-        if class_info is None:
+        if descriptor not in classes:
             raise GateExecutionError(
                 f"{stats.entry} 第二遍出现第一遍未记录的类 {descriptor}。"
             )
+        # 每份定义的方法都按自身声明的父类扫描，跨类查询仍用首定义。
+        class_info = _class_info_from_definition(dex_class)
         for method in dex_class.get_methods():
             stats.method_count += 1
             method_findings, instruction_count = scan_method(
@@ -1441,11 +1650,14 @@ def scan_apk(
     apk_path: Path,
     expected_shell_version: Optional[int] = None,
     artifact_kind: str = ARTIFACT_KIND_TEMPLATE,
+    input_dex_baseline: Optional[Path] = None,
 ) -> ScanReport:
     """扫描 APK 全部 classes*.dex；任何 DEX 解析错误都使门禁中止。"""
 
     # 先验证发布参数，避免未声明壳版本时读取甚至扫描整个 APK。
     validate_scan_options(artifact_kind, expected_shell_version)
+    if input_dex_baseline is not None and artifact_kind != ARTIFACT_KIND_INJECTED:
+        raise GateExecutionError("只有 injected 模式可以使用原 APK DEX 基线。")
     apk_path = apk_path.expanduser().resolve()
     if not apk_path.is_file():
         raise GateExecutionError(f"APK 文件不存在：{apk_path}")
@@ -1459,6 +1671,10 @@ def scan_apk(
     )
     classes: Dict[str, ClassInfo] = {}
     evidence = ArtifactEvidence()
+    baseline = (
+        load_input_dex_baseline(input_dex_baseline)
+        if input_dex_baseline is not None else None
+    )
 
     try:
         manifest_apk = APK(str(apk_path))
@@ -1488,6 +1704,11 @@ def scan_apk(
             entries = discover_dex_entries(archive)
             if not entries:
                 raise GateExecutionError("APK 根目录下没有 classes*.dex。")
+            preserved_entries: Tuple[str, ...] = ()
+            if baseline is not None:
+                preserved_entries = match_input_dex_baseline(archive, baseline)
+                report.input_apk_sha256 = baseline["apk_sha256"]
+                report.input_dex_baseline_matched = bool(preserved_entries)
             for entry in entries:
                 try:
                     data = archive.read(entry)
@@ -1499,6 +1720,10 @@ def scan_apk(
                     sha256=hashlib.sha256(data).hexdigest(),
                     byte_size=len(data),
                 )
+                if entry in preserved_entries and baseline is not None:
+                    original = next(r for r in baseline["dex_files"] if r["entry"] == entry)
+                    if (stats.sha256, stats.byte_size) != (original["sha256"], original["byte_size"]):
+                        raise GateExecutionError(f"{entry} 在原包字节对照后发生变化。")
                 snapshot = _parse_first_pass_dex(
                     DEX,
                     data,
@@ -1508,7 +1733,10 @@ def scan_apk(
                     ),
                 )
                 stats.class_count = snapshot.class_count
-                merge_first_pass_snapshot(classes, evidence, snapshot)
+                merge_first_pass_snapshot(
+                    classes, evidence, snapshot, dex_entry=entry,
+                    preserved_input_entries=preserved_entries,
+                )
                 report.dex_files.append(stats)
                 # 显式终止当前 DEX 的 bytes/快照引用，循环中立即回收解析树。
                 del snapshot
@@ -1517,6 +1745,7 @@ def scan_apk(
     except zipfile.BadZipFile as exc:
         raise GateExecutionError(f"APK ZIP 结构校验失败：{exc}") from exc
 
+    report.preserved_input_conflicts = evidence.preserved_input_conflicts
     apply_artifact_contracts(report, evidence)
 
     # 第二遍：按相同顺序重新解析单个 DEX 扫描方法，然后再释放。
@@ -1560,6 +1789,15 @@ def print_report(report: ScanReport, max_findings: int) -> None:
     print(f"[DEX门禁] APK：{report.apk}")
     print(f"[DEX门禁] APK SHA-256：{report.apk_sha256}")
     print(f"[DEX门禁] 制品类型：{report.artifact_kind}")
+    if report.input_dex_baseline_matched is not None:
+        matched_text = (
+            "全部原 DEX 字节及顺序保持"
+            if report.input_dex_baseline_matched
+            else "原 DEX 有改写，重复类按严格规则检查"
+        )
+        print(f"[DEX门禁] 原包 DEX 基线：{matched_text}，原 APK SHA-256={report.input_apk_sha256}")
+    for descriptor, locations in report.preserved_input_conflicts.items():
+        print(f"[DEX门禁] 原样保留原包既有重复类：{descriptor}（{', '.join(locations)}）")
     expected_text = (
         str(report.expected_shell_version)
         if report.expected_shell_version is not None
@@ -1664,12 +1902,18 @@ def print_report(report: ScanReport, max_findings: int) -> None:
 def write_json_report(report: ScanReport, destination: Path) -> None:
     """原子替换 JSON 报告，避免 CI 中留下半截文件。"""
 
+    _write_json_atomically(report.to_json_dict(), destination)
+
+
+def _write_json_atomically(payload: Mapping[str, Any], destination: Path) -> None:
+    """基线和报告共用原子写入，避免读取未写完的证据。"""
+
     destination = destination.expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
     try:
         temporary.write_text(
-            json.dumps(report.to_json_dict(), ensure_ascii=False, indent=2) + "\n",
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
         os.replace(temporary, destination)
@@ -1686,6 +1930,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("apk", type=Path, help="待检查的最终 APK 路径")
+    baseline_options = parser.add_mutually_exclusive_group()
+    baseline_options.add_argument(
+        "--write-input-baseline", type=Path,
+        help="仅生成服务端原包 DEX 字节基线，不执行成品门禁",
+    )
+    baseline_options.add_argument(
+        "--input-dex-baseline", type=Path,
+        help="injected 模式使用本任务注入前生成的原包 DEX 基线",
+    )
     parser.add_argument(
         "--artifact-kind",
         choices=SUPPORTED_ARTIFACT_KINDS,
@@ -1729,11 +1982,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         return 2
     try:
+        if args.write_input_baseline is not None:
+            if args.write_input_baseline.resolve() == args.apk.resolve():
+                raise GateExecutionError("基线输出路径不能覆盖原 APK。")
+            baseline = build_input_dex_baseline(args.apk)
+            _write_json_atomically(baseline, args.write_input_baseline)
+            print(f"[DEX门禁] 原包 DEX 基线已生成：{len(baseline['dex_files'])} 个 DEX。")
+            return 0
         validate_scan_options(args.artifact_kind, args.expected_shell_version)
         report = scan_apk(
             args.apk,
             expected_shell_version=args.expected_shell_version,
             artifact_kind=args.artifact_kind,
+            input_dex_baseline=args.input_dex_baseline,
         )
         print_report(report, args.max_findings)
         if args.json_report:

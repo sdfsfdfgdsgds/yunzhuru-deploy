@@ -679,9 +679,10 @@ function sign_apk($keystore, $alias, $storepass, $keypass, $unsigned_apk, $signe
  * 检测项：aapt dump badging 解析 Manifest + DEX 文件存在性
  * @param string $apkPath 签名后的 APK 路径
  * @param string|int $expectedShellVersion 任务实际选择的壳模板版本
+ * @param string|null $inputDexBaselinePath 注入前生成的可信原包 DEX 字节基线
  * @return array [bool 是否通过, string 信息, array 详情]
  */
-function verify_apk_installable($apkPath, $expectedShellVersion = null) {
+function verify_apk_installable($apkPath, $expectedShellVersion = null, $inputDexBaselinePath = null) {
     $errors = [];
 
     // 1. 文件存在性和大小检查
@@ -732,7 +733,7 @@ function verify_apk_installable($apkPath, $expectedShellVersion = null) {
     // 的壳协议 marker 与任务选择的模板版本一致。
     $dexGateDetails = [];
     if (empty($errors)) {
-        $dexGateResult = verify_injected_dex_contract($apkPath, $expectedShellVersion);
+        $dexGateResult = verify_injected_dex_contract($apkPath, $expectedShellVersion, $inputDexBaselinePath);
         $dexGateDetails = $dexGateResult[2] ?? [];
         if (!$dexGateResult[0]) {
             $errors[] = $dexGateResult[1];
@@ -762,41 +763,25 @@ function verify_apk_installable($apkPath, $expectedShellVersion = null) {
 }
 
 /**
- * 扫描签名后的注入成品，并验证其壳协议 marker。
+ * 执行 DEX 门禁工具，共享基线生成与成品扫描的工具定位、超时和日志合同。
  *
- * 任何脚本、Python 依赖、版本参数、超时或扫描错误都按发布失败处理；
- * 绝不因门禁执行环境异常而把成品标记为“编译成功”。
- *
- * @param string $apkPath 签名后的真实注入成品
- * @param string|int $expectedShellVersion 任务所选模板版本
+ * @param string $apkPath 待处理 APK 路径
+ * @param array $arguments 逐项传入的命令行参数，每项均独立转义
+ * @param string $operationLabel 用于错误与日志的操作名称
  * @return array [bool 是否通过, string 信息, array 详情]
  */
-function verify_injected_dex_contract($apkPath, $expectedShellVersion) {
-    $version = trim((string)$expectedShellVersion);
-    if ($version === '' || !ctype_digit($version) || (int)$version < 1) {
-        return [false, '最终 DEX 门禁缺少有效壳版本', [
-            'exit_code' => 2,
-            'expected_shell_version' => $version,
-        ]];
-    }
-
+function execute_dex_gate_command($apkPath, array $arguments, $operationLabel) {
     $configuredScript = trim((string)(getenv('DEX_GATE_SCRIPT') ?: ''));
     $scriptPath = $configuredScript !== ''
         ? $configuredScript
         : (__DIR__ . '/../bin/verify_release_dex.py');
     if (!is_file($scriptPath) || !is_readable($scriptPath)) {
-        return [false, '最终 DEX 门禁脚本缺失或不可读', [
-            'exit_code' => 2,
-            'expected_shell_version' => $version,
-        ]];
+        return [false, $operationLabel . '脚本缺失或不可读', ['exit_code' => 2]];
     }
 
     $python = trim((string)(getenv('DEX_GATE_PYTHON') ?: 'python3'));
     if ($python === '') {
-        return [false, '最终 DEX 门禁 Python 命令为空', [
-            'exit_code' => 2,
-            'expected_shell_version' => $version,
-        ]];
+        return [false, $operationLabel . ' Python 命令为空', ['exit_code' => 2]];
     }
 
     // Debian 生产镜像使用 coreutils timeout 限制单次扫描；macOS 本地开发机
@@ -814,16 +799,17 @@ function verify_injected_dex_contract($apkPath, $expectedShellVersion) {
     $command = $timeoutPrefix
         . escapeshellarg($python) . ' '
         . escapeshellarg($scriptPath) . ' '
-        . escapeshellarg($apkPath)
-        . ' --artifact-kind injected'
-        . ' --expected-shell-version ' . escapeshellarg($version)
-        . ' --max-findings 20 2>&1';
+        . escapeshellarg($apkPath);
+    foreach ($arguments as $argument) {
+        $command .= ' ' . escapeshellarg((string)$argument);
+    }
+    $command .= ' 2>&1';
     $outputLines = [];
     $exitCode = 2;
     exec($command, $outputLines, $exitCode);
     $output = trim(implode("\n", $outputLines));
     if ($output !== '') {
-        echo "最终 DEX 门禁输出：\n{$output}\n";
+        echo "{$operationLabel}输出：\n{$output}\n";
     }
 
     // 生产镜像的 mbstring 扩展属于可选能力；门禁本身不应因日志截断函数
@@ -837,7 +823,6 @@ function verify_injected_dex_contract($apkPath, $expectedShellVersion) {
 
     $details = [
         'exit_code' => $exitCode,
-        'expected_shell_version' => $version,
         'timeout_seconds' => $timeoutBinary !== '' ? 300 : null,
         'output' => $truncateOutput($output, 4000),
     ];
@@ -845,10 +830,81 @@ function verify_injected_dex_contract($apkPath, $expectedShellVersion) {
         $summary = $output !== ''
             ? $truncateOutput($output, 1200)
             : '门禁进程无输出';
-        return [false, "最终 DEX 门禁未通过（退出码 {$exitCode}）：{$summary}", $details];
+        return [false, "{$operationLabel}未通过（退出码 {$exitCode}）：{$summary}", $details];
     }
 
-    return [true, "最终 DEX 门禁通过（壳版本 {$version}）", $details];
+    return [true, $operationLabel . '通过', $details];
+}
+
+/**
+ * 在注入修改前生成任务专属原包基线；生成失败或没有实际产出均终止任务。
+ *
+ * 基线只写入当前任务的临时目录，不修改原 APK，也不保存额外业务数据。
+ *
+ * @param string $apkPath 原始 APK 路径
+ * @param string $baselinePath 当前任务目录内的 JSON 基线路径
+ * @return array [bool 是否通过, string 信息, array 详情]
+ */
+function prepare_injected_dex_baseline($apkPath, $baselinePath) {
+    if (!is_file($apkPath) || !is_readable($apkPath)) {
+        return [false, '原包 DEX 基线生成失败：原 APK 缺失或不可读', ['exit_code' => 2]];
+    }
+    if (trim((string)$baselinePath) === '' || !is_dir(dirname($baselinePath))
+        || !is_writable(dirname($baselinePath))) {
+        return [false, '原包 DEX 基线生成失败：任务基线目录不可写', ['exit_code' => 2]];
+    }
+    $result = execute_dex_gate_command(
+        $apkPath,
+        ['--write-input-baseline', $baselinePath],
+        '原包 DEX 基线生成'
+    );
+    if (!$result[0]) {
+        return $result;
+    }
+    clearstatcache(true, $baselinePath);
+    if (!is_file($baselinePath) || !is_readable($baselinePath) || filesize($baselinePath) === 0) {
+        $result[2]['exit_code'] = 2;
+        return [false, '原包 DEX 基线生成失败：基线文件缺失、不可读或为空', $result[2]];
+    }
+    return $result;
+}
+
+/**
+ * 扫描签名后的注入成品，并验证其壳协议 marker 和可信原包基线。
+ *
+ * 任何脚本、Python 依赖、版本参数、超时或扫描错误都按发布失败处理；
+ * 提供基线时不得因文件丢失而静默降级为旧扫描方式。
+ *
+ * @param string $apkPath 签名后的真实注入成品
+ * @param string|int $expectedShellVersion 任务所选模板版本
+ * @param string|null $inputDexBaselinePath 注入前生成的原包基线；旧调用可省略
+ * @return array [bool 是否通过, string 信息, array 详情]
+ */
+function verify_injected_dex_contract($apkPath, $expectedShellVersion, $inputDexBaselinePath = null) {
+    $version = trim((string)$expectedShellVersion);
+    if ($version === '' || !ctype_digit($version) || (int)$version < 1) {
+        return [false, '最终 DEX 门禁缺少有效壳版本', [
+            'exit_code' => 2,
+            'expected_shell_version' => $version,
+        ]];
+    }
+    $arguments = ['--artifact-kind', 'injected', '--expected-shell-version', $version, '--max-findings', '20'];
+    if ($inputDexBaselinePath !== null) {
+        if (!is_file($inputDexBaselinePath) || !is_readable($inputDexBaselinePath)) {
+            return [false, '最终 DEX 门禁原包基线缺失或不可读', [
+                'exit_code' => 2,
+                'expected_shell_version' => $version,
+            ]];
+        }
+        $arguments[] = '--input-dex-baseline';
+        $arguments[] = $inputDexBaselinePath;
+    }
+    $result = execute_dex_gate_command($apkPath, $arguments, '最终 DEX 门禁');
+    $result[2]['expected_shell_version'] = $version;
+    if ($result[0]) {
+        $result[1] = "最终 DEX 门禁通过（壳版本 {$version}）";
+    }
+    return $result;
 }
 
 //回编译
