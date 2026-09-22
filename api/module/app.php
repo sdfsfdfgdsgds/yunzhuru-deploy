@@ -2706,7 +2706,16 @@ function appConsumeInternalApkFile(): ?array
 function appMoveApkUpload(string $source, string $target, bool $internal): bool
 {
     if ($internal) {
-        return @rename($source, $target);
+        if (@rename($source, $target)) {
+            return true;
+        }
+        // temp 目录与持久化 uploads 目录可能位于不同挂载点，跨文件系统时 rename
+        // 会失败；此时回退为复制后删除，并由调用方继续进行完整 APK 校验。
+        if (@copy($source, $target)) {
+            @unlink($source);
+            return true;
+        }
+        return false;
     }
     return move_uploaded_file($source, $target);
 }
@@ -2958,7 +2967,17 @@ function uploadApkChunk(PDO $pdo, array $input)
         if (is_resource($lock)) @fclose($lock);
         throw new Exception('分片合并锁定失败');
     }
+    $stateLock = null;
     try {
+        // 合并期间阻止新的 chunk 修改元数据或分片，避免 complete 与最后一片并发导致
+        // 读到半成品；chunk 请求使用同一把 meta.lock。
+        $stateLock = @fopen($dir . '/meta.lock', 'c');
+        if (!$stateLock || !@flock($stateLock, LOCK_EX)) {
+            throw new Exception('分片状态锁定失败');
+        }
+        // 另一个 complete 请求可能已在等待锁期间完成，必须重新读取元数据后再判断状态，
+        // 否则旧快照会把已完成会话误判为 uploading 并删除结果目录。
+        $meta = appChunkReadMeta($uploadId);
         if (($meta['status'] ?? '') === 'completed' && isset($meta['result']) && is_array($meta['result'])) {
             return $meta['result'];
         }
@@ -3036,6 +3055,10 @@ function uploadApkChunk(PDO $pdo, array $input)
         appChunkRemoveDir($dir);
         throw $e;
     } finally {
+        if (is_resource($stateLock)) {
+            @flock($stateLock, LOCK_UN);
+            @fclose($stateLock);
+        }
         @flock($lock, LOCK_UN);
         @fclose($lock);
     }
