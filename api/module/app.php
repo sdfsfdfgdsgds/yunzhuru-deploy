@@ -2683,7 +2683,8 @@ function clearAppFile(PDO $pdo, array $input)
 //上传应用
 function uploadApk(PDO $pdo, array $input)
 {
-    set_time_limit(180);
+    // 临时放宽上传完成后的 APK 解析、图标提取和对象存储处理时限；公网请求体仍受 Railway 5 分钟上传上限约束。
+    set_time_limit(600);
     $free = disk_free_space(__DIR__); // 获取根目录剩余空间（字节）
     $limit = 3 * 1024 * 1024 * 1024; // 3GB
     
@@ -2974,7 +2975,8 @@ function uploadApk(PDO $pdo, array $input)
 //重传应用
 function replaceApk(PDO $pdo, array $input)
 {
-    set_time_limit(180);
+    // 临时放宽替换上传完成后的 APK 处理时限；公网请求体仍受 Railway 5 分钟上传上限约束。
+    set_time_limit(600);
     $free = disk_free_space(__DIR__); // 获取根目录剩余空间（字节）
     $limit = 3 * 1024 * 1024 * 1024; // 3GB
     if ($free < $limit) {
