@@ -242,14 +242,111 @@ def _load_androguard() -> Tuple[Any, Any]:
 
         logger.remove()
         from androguard.core.apk import APK
-        from androguard.core.dex import DEX
+        from androguard.core import dex as dex_module
     except ModuleNotFoundError as exc:
         raise GateExecutionError(
             "缺少 Python 依赖 androguard。请先运行："
             "python3 -m pip install -r "
             "clients/shell/scripts/requirements-dex-gate.txt"
         ) from exc
-    return APK, DEX
+    # 只替换门禁不参与语义判断的 hiddenapi 元数据读取；类、方法和指令
+    # 仍使用原 DEX 解析器，两遍扫描均经过同一套有边界的读取实现。
+    dex_module.HiddenApiClassDataItem = GateHiddenApiClassDataItem
+    return APK, dex_module.DEX
+
+
+def _read_bounded_uleb128(buff: Any, end: int) -> int:
+    """读取 DEX 的 32 位无符号变长整数，拒绝截断、越界和溢出。"""
+
+    value = 0
+    for index in range(5):
+        if buff.tell() >= end:
+            raise ValueError("hiddenapi ULEB128 超出数据边界")
+        raw = buff.read(1)
+        if len(raw) != 1:
+            raise ValueError("hiddenapi ULEB128 数据截断")
+        byte = raw[0]
+        if index == 4 and byte > 0x0F:
+            raise ValueError("hiddenapi ULEB128 超出 32 位范围")
+        value |= (byte & 0x7F) << (index * 7)
+        if byte < 0x80:
+            return value
+    raise ValueError("hiddenapi ULEB128 过长")
+
+
+class GateHiddenApiClassDataItem:
+    """按实际成员数量读取 hiddenapi 元数据，供最终 DEX 只读扫描使用。
+
+    Androguard 4.1.4 错把类数量当成成员标记数量，还把可演进的位域转成
+    封闭枚举，可能越过 section 或拒绝新编码。本类遵循 AOSP 的结构规则：
+    每个 class_def 一个 offset，非零 offset 后按字段和方法总数读 ULEB128，
+    要求数据连续且恰好耗尽 section。原始位域保留在原字节中，不解释为
+    旧版的 3 位限制级别；门禁的 Object/Enum 类型检查不依赖访问政策标记。
+    """
+
+    def __init__(self, buff: Any, cm: Any) -> None:
+        """验证完整 section 与所有成员标记，并保持 Androguard 游标合同。"""
+
+        self.offset = buff.tell()
+        header = cm.vm.header
+        file_size = header.file_size
+        class_count = header.class_defs_size
+        class_offset = header.class_defs_off
+        buff.seek(0, 2)
+        if buff.tell() != file_size:
+            raise ValueError("hiddenapi 所在 DEX 文件长度不一致")
+        buff.seek(self.offset)
+        if not 0 <= self.offset <= file_size - 4:
+            raise ValueError("hiddenapi section 头超出文件边界")
+        self.section_size = struct.unpack("<I", buff.read(4))[0]
+        header_size = 4 + class_count * 4
+        end = self.offset + self.section_size
+        if self.section_size < header_size or end > file_size:
+            raise ValueError("hiddenapi section 长度不足或超出文件边界")
+        if class_count and (
+            class_offset < 0x70 or class_offset + class_count * 32 > file_size
+        ):
+            raise ValueError("hiddenapi 引用的 class_defs 超出文件边界")
+        offsets = struct.unpack(f"<{class_count}I", buff.read(class_count * 4))
+        cursor = self.offset + header_size
+        for index, relative_offset in enumerate(offsets):
+            if relative_offset == 0:
+                continue
+            if self.offset + relative_offset != cursor or cursor > end:
+                raise ValueError(f"hiddenapi 类 {index} 的 offset 不连续或越界")
+            # class_def_item 的第七个 uint 是 class_data_off，前四个
+            # ULEB128 分别给出静态字段、实例字段、直接方法、虚方法数量。
+            buff.seek(class_offset + index * 32 + 24)
+            class_data_offset = struct.unpack("<I", buff.read(4))[0]
+            if not 0x70 <= class_data_offset < file_size:
+                raise ValueError(f"hiddenapi 类 {index} 缺少有效 class_data")
+            buff.seek(class_data_offset)
+            member_count = sum(_read_bounded_uleb128(buff, file_size) for _ in range(4))
+            if member_count > end - cursor:
+                raise ValueError(f"hiddenapi 类 {index} 的成员标记数据不足")
+            buff.seek(cursor)
+            for _ in range(member_count):
+                _read_bounded_uleb128(buff, end)
+            cursor = buff.tell()
+        if cursor != end:
+            raise ValueError("hiddenapi section 含未消费的尾部数据")
+        buff.seek(self.offset)
+        self._raw = buff.read(self.section_size)
+
+    def get_off(self) -> int:
+        """返回原始 section 偏移，不改写待检 DEX。"""
+
+        return self.offset
+
+    def get_length(self) -> int:
+        """返回已完整验证的 section 字节数。"""
+
+        return self.section_size
+
+    def get_raw(self) -> bytes:
+        """提供原始元数据，禁止旧解析器重编码访问政策位域。"""
+
+        return self._raw
 
 
 def sha256_file(path: Path) -> str:
