@@ -1,4 +1,6 @@
 <?php
+
+require_once __DIR__ . '/../utils/PopupClickStats.php';
 function getList2(PDO $pdo, array $input)
 {
     // 获取当前登录用户
@@ -823,6 +825,8 @@ function getStats(PDO $pdo, array $input)
         'show_count'  => (int)($row['show_count'] ?? 0),
         'click_count' => (int)($row['click_count'] ?? 0),
         'details'     => $details,
+        // 链接点击按北京时间补齐昨天和今天的 24 个小时节点。
+        'link_hourly' => popupClickHourlyStats($pdo, $popupId, 'popup_image'),
     ];
 }
 

@@ -1,0 +1,52 @@
+.popup-click-stats { color: #303133; font-size: 13px; }
+.pcs-toolbar { display: flex; align-items: center; gap: 12px; margin: 2px 0 14px; flex-wrap: wrap; }
+.pcs-date-switch { display: inline-flex; border: 1px solid #dcdfe6; border-radius: 6px; overflow: hidden; }
+.pcs-date-switch button, .pcs-refresh { border: 0; background: #fff; color: #606266; padding: 8px 13px; cursor: pointer; }
+.pcs-date-switch button + button { border-left: 1px solid #dcdfe6; }
+.pcs-date-switch button.pcs-active { background: #409eff; color: white; }
+.pcs-timezone { color: #909399; font-size: 12px; }
+.pcs-refresh { margin-left: auto; border: 1px solid #dcdfe6; border-radius: 5px; }
+.pcs-refresh:hover { color: #409eff; border-color: #a0cfff; }
+.pcs-refresh:disabled { cursor: wait; opacity: .65; }
+.pcs-error { padding: 10px 12px; margin-bottom: 12px; border-radius: 4px; background: #fef0f0; color: #f56c6c; }
+.pcs-error button { float: right; border: 0; background: transparent; color: #409eff; cursor: pointer; }
+.pcs-empty { padding: 24px; text-align: center; color: #909399; background: #fafafa; border-radius: 5px; }
+.pcs-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.pcs-link-card { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 9px 10px; border: 1px solid #ebeef5; border-radius: 5px; background: #fff; text-align: left; color: #606266; cursor: pointer; }
+.pcs-link-card:hover, .pcs-link-card.pcs-link-selected { border-color: #a0cfff; background: #f5faff; }
+.pcs-link-card:disabled { opacity: .45; cursor: not-allowed; }
+.pcs-color { display: inline-block; flex: 0 0 9px; width: 9px; height: 9px; border-radius: 50%; }
+.pcs-link-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.pcs-link-total { white-space: nowrap; font-size: 12px; color: #303133; }
+.pcs-chart-wrap { position: relative; border: 1px solid #ebeef5; border-radius: 6px; padding: 12px 12px 8px; }
+.pcs-chart-heading { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin: 0 2px 3px; }
+.pcs-chart-heading span { font-size: 12px; color: #909399; }
+.pcs-chart { display: block; width: 100%; height: auto; overflow: visible; }
+.pcs-grid { stroke: #ebeef5; stroke-width: 1; }
+.pcs-axis-label { font-size: 11px; fill: #909399; }
+.pcs-line { stroke-linejoin: round; stroke-linecap: round; }
+.pcs-point { cursor: pointer; stroke: #fff; stroke-width: 1.5; }
+.pcs-hover { position: absolute; z-index: 2; left: 50%; top: 50%; min-width: 210px; max-width: calc(100% - 24px); transform: translate(-50%, -50%); padding: 10px 12px; border: 1px solid #dcdfe6; border-radius: 6px; background: rgba(255, 255, 255, .97); box-shadow: 0 3px 12px rgba(0, 0, 0, .12); pointer-events: none; }
+.pcs-hover > strong { display: block; margin-bottom: 6px; }
+.pcs-hover-row { display: flex; align-items: center; gap: 7px; margin: 4px 0; }
+.pcs-hover-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.pcs-hour-table-wrap { overflow: auto; max-height: 300px; margin-top: 8px; }
+.pcs-hour-table { width: 100%; min-width: 520px; border-collapse: collapse; font-size: 12px; }
+.pcs-hour-table th, .pcs-hour-table td { padding: 6px 8px; border: 1px solid #ebeef5; text-align: right; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcs-hour-table thead th { position: sticky; top: 0; background: #f5f7fa; z-index: 1; }
+.pcs-hour-table th:first-child, .pcs-hour-table td:first-child { text-align: left; min-width: 65px; }
+.pcs-hour-table tr.pcs-current-hour { background: #fdf6ec; }
+.pcs-hour-table tr.pcs-future-hour { color: #c0c4cc; }
+.pcs-hour-table .pcs-sum { font-weight: 600; }
+.pcs-footnote { margin-top: 7px; color: #909399; font-size: 12px; }
+.popup-click-stats + .stats-summary { margin-top: 18px; }
+@media (max-width: 720px) {
+  .popup-stats-dialog.el-dialog, .popup-stats-dialog .el-dialog { width: calc(100vw - 12px) !important; margin: 8px auto !important; }
+  .popup-stats-dialog.el-dialog .el-dialog__body, .popup-stats-dialog .el-dialog__body { padding: 12px; }
+  .pcs-links { grid-template-columns: 1fr; }
+  .pcs-chart-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .pcs-link-total { font-size: 11px; }
+  .pcs-toolbar { gap: 8px; }
+  .pcs-refresh { margin-left: 0; }
+  .pcs-hover { top: 55%; }
+}

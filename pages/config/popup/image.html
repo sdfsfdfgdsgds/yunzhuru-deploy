@@ -8,6 +8,8 @@
   <script src="/element/js/vue.global.js"></script>
   <script src="/element/js/index.full.js"></script>
   <script src="/pages/config/common/click_param_asset.js"></script>
+  <script src="/pages/config/common/popup_click_stats.js"></script>
+  <link rel="stylesheet" href="/pages/config/common/popup_click_stats.css">
   <style>
     .asset-option {
       display: flex;
@@ -204,8 +206,9 @@
       ></el-pagination>
 	    </div>
 
-	    <el-dialog v-model="statsDialogVisible" :title="statsDialogTitle" width="760px" top="6vh">
-	      <div v-loading="statsLoading">
+	    <el-dialog class="popup-stats-dialog" v-model="statsDialogVisible" :title="statsDialogTitle" width="min(1100px, calc(100vw - 24px))" top="3vh" @closed="invalidateStatsRequest">
+	      <div>
+	        <popup-click-stats :data="statsData" :loading="statsLoading" :error="statsError" @refresh="refreshStats"></popup-click-stats>
 	        <div class="stats-summary">
 	          <div class="stats-item">
 	            <div class="stats-label">展示次数</div>
@@ -591,8 +594,11 @@
 	        const total = ref(0);
 	        const statsDialogVisible = ref(false);
 	        const statsLoading = ref(false);
+	        const statsError = ref('');
 	        const statsDialogTitle = ref('点击统计');
-	        const statsData = ref(createEmptyStats());
+	        const statsData = ref(PopupClickStats.createEmpty());
+	        let statsRequestSequence = 0;
+	        let statsPopupId = null;
 
 	        const form = reactive({
           id: null,
@@ -757,32 +763,6 @@
 	          clickParam.clearSelection(form);
 	        }
 
-	        function createEmptyStats() {
-	          return {
-	            show_count: 0,
-	            click_count: 0,
-	            ctr: '0.0%',
-	            details: []
-	          };
-	        }
-
-	        function normalizeStats(data) {
-	          const showCount = Number(data && data.show_count ? data.show_count : 0);
-	          const clickCount = Number(data && data.click_count ? data.click_count : 0);
-	          const details = Array.isArray(data && data.details) ? data.details : [];
-	          return {
-	            show_count: showCount,
-	            click_count: clickCount,
-	            ctr: showCount > 0 ? `${(clickCount * 100 / showCount).toFixed(1)}%` : '0.0%',
-	            details: details.map(item => ({
-	              ...item,
-	              button_index: Number(item.button_index),
-	              click_type: Number(item.click_type),
-	              count: Number(item.count || 0)
-	            }))
-	          };
-	        }
-
 	        function statsTargetLabel(row) {
 	          const index = Number(row && row.button_index);
 	          return index === -1 ? '图片区域' : `按钮 ${index + 1}`;
@@ -791,24 +771,40 @@
 	        async function openStatsDialog(row) {
 	          statsDialogTitle.value = `点击统计 - ${row.remark || `ID ${row.id}`}`;
 	          statsDialogVisible.value = true;
+	          statsPopupId = row.id;
+	          statsData.value = PopupClickStats.createEmpty();
+	          await refreshStats();
+	        }
+
+	        function invalidateStatsRequest() {
+	          statsRequestSequence++;
+	          statsPopupId = null;
+	          statsLoading.value = false;
+	        }
+
+	        async function refreshStats() {
+	          if (statsPopupId === null) return;
+	          const popupId = statsPopupId;
+	          const requestSequence = ++statsRequestSequence;
 	          statsLoading.value = true;
-	          statsData.value = createEmptyStats();
+	          statsError.value = '';
 	          try {
 	            const res = await fetch('/api/index.php?module=popup_image&method=getStats', {
 	              method: 'POST',
 	              headers: { 'Content-Type': 'application/json' },
-	              body: JSON.stringify({ popup_id: row.id })
+	              body: JSON.stringify({ popup_id: popupId })
 	            });
 	            const json = await res.json();
+	            if (requestSequence !== statsRequestSequence || popupId !== statsPopupId) return;
 	            if (json.code === 200) {
-	              statsData.value = normalizeStats(json.data || {});
+	              statsData.value = PopupClickStats.normalize(json.data || {});
 	            } else {
-	              ElementPlus.ElMessage.error(json.message || '统计加载失败');
+	              statsError.value = json.message || '统计加载失败';
 	            }
 	          } catch (e) {
-	            ElementPlus.ElMessage.error('统计请求失败');
+	            if (requestSequence === statsRequestSequence && popupId === statsPopupId) statsError.value = '统计请求失败，请检查网络后重试';
 	          } finally {
-	            statsLoading.value = false;
+	            if (requestSequence === statsRequestSequence && popupId === statsPopupId) statsLoading.value = false;
 	          }
 	        }
 
@@ -1289,9 +1285,12 @@ submitAddList,changeApp,page,
 	total,
 		statsDialogVisible,
 		statsLoading,
-		statsDialogTitle,
-		statsData,
-		openStatsDialog,
+	        statsDialogTitle,
+	        statsData,
+	        statsError,
+	        openStatsDialog,
+	        refreshStats,
+	        invalidateStatsRequest,
 		statsTargetLabel,
 		assetLoading,
 	assetList,
@@ -1314,7 +1313,7 @@ assetKeyword,
 	clickTextInputType,
 	        };
       }
-    }).use(ElementPlus).mount('#app');
+	    }).component('popup-click-stats', PopupClickStats.component).use(ElementPlus).mount('#app');
   </script>
 </body>
 </html>

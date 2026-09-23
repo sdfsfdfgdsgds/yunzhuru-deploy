@@ -1299,6 +1299,13 @@ function installDatabase(PDO $pdo)
             'device_id'    => "VARCHAR(64) NOT NULL DEFAULT '' COMMENT '设备ID'",
             'created_at'   => "DATETIME NOT NULL COMMENT '记录时间'",
         ]);
+        // 小时点击统计按弹窗、模块、事件类型和时间过滤，保持历史日志单一事实来源。
+        addIndexIfNotExist(
+            $pdo,
+            $popupStatLogTable,
+            'idx_popup_stat_hourly',
+            'popup_id, module, type, created_at'
+        );
 
         // --------------------
         // 28. 输入框弹窗信息表
