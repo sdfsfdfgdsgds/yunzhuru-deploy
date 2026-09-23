@@ -173,6 +173,26 @@ function bucketScheduleFullSync(PDO $pdo, string $reason = '配置桶变更', bo
     return $exitCode === 0 && !empty($output) && ctype_digit(trim((string)end($output)));
 }
 
+/** 判断桶编辑是否改变当前配置对象的推送目标或连接参数。 */
+function bucketConfigSyncRequired(array $existing, array $record): bool {
+    $beforeEnabled = (int)($existing['enabled'] ?? 0);
+    $afterEnabled = (int)($record['enabled'] ?? 0);
+    if ($beforeEnabled !== $afterEnabled) return true;
+    // 未启用的桶不会进入当前配置对象；修改其资料可等启用时再同步。
+    if ($afterEnabled !== 1) return false;
+
+    $fields = ['provider', 'endpoint', 'bucket', 'region', 'domain'];
+    foreach ($fields as $field) {
+        if ((string)($existing[$field] ?? '') !== (string)($record[$field] ?? '')) return true;
+    }
+    // 平台登录资料只用于后台管理，不参与对象上传或壳端配置正文。
+    foreach (['access_key', 'secret_key'] as $field) {
+        $before = bucketDecryptSecret((string)($existing[$field] ?? ''));
+        if ($before !== (string)($record[$field] ?? '')) return true;
+    }
+    return false;
+}
+
 /** 尝试读取同步快照；状态表异常时返回空数组，不影响桶管理主流程。 */
 function bucketReadSyncStateSafe(PDO $pdo): array {
     try {
@@ -858,11 +878,13 @@ function addBucket(PDO $pdo, array $input) {
         ':inject' => $record['inject'],
     ]);
     $id = (int)$pdo->lastInsertId();
-    $scheduled = bucketScheduleFullSync($pdo, bucketSyncConnectionReason('新增配置桶连接', $record, $id));
+    $scheduled = (int)$record['enabled'] === 1
+        ? bucketScheduleFullSync($pdo, bucketSyncConnectionReason('新增配置桶连接', $record, $id))
+        : false;
     return [
         'message' => $scheduled
             ? '存储桶已新增，已启动后台同步'
-            : '存储桶已新增，后台同步未启动，请使用“同步全部配置”',
+            : ((int)$record['enabled'] === 1 ? '存储桶已新增，后台同步未启动，请使用“同步全部配置”' : '存储桶已新增，当前未启用，无需同步'),
         'id' => $id,
         'sync_scheduled' => $scheduled ? 1 : 0,
         'sync_job' => bucketReadSyncStateSafe($pdo),
@@ -896,11 +918,14 @@ function updateBucket(PDO $pdo, array $input) {
         ':enabled' => $record['enabled'],
         ':inject' => $record['inject'],
     ]);
-    $scheduled = bucketScheduleFullSync($pdo, bucketSyncConnectionReason('更新配置桶连接', $record, $id, $existing));
+    $syncRequired = bucketConfigSyncRequired($existing, $record);
+    $scheduled = $syncRequired
+        ? bucketScheduleFullSync($pdo, bucketSyncConnectionReason('更新配置桶连接', $record, $id, $existing))
+        : false;
     return [
         'message' => $scheduled
             ? '存储桶已更新，已启动后台同步'
-            : '存储桶已更新，后台同步未启动，请使用“同步全部配置”',
+            : ($syncRequired ? '存储桶已更新，后台同步未启动，请使用“同步全部配置”' : '存储桶已更新，无需同步'),
         'sync_scheduled' => $scheduled ? 1 : 0,
         'sync_job' => bucketReadSyncStateSafe($pdo),
     ];
@@ -924,14 +949,14 @@ function setBucketStatus(PDO $pdo, array $input) {
     // 用更新后的快照生成原因，避免停用/启用时把旧状态误传给差异比较器。
     $updated = $existing;
     $updated[$field] = $value;
-    $scheduled = $field === 'enabled'
+    $scheduled = $field === 'enabled' && (int)$existing['enabled'] !== $value
         ? bucketScheduleFullSync($pdo, bucketSyncConnectionReason('更新配置桶推送开关', $updated, $id, $existing))
         : false;
     return [
         'message' => $field === 'enabled'
             ? ($scheduled
                 ? '推送开关已更新，已启动后台同步'
-                : '推送开关已更新，后台同步未启动')
+                : ((int)$existing['enabled'] === $value ? '推送开关未变化，无需同步' : '推送开关已更新，后台同步未启动'))
             : 'APK 注入开关已更新',
         'field' => $field,
         'value' => $value,
@@ -944,7 +969,7 @@ function setBucketStatus(PDO $pdo, array $input) {
 function deleteBucket(PDO $pdo, array $input) {
     bucketRequireAdmin($pdo);
     $id = (int)($input['id'] ?? 0);
-    bucketFindById($pdo, $id);
+    $row = bucketFindById($pdo, $id);
     $pdo->beginTransaction();
     try {
         $pdo->prepare('DELETE FROM cainiao_s3_bucket_stats WHERE bucket_id=:id')->execute([':id' => $id]);
@@ -957,11 +982,15 @@ function deleteBucket(PDO $pdo, array $input) {
     }
     // 删除启用桶会改变所有应用的目标桶集合，事务提交后排队一次全量同步，
     // 让旧桶上的配置快照尽快收敛；云端 Bucket 与已有文件仍按原合同保留。
-    $scheduled = bucketScheduleFullSync($pdo, bucketSyncConnectionReason('删除配置桶管理记录', $row, $id));
+    $scheduled = (int)($row['enabled'] ?? 0) === 1
+        ? bucketScheduleFullSync($pdo, bucketSyncConnectionReason('删除配置桶管理记录', $row, $id))
+        : false;
     return [
         'message' => $scheduled
             ? '存储桶管理记录已删除，已启动后台同步；云端 Bucket 和已有文件保持原状'
-            : '存储桶管理记录已删除，后台同步未启动；云端 Bucket 和已有文件保持原状',
+            : ((int)($row['enabled'] ?? 0) === 1
+                ? '存储桶管理记录已删除，后台同步未启动；云端 Bucket 和已有文件保持原状'
+                : '存储桶管理记录已删除，当前桶未启用，无需同步；云端 Bucket 和已有文件保持原状'),
         'id' => $id,
         'sync_scheduled' => $scheduled ? 1 : 0,
         'sync_job' => bucketReadSyncStateSafe($pdo),

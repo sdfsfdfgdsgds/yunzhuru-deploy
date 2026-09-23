@@ -4665,7 +4665,7 @@ function updateAppInfo(PDO $pdo, array $input)
     // 验证该应用是否属于当前用户
     if ($user['role'] !== 'admin') {
         $stmt = $pdo->prepare("
-            SELECT a.user_id
+            SELECT a.user_id, a.config_mode, a.reuse_apk_id, a.reuse_options
             FROM `$apkTable` a
             LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
             WHERE a.id = :id
@@ -4675,7 +4675,7 @@ function updateAppInfo(PDO $pdo, array $input)
         $stmt->execute([':id' => $appId, ':user_id' => $userId]);
     } else {
         $stmt = $pdo->prepare("
-            SELECT a.user_id
+            SELECT a.user_id, a.config_mode, a.reuse_apk_id, a.reuse_options
             FROM `$apkTable` a
             LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
             WHERE a.id = :id
@@ -4684,7 +4684,8 @@ function updateAppInfo(PDO $pdo, array $input)
         $stmt->execute([':id' => $appId]);
     }
     
-    $ownerId = $stmt->fetchColumn();  // 获取 user_id 字段的值
+    $appBefore = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+    $ownerId = $appBefore['user_id'] ?? false;  // 获取 user_id 字段的值
     
     if (!$ownerId) {
         throw new Exception('未找到该应用或无权限修改');
@@ -4869,11 +4870,33 @@ function updateAppInfo(PDO $pdo, array $input)
         throw $e;
     }
 
-    // 配置变更后的缓存清理和存储桶推送走统一异步流程，避免保存按钮被外部桶网络阻塞。
-    try {
-        Auth::afterConfigChange($pdo, $appId);
-    } catch (\Throwable $e) {
-        error_log("[updateAppInfo] 配置变更后处理失败 appId={$appId}: " . $e->getMessage());
+    // 只有会改变远程配置正文的复用字段才需要清缓存并推送桶对象。
+    // 应用名称、app_key、is_reusable、域名展示字段只影响后台元数据，不能因为保存它们重跑全量同步。
+    $configChanged = false;
+    if (array_key_exists('config_mode', $input)) {
+        $nextConfigMode = (int)$input['config_mode'];
+        $nextReuseApkId = $nextConfigMode === 1 ? (int)($input['reuse_apk_id'] ?? 0) : 0;
+        $beforeReuseApkId = (int)($appBefore['reuse_apk_id'] ?? 0);
+        if ((int)($appBefore['config_mode'] ?? 0) !== $nextConfigMode
+            || $beforeReuseApkId !== $nextReuseApkId) {
+            $configChanged = true;
+        }
+    }
+    if (array_key_exists('reuse_options', $input)) {
+        $beforeReuseOptions = json_decode((string)($appBefore['reuse_options'] ?? ''), true);
+        if (!is_array($beforeReuseOptions)) $beforeReuseOptions = [];
+        if ($beforeReuseOptions !== $input['reuse_options']) {
+            $configChanged = true;
+        }
+    }
+
+    if ($configChanged) {
+        // 配置变更后的缓存清理和存储桶推送走统一异步流程，避免保存按钮被外部桶网络阻塞。
+        try {
+            Auth::afterConfigChange($pdo, $appId);
+        } catch (\Throwable $e) {
+            error_log("[updateAppInfo] 配置变更后处理失败 appId={$appId}: " . $e->getMessage());
+        }
     }
 
     return ['message' => '修改成功'];

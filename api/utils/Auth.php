@@ -309,7 +309,7 @@ class Auth
                 'redirect.php' => '跳转规则',
                 'click_param_asset.php' => '点击参数资源',
                 'popup_image_asset.php' => '图片资源',
-                'app.php' => '应用信息或复用关系',
+                'app.php' => '应用复用配置',
                 'system_setting.php' => '系统运行开关',
                 'ApiDomainAutomation.php' => 'API 域名池',
                 'ConfigDelivery.php' => '全局分发配置',
