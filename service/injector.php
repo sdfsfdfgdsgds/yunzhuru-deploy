@@ -951,87 +951,6 @@ function handleInjectionTasks(PDO $pdo, $oss)
         replace_config_LAUNCHER($de_apk1, encrypt_text($removedActivity));//将原始启动窗口加密存放到壳配置中
     }
 
-    // 链路注入前检查壳方法与目标父类链上的 final 方法是否冲突。
-    // 某些 APK（例如 androidx.multidex.MultiDexApplication）将
-    // attachBaseContext 声明为 final；如果壳插在该类的子类位置，ART 会在
-    // 加载壳类时抛出 LinkageError。发现冲突时自动切到保资源入口反射模式，
-    // 保留原继承链，避免让用户手工判断注入模式。
-    $mode1ChainProbe = null;
-    if (
-        ($mode === 0 || $mode === 1)
-        && !empty($appName)
-        && $appName !== 'android.app.Application'
-    ) {
-        // mode 0 让壳直接继承原 Application；mode 1 让壳继承被改写目标类的
-        // 原父类。两种模式都必须检查壳将要继承的实际父类链。
-        $injectionParentClass = $mode === 0 ? $appName : null;
-        if ($mode === 1) {
-            $mode1InjectionTarget = $appName;
-            if (empty($task['isMainProcess'])) {
-                $mode1ChainProbe = dexedit_printappchain(
-                    $dexedit,
-                    $xmx,
-                    $apk_file[1],
-                    $appName,
-                    true,
-                    $applicationlin
-                );
-                if (!empty($mode1ChainProbe['class'])) {
-                    $mode1InjectionTarget = $mode1ChainProbe['class'];
-                }
-            }
-        }
-
-        $finalMethodCheckRoot = $temp_dir . DIRECTORY_SEPARATOR . 'final_method_check_target';
-        $finalMethodCheckReady = prepareTargetSmaliForFinalMethodCheck(
-            $baksmali,
-            $de_apk2,
-            $finalMethodCheckRoot
-        );
-        if ($finalMethodCheckReady && $mode === 1) {
-            $targetClassesForCheck = indexSmaliClassFiles($finalMethodCheckRoot);
-            $targetContractForCheck = readSmaliClassContract(
-                $targetClassesForCheck[$mode1InjectionTarget] ?? ''
-            );
-            $injectionParentClass = $targetContractForCheck['super'] ?? null;
-        }
-        $finalMethodConflicts = $finalMethodCheckReady && !empty($injectionParentClass)
-            ? detectChainInjectionFinalMethodConflicts(
-                $finalMethodCheckRoot,
-                $de_apk1,
-                $injectionParentClass,
-                $shellClassName
-            )
-            : null;
-        if (!$finalMethodCheckReady || $finalMethodConflicts === null) {
-            echo "目标 DEX final 方法预检失败，保守切换为保资源入口反射模式\n";
-            $mode = 4;
-            $task['mode'] = 4;
-            $preserveResourceMode = true;
-            $reflectionEntryMode = true;
-            $task['confuse'] = 1;
-            $task['dexmerge'] = 0;
-            updateTaskInfo($pdo, $task['id'], '目标 DEX final 方法预检失败，自动切换保资源入口反射');
-        } elseif (!empty($finalMethodConflicts)) {
-            $conflictSummary = implode('; ', array_map(
-                static function (array $conflict): string {
-                    return $conflict['signature'] . ' in ' . $conflict['ancestor'];
-                },
-                $finalMethodConflicts
-            ));
-            echo "检测到链路注入 final 方法冲突：{$conflictSummary}\n";
-            echo "自动切换为保资源入口反射模式，跳过链路父类改写\n";
-            $mode = 4;
-            $task['mode'] = 4;
-            $preserveResourceMode = true;
-            $reflectionEntryMode = true;
-            // 保资源模式必须关闭会重排目标资源或 DEX 的后处理步骤。
-            $task['confuse'] = 1;
-            $task['dexmerge'] = 0;
-            updateTaskInfo($pdo, $task['id'], '检测到壳与目标 final 方法冲突，自动切换保资源入口反射');
-        }
-    }
-
     echo "==================================基础检查完成,开始壳配置修改\n";
     updateTaskInfo($pdo, $task['id'], '壳配置修改');
     $appkey = gen_key($task['apk_id'], $apk_user_id);
@@ -1350,6 +1269,87 @@ $applicationlin=[];
 
 
     }
+
+    // 链路注入前检查壳方法与目标父类链上的 final 方法是否冲突。
+    // 必须放在入口类解析及旧云注入清理之后，否则 $appName 为空时会跳过检查，
+    // 让模式 1 继续把壳挂到存在 final 方法的继承链上，最终由 ART 抛出
+    // LinkageError。发现冲突时自动切到保资源入口反射模式，保留原继承链。
+    $mode1ChainProbe = null;
+    if (
+        ($mode === 0 || $mode === 1)
+        && !empty($appName)
+        && $appName !== 'android.app.Application'
+    ) {
+        // mode 0 让壳直接继承原 Application；mode 1 让壳继承被改写目标类的
+        // 原父类。两种模式都必须检查壳将要继承的实际父类链。
+        $injectionParentClass = $mode === 0 ? $appName : null;
+        if ($mode === 1) {
+            $mode1InjectionTarget = $appName;
+            if (empty($task['isMainProcess'])) {
+                $mode1ChainProbe = dexedit_printappchain(
+                    $dexedit,
+                    $xmx,
+                    $apk_file[1],
+                    $appName,
+                    true,
+                    $applicationlin
+                );
+                if (!empty($mode1ChainProbe['class'])) {
+                    $mode1InjectionTarget = $mode1ChainProbe['class'];
+                }
+            }
+        }
+
+        $finalMethodCheckRoot = $temp_dir . DIRECTORY_SEPARATOR . 'final_method_check_target';
+        $finalMethodCheckReady = prepareTargetSmaliForFinalMethodCheck(
+            $baksmali,
+            $de_apk2,
+            $finalMethodCheckRoot
+        );
+        if ($finalMethodCheckReady && $mode === 1) {
+            $targetClassesForCheck = indexSmaliClassFiles($finalMethodCheckRoot);
+            $targetContractForCheck = readSmaliClassContract(
+                $targetClassesForCheck[$mode1InjectionTarget] ?? ''
+            );
+            $injectionParentClass = $targetContractForCheck['super'] ?? null;
+        }
+        $finalMethodConflicts = $finalMethodCheckReady && !empty($injectionParentClass)
+            ? detectChainInjectionFinalMethodConflicts(
+                $finalMethodCheckRoot,
+                $de_apk1,
+                $injectionParentClass,
+                $shellClassName
+            )
+            : null;
+        if (!$finalMethodCheckReady || $finalMethodConflicts === null) {
+            echo "目标 DEX final 方法预检失败，保守切换为保资源入口反射模式\n";
+            $mode = 4;
+            $task['mode'] = 4;
+            $preserveResourceMode = true;
+            $reflectionEntryMode = true;
+            $task['confuse'] = 1;
+            $task['dexmerge'] = 0;
+            updateTaskInfo($pdo, $task['id'], '目标 DEX final 方法预检失败，自动切换保资源入口反射');
+        } elseif (!empty($finalMethodConflicts)) {
+            $conflictSummary = implode('; ', array_map(
+                static function (array $conflict): string {
+                    return $conflict['signature'] . ' in ' . $conflict['ancestor'];
+                },
+                $finalMethodConflicts
+            ));
+            echo "检测到链路注入 final 方法冲突：{$conflictSummary}\n";
+            echo "自动切换为保资源入口反射模式，跳过链路父类改写\n";
+            $mode = 4;
+            $task['mode'] = 4;
+            $preserveResourceMode = true;
+            $reflectionEntryMode = true;
+            // 保资源模式必须关闭会重排目标资源或 DEX 的后处理步骤。
+            $task['confuse'] = 1;
+            $task['dexmerge'] = 0;
+            updateTaskInfo($pdo, $task['id'], '检测到壳与目标 final 方法冲突，自动切换保资源入口反射');
+        }
+    }
+
     echo "==================================检查并统一desugar库\n";
     // 目标 APK 可能携带另一版 j$ 脱糖库。若继续无条件复制壳 classes2.dex，
     // 同名 class_defs 会跨 DEX 重复，ART 和最终 DEX 门禁都会拒绝成品。
