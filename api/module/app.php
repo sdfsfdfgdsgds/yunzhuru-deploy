@@ -4871,7 +4871,7 @@ function updateAppInfo(PDO $pdo, array $input)
     }
 
     // 只有会改变远程配置正文的复用字段才需要清缓存并推送桶对象。
-    // 应用名称、app_key、is_reusable、域名展示字段只影响后台元数据，不能因为保存它们重跑全量同步。
+    // 应用名称、app_key、is_reusable、域名字段不改变当前远程配置正文；域名字段在后续注入时另行写入壳配置，不能因为保存它们重跑全量同步。
     $configChanged = false;
     if (array_key_exists('config_mode', $input)) {
         $nextConfigMode = (int)$input['config_mode'];
