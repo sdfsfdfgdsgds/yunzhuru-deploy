@@ -950,6 +950,88 @@ function handleInjectionTasks(PDO $pdo, $oss)
 
         replace_config_LAUNCHER($de_apk1, encrypt_text($removedActivity));//将原始启动窗口加密存放到壳配置中
     }
+
+    // 链路注入前检查壳方法与目标父类链上的 final 方法是否冲突。
+    // 某些 APK（例如 androidx.multidex.MultiDexApplication）将
+    // attachBaseContext 声明为 final；如果壳插在该类的子类位置，ART 会在
+    // 加载壳类时抛出 LinkageError。发现冲突时自动切到保资源入口反射模式，
+    // 保留原继承链，避免让用户手工判断注入模式。
+    $mode1ChainProbe = null;
+    if (
+        ($mode === 0 || $mode === 1)
+        && !empty($appName)
+        && $appName !== 'android.app.Application'
+    ) {
+        // mode 0 让壳直接继承原 Application；mode 1 让壳继承被改写目标类的
+        // 原父类。两种模式都必须检查壳将要继承的实际父类链。
+        $injectionParentClass = $mode === 0 ? $appName : null;
+        if ($mode === 1) {
+            $mode1InjectionTarget = $appName;
+            if (empty($task['isMainProcess'])) {
+                $mode1ChainProbe = dexedit_printappchain(
+                    $dexedit,
+                    $xmx,
+                    $apk_file[1],
+                    $appName,
+                    true,
+                    $applicationlin
+                );
+                if (!empty($mode1ChainProbe['class'])) {
+                    $mode1InjectionTarget = $mode1ChainProbe['class'];
+                }
+            }
+        }
+
+        $finalMethodCheckRoot = $temp_dir . DIRECTORY_SEPARATOR . 'final_method_check_target';
+        $finalMethodCheckReady = prepareTargetSmaliForFinalMethodCheck(
+            $baksmali,
+            $de_apk2,
+            $finalMethodCheckRoot
+        );
+        if ($finalMethodCheckReady && $mode === 1) {
+            $targetClassesForCheck = indexSmaliClassFiles($finalMethodCheckRoot);
+            $targetContractForCheck = readSmaliClassContract(
+                $targetClassesForCheck[$mode1InjectionTarget] ?? ''
+            );
+            $injectionParentClass = $targetContractForCheck['super'] ?? null;
+        }
+        $finalMethodConflicts = $finalMethodCheckReady && !empty($injectionParentClass)
+            ? detectChainInjectionFinalMethodConflicts(
+                $finalMethodCheckRoot,
+                $de_apk1,
+                $injectionParentClass,
+                $shellClassName
+            )
+            : null;
+        if (!$finalMethodCheckReady || $finalMethodConflicts === null) {
+            echo "目标 DEX final 方法预检失败，保守切换为保资源入口反射模式\n";
+            $mode = 4;
+            $task['mode'] = 4;
+            $preserveResourceMode = true;
+            $reflectionEntryMode = true;
+            $task['confuse'] = 1;
+            $task['dexmerge'] = 0;
+            updateTaskInfo($pdo, $task['id'], '目标 DEX final 方法预检失败，自动切换保资源入口反射');
+        } elseif (!empty($finalMethodConflicts)) {
+            $conflictSummary = implode('; ', array_map(
+                static function (array $conflict): string {
+                    return $conflict['signature'] . ' in ' . $conflict['ancestor'];
+                },
+                $finalMethodConflicts
+            ));
+            echo "检测到链路注入 final 方法冲突：{$conflictSummary}\n";
+            echo "自动切换为保资源入口反射模式，跳过链路父类改写\n";
+            $mode = 4;
+            $task['mode'] = 4;
+            $preserveResourceMode = true;
+            $reflectionEntryMode = true;
+            // 保资源模式必须关闭会重排目标资源或 DEX 的后处理步骤。
+            $task['confuse'] = 1;
+            $task['dexmerge'] = 0;
+            updateTaskInfo($pdo, $task['id'], '检测到壳与目标 final 方法冲突，自动切换保资源入口反射');
+        }
+    }
+
     echo "==================================基础检查完成,开始壳配置修改\n";
     updateTaskInfo($pdo, $task['id'], '壳配置修改');
     $appkey = gen_key($task['apk_id'], $apk_user_id);
@@ -1346,7 +1428,14 @@ $applicationlin=[];
         }else{
             echo "注入模式1,链路注入,将原入口类的父类{$appName}改成壳类{$shellClassName}\n";//同时还要把壳的父类改成目标应用的原始父类
             echo "此模式原理,将原始入口的父类改成壳类，然后将壳父类改成原入口类的父类\n";
-            $printappchain = dexedit_printappchain($dexedit, $xmx, $apk_file[1], $appName, true, $applicationlin);
+            $printappchain = $mode1ChainProbe ?? dexedit_printappchain(
+                $dexedit,
+                $xmx,
+                $apk_file[1],
+                $appName,
+                true,
+                $applicationlin
+            );
             print_r($printappchain);
             if(!empty($printappchain['dex']) && !empty($printappchain['class']) && !$task['isMainProcess']){
                 echo "存在多重继承链路关系,且未开启进程隔离,注入到最深层\n";
@@ -3345,6 +3434,232 @@ function parseAppChainLastBeforeApplication(string $chain): ?array {
         'class' => $class,
     ];
 }
+
+/**
+ * 建立反编译目录中的 Smali 类索引。
+ *
+ * 支持 apktool 的 smali、smali_classes2 等多 DEX 目录，供注入前的继承链
+ * 检查复用；此过程只读取声明，不修改目标 APK 或壳文件。
+ */
+function indexSmaliClassFiles(string $root): array {
+    if (!is_dir($root)) {
+        return [];
+    }
+
+    $classes = [];
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)
+    );
+    foreach ($iterator as $file) {
+        if (!$file->isFile() || strtolower($file->getExtension()) !== 'smali') {
+            continue;
+        }
+
+        $path = $file->getPathname();
+        $relative = substr($path, strlen(rtrim($root, DIRECTORY_SEPARATOR)) + 1);
+        if ($relative === false) {
+            continue;
+        }
+
+        $normalized = str_replace(DIRECTORY_SEPARATOR, '/', $relative);
+        if (!preg_match('#^smali(?:_classes\d+)?/(.+)\.smali$#', $normalized, $matches)) {
+            continue;
+        }
+
+        $classes[str_replace('/', '.', $matches[1])] = $path;
+    }
+
+    return $classes;
+}
+
+/**
+ * 读取单个 Smali 类的父类和方法签名。
+ *
+ * 只解析注入安全检查所需的声明，避免在预检阶段回编译 DEX。
+ */
+function readSmaliClassContract(string $path): ?array {
+    $lines = @file($path, FILE_IGNORE_NEW_LINES);
+    if ($lines === false) {
+        return null;
+    }
+
+    $super = null;
+    $methods = [];
+    foreach ($lines as $line) {
+        if ($super === null && preg_match('/^\s*\.super\s+L([^;]+);/', $line, $match)) {
+            $super = str_replace('/', '.', $match[1]);
+            continue;
+        }
+
+        if (!preg_match('/^\s*\.method\s+(.+)$/', $line, $match)) {
+            continue;
+        }
+
+        $header = trim($match[1]);
+        if (!preg_match('/^(.*?)\s+([^\s(]+)\(([^)]*)\)(\S+)$/', $header, $methodMatch)) {
+            continue;
+        }
+
+        $flags = preg_split('/\s+/', trim($methodMatch[1])) ?: [];
+        $signature = $methodMatch[2] . '(' . $methodMatch[3] . ')' . $methodMatch[4];
+        $methods[$signature] = [
+            'signature' => $signature,
+            'final' => in_array('final', $flags, true),
+            'static' => in_array('static', $flags, true),
+            'private' => in_array('private', $flags, true),
+            'public_or_protected' => in_array('public', $flags, true)
+                || in_array('protected', $flags, true),
+        ];
+    }
+
+    return [
+        'super' => $super,
+        'methods' => $methods,
+    ];
+}
+
+/**
+ * 将目标 APK 的全部 classes*.dex 反编译到临时目录，供 final 方法预检使用。
+ *
+ * apktool 的目标目录使用 --no-src，不会生成目标 Smali；这里单独反编译每个
+ * DEX，确保跨 classes2/classes3 等文件的父类链不会漏检。输出目录属于当前
+ * 任务临时目录，任务结束时随 temp_dir 一并清理。
+ */
+function prepareTargetSmaliForFinalMethodCheck(
+    string $baksmaliPath,
+    string $targetRoot,
+    string $outputRoot
+): bool {
+    if (!is_file($baksmaliPath) || !is_dir($targetRoot)) {
+        return false;
+    }
+    if (!is_dir($outputRoot) && !mkdir($outputRoot, 0700, true)) {
+        return false;
+    }
+
+    $dexFiles = [];
+    foreach (scandir($targetRoot) ?: [] as $entry) {
+        if ($entry === 'classes.dex') {
+            $dexFiles[1] = $targetRoot . DIRECTORY_SEPARATOR . $entry;
+            continue;
+        }
+        if (preg_match('/^classes(\d+)\.dex$/', $entry, $match)) {
+            $dexFiles[(int)$match[1]] = $targetRoot . DIRECTORY_SEPARATOR . $entry;
+        }
+    }
+    if (empty($dexFiles)) {
+        return false;
+    }
+    ksort($dexFiles, SORT_NUMERIC);
+
+    foreach ($dexFiles as $index => $dexPath) {
+        if (!is_file($dexPath)) {
+            return false;
+        }
+        $smaliName = $index === 1 ? 'smali' : 'smali_classes' . $index;
+        $smaliDir = $outputRoot . DIRECTORY_SEPARATOR . $smaliName;
+        if (!is_dir($smaliDir) && !mkdir($smaliDir, 0700, true)) {
+            return false;
+        }
+
+        $command = 'java -jar ' . escapeshellarg($baksmaliPath)
+            . ' disassemble ' . escapeshellarg($dexPath)
+            . ' -o ' . escapeshellarg($smaliDir) . ' 2>&1';
+        $output = [];
+        $exitCode = 1;
+        exec($command, $output, $exitCode);
+        if ($exitCode !== 0) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * 检查链路注入后壳类是否会重写目标父类链中的 final 方法。
+ *
+ * 链路注入会让壳类成为 `$injectionParentClass` 的直接子类；因此只要壳
+ * 声明了该类或其祖先链上的同签名 final 实例方法，Android 类加载就会失败。返回
+ * 冲突明细，供任务日志说明自动切换的具体原因。
+ */
+function detectChainInjectionFinalMethodConflicts(
+    string $targetRoot,
+    string $shellRoot,
+    string $injectionParentClass,
+    string $shellClassName
+): ?array {
+    $targetClasses = indexSmaliClassFiles($targetRoot);
+    $shellClasses = indexSmaliClassFiles($shellRoot);
+    $targetContract = readSmaliClassContract($targetClasses[$injectionParentClass] ?? '');
+    $shellContract = readSmaliClassContract($shellClasses[$shellClassName] ?? '');
+    if ($shellContract === null) {
+        // 声明缺失时返回不可判断，由调用方保守切换入口反射模式。
+        return null;
+    }
+    if (
+        $targetContract === null
+        && preg_match('/^(android|java|javax|kotlin)(\.|$)/', $injectionParentClass)
+    ) {
+        // android.app.Application 等系统终点不在目标 DEX 中；已知系统终点
+        // 没有目标 APK 自定义 final 声明可供比较，按无冲突继续处理。
+        return [];
+    }
+    if ($targetContract === null) {
+        return null;
+    }
+
+    $shellVirtualMethods = [];
+    foreach ($shellContract['methods'] as $method) {
+        if (
+            $method['static']
+            || $method['private']
+            || !$method['public_or_protected']
+            || strpos($method['signature'], '<init>(') === 0
+        ) {
+            continue;
+        }
+        $shellVirtualMethods[$method['signature']] = $method;
+    }
+
+    $conflicts = [];
+    $ancestor = $injectionParentClass;
+    $visited = [];
+    while (!empty($ancestor) && !isset($visited[$ancestor])) {
+        $visited[$ancestor] = true;
+        $ancestorPath = $targetClasses[$ancestor] ?? null;
+        if ($ancestorPath === null) {
+            // 系统类的实现不在目标 DEX 中；自定义父类缺失则不能安全判断。
+            if (!preg_match('/^(android|java|javax|kotlin)(\.|$)/', $ancestor)) {
+                return null;
+            }
+            break;
+        }
+
+        $ancestorContract = readSmaliClassContract($ancestorPath);
+        if ($ancestorContract === null) {
+            break;
+        }
+        foreach ($ancestorContract['methods'] as $method) {
+            if (
+                !$method['final']
+                || !$method['public_or_protected']
+                || !isset($shellVirtualMethods[$method['signature']])
+            ) {
+                continue;
+            }
+            $conflicts[] = [
+                'signature' => $method['signature'],
+                'ancestor' => $ancestor,
+                'ancestor_path' => $ancestorPath,
+            ];
+        }
+        $ancestor = $ancestorContract['super'];
+    }
+
+    return $conflicts;
+}
+
 /**
  * 解析并过滤 Application 链路
  * 会移除 $applicationlin 中的类名节点
