@@ -4711,6 +4711,22 @@ function DEXDecrypt($encFile, $keyFile) {
 
 
 
+/**
+ * 判断 APK 中的 META-INF 条目是否属于旧签名材料。
+ *
+ * 重签名只需要移除旧 MANIFEST 和证书签名文件；META-INF/services 等
+ * Java/Kotlin SPI（服务发现）配置必须原样保留，否则应用运行时会找不到
+ * 实现类并在首次调用 SDK 时崩溃。
+ */
+function isApkSignatureMetaEntry(string $name): bool
+{
+    $normalized = ltrim(str_replace('\\', '/', $name), '/');
+    return preg_match(
+        '#^META-INF/(?:MANIFEST\\.MF|[^/]+\\.(?:SF|RSA|DSA|EC|SIG))$#i',
+        $normalized
+    ) === 1;
+}
+
 // APK合并方法：使用 PHP ZipArchive 覆盖写入，不依赖系统 zip 命令
 /**
  * 将解包目录中的 AndroidManifest.xml、DEX、lib 和指定 assets 覆盖写入原 APK 副本。
@@ -4846,11 +4862,24 @@ function patchApk($apkPath, $tmpDir, $unpackDir, array $assetFiles = ['cainiao_v
     }
 
     $deleteNames = [];
+    $preservedMetaEntries = [];
     for ($i = 0; $i < $zip->numFiles; $i++) {
         $name = $zip->getNameIndex($i);
-        if ($name !== false && preg_match('#^META-INF/#i', $name)) {
-            $deleteNames[] = $name;
+        if ($name === false || stripos($name, 'META-INF/') !== 0 || substr($name, -1) === '/') {
+            continue;
         }
+        if (isApkSignatureMetaEntry($name)) {
+            $deleteNames[] = $name;
+            continue;
+        }
+
+        $metaData = $zip->getFromName($name);
+        if ($metaData === false) {
+            echo "错误：读取原 APK META-INF 条目失败：{$name}\n";
+            $zip->close();
+            return false;
+        }
+        $preservedMetaEntries[$name] = hash('sha256', $metaData);
     }
     foreach ($deleteNames as $name) {
         $zip->deleteName($name);
@@ -4882,6 +4911,26 @@ function patchApk($apkPath, $tmpDir, $unpackDir, array $assetFiles = ['cainiao_v
     if (!$zip->close()) {
         echo "错误：ZipArchive关闭写入失败\n";
         return false;
+    }
+
+    // 重新打开成品核对所有原有非签名 META-INF 条目，防止重打包流程静默
+    // 丢失 SPI provider、版本声明或其他运行时元数据。
+    if (!empty($preservedMetaEntries)) {
+        $verifyZip = new ZipArchive();
+        if ($verifyZip->open($tempApk) !== true) {
+            echo "错误：无法重新打开 APK 校验 META-INF 条目\n";
+            return false;
+        }
+        foreach ($preservedMetaEntries as $name => $expectedHash) {
+            $metaData = $verifyZip->getFromName($name);
+            if ($metaData === false || hash('sha256', $metaData) !== $expectedHash) {
+                echo "错误：成品丢失或改写原 APK META-INF 条目：{$name}\n";
+                $verifyZip->close();
+                return false;
+            }
+        }
+        $verifyZip->close();
+        echo "已校验并保留 META-INF 非签名条目：" . count($preservedMetaEntries) . " 个\n";
     }
 
     clearstatcache(true, $tempApk);
