@@ -382,6 +382,15 @@
     .config-sync-center__launcher-icon.is-spinning {
       animation: config-sync-rotate 1.1s linear infinite;
     }
+    /* 运行中的任务在圆形入口内直接展示完成百分比，使用等宽数字避免刷新时横向跳动。 */
+    .config-sync-center__launcher-percent {
+      display: inline-block;
+      font-size: 15px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+      white-space: nowrap;
+    }
     @keyframes config-sync-rotate {
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
@@ -1618,7 +1627,15 @@
       aria-label="打开全局配置同步中心"
       title="打开全局配置同步中心"
       @click="openSyncCenter">
-      <span class="config-sync-center__launcher-icon" :class="{ 'is-spinning': syncBusy }">↻</span>
+      <span
+        v-if="syncLauncherPercent !== null"
+        class="config-sync-center__launcher-percent"
+      >{{ syncLauncherPercent }}%</span>
+      <span
+        v-else
+        class="config-sync-center__launcher-icon"
+        :class="{ 'is-spinning': syncBusy }"
+      >↻</span>
     </el-button>
   </el-badge>
 
@@ -1946,6 +1963,20 @@ createApp({
         return Math.min(100, Math.round((syncCurrent.value / syncTotal.value) * 100));
       }
       return syncDetailProgress.status === 'completed' ? 100 : 0;
+    });
+    // 运行态入口使用实时任务快照，避免打开历史详情时误读旧任务的进度。
+    const syncLauncherPercent = computed(() => {
+      if (String(syncProgress.status || '') !== 'running') return null;
+      const total = Math.max(0, Number(syncProgress.total || syncProgress.expected_total || 0));
+      if (total <= 0) return null;
+      const current = Math.max(0, Number(
+        syncProgress.current || syncProgress.processed
+        || Number(syncProgress.success || syncProgress.success_count || 0)
+          + Number(syncProgress.fail || syncProgress.fail_count || 0)
+          + Number(syncProgress.partial || syncProgress.partial_success || syncProgress.app_partial_count || 0)
+          + Number(syncProgress.skipped || 0)
+      ));
+      return Math.min(100, Math.round((current / total) * 100));
     });
     const syncStatusDotClass = computed(() => {
       const status = String(syncDetailProgress.status || 'idle');
@@ -3965,7 +3996,7 @@ createApp({
       syncCenterVisible, syncStarting, syncProgress, syncBusy, syncManualDisabled, syncTotal, syncCurrent,
       syncHostedByGlobalCenter, syncRetrying, syncRetryableFailureCount, retryFailedSyncBuckets,
       syncProgressPercent, syncStatusLabel, syncDebounceRemaining, syncDebounceLabel, syncStatusTagType, syncLauncherType,
-      syncBadgeValue, syncStatusDotClass, syncFailureItems, syncResultItems, syncSuccessItems,
+      syncLauncherPercent, syncBadgeValue, syncStatusDotClass, syncFailureItems, syncResultItems, syncSuccessItems,
       syncPartialItems, syncPartialApps, syncSkippedItems, syncResultSummary,
       syncResultFilter, syncResultQuery, syncVisibleResultItems, syncHasResultData,
       syncCurrentObject, syncPhaseLabel, syncReasons, openSyncCenter, refreshSyncStatus,

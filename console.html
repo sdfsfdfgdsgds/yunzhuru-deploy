@@ -582,6 +582,16 @@
     .global-config-sync__launcher-countdown.is-compact { font-size: 11px; }
     .global-config-sync__launcher-countdown.is-compact small { font-size: 8px; }
 
+    /* 运行中的任务在圆形入口内直接展示完成百分比，使用等宽数字避免刷新时横向跳动。 */
+    .global-config-sync__launcher-percent {
+      display: inline-block;
+      font-size: 15px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
     @keyframes global-config-sync-rotate {
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
@@ -1394,7 +1404,11 @@
         @click="openGlobalSyncCenter"
       >
         <span
-          v-if="globalSyncLauncherRemaining > 0"
+          v-if="globalSyncLauncherPercent !== null"
+          class="global-config-sync__launcher-percent"
+        >{{ globalSyncLauncherPercent }}%</span>
+        <span
+          v-else-if="globalSyncLauncherRemaining > 0"
           class="global-config-sync__launcher-countdown"
           :class="{ 'is-compact': globalSyncLauncherRemaining >= 1000 }"
         >{{ globalSyncLauncherRemaining }}<small>秒</small></span>
@@ -2443,11 +2457,25 @@
           failed: 'danger', idle: 'primary'
         }[String(globalSyncProgress.status || 'idle')] || 'primary'));
         // 悬浮入口只读取当前任务，沿用每秒状态轮询的服务端剩余时间；
-        // 历史详情不参与计时，到期或开始运行后恢复原同步图标。
+        // 历史详情不参与计时；开始运行后由实时任务快照决定显示百分比或图标。
         const globalSyncLauncherRemaining = computed(() => {
           if (String(globalSyncProgress.status || '') !== 'queued') return 0;
           const remaining = Number(globalSyncProgress.debounce_remaining_seconds);
           return Number.isFinite(remaining) ? Math.max(0, Math.ceil(remaining)) : 0;
+        });
+        // 运行态入口使用实时任务快照，避免打开历史详情时误读旧任务的进度。
+        const globalSyncLauncherPercent = computed(() => {
+          if (String(globalSyncProgress.status || '') !== 'running') return null;
+          const total = Math.max(0, Number(globalSyncProgress.total || globalSyncProgress.expected_total || 0));
+          if (total <= 0) return null;
+          const current = Math.max(0, Number(
+            globalSyncProgress.current || globalSyncProgress.processed
+            || Number(globalSyncProgress.success || globalSyncProgress.success_count || 0)
+              + Number(globalSyncProgress.fail || globalSyncProgress.fail_count || 0)
+              + Number(globalSyncProgress.partial || globalSyncProgress.partial_success || globalSyncProgress.app_partial_count || 0)
+              + Number(globalSyncProgress.skipped || 0)
+          ));
+          return Math.min(100, Math.round((current / total) * 100));
         });
         const globalSyncBadgeValue = computed(() => {
           if (globalSyncBusy.value) return 1;
@@ -4676,6 +4704,7 @@ async function clearS3Config() {
           globalSyncStatusTagType,
           globalSyncLauncherType,
           globalSyncLauncherRemaining,
+          globalSyncLauncherPercent,
           globalSyncBadgeValue,
           globalSyncTotal,
           globalSyncCurrent,
