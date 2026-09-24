@@ -99,10 +99,28 @@ function addAsset(PDO $pdo, array $input)
         ':sort' => $sort,
         ':remark' => $remark,
     ]);
+    $assetId = (int)$pdo->lastInsertId();
+
+    // 新资源虽然暂时没有关联目标，但资源库属于配置下发合同；新增后排入全量同步，
+    // 让同步中心记录这次变更，并与编辑、启停、删除保持同一条调度链路。
+    $syncResult = [];
+    if (!function_exists('configSyncStateScheduleWorker')) {
+        $statePath = __DIR__ . '/../utils/ConfigSyncState.php';
+        if (file_exists($statePath)) require_once $statePath;
+    }
+    if (function_exists('configSyncStateScheduleWorker')) {
+        try {
+            $syncResult = configSyncStateScheduleWorker($pdo, '链接/事件参数新增');
+        } catch (Throwable $e) {
+            // 资源已成功保存；调度异常交给统一日志和后续手工同步处理，不回滚业务写入。
+            error_log('[click_param_asset] 新增资源同步调度失败：' . $e->getMessage());
+        }
+    }
 
     return [
         'message' => '新增成功',
-        'id' => (int)$pdo->lastInsertId(),
+        'id' => $assetId,
+        'sync_job' => $syncResult['snapshot'] ?? [],
     ];
 }
 
