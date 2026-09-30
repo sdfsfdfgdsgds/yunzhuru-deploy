@@ -6582,7 +6582,9 @@ function addPermissions($editorPath, $dirPath, $permissions) {
     $cmd .= ' 2>&1';
     $output = shell_exec($cmd);
 
-    if (!is_file($newManifest) || filesize($newManifest) === 0 || stripos((string)$output, 'Exception') !== false) {
+    if (!normalizeManifestEditorAxmlEmptyNamespaces($newManifest)
+        || !is_file($newManifest) || filesize($newManifest) === 0
+        || stripos((string)$output, 'Exception') !== false) {
         echo "添加权限 ManifestEditor 输出异常：{$output}\n";
         return false;
     }
@@ -6619,6 +6621,134 @@ function resolve_tool_path($preferredPath, $commandName) {
 }
 
 /**
+ * 清理 ManifestEditor 输出的空 URI 命名空间。
+ *
+ * ManifestEditor-2.0 的 AXML 写入器会把没有 URI 的元素错误写成
+ * `axml_auto_00:manifest xmlns:axml_auto_00=""`。Android 自身通常还能容忍，
+ * 但其他打包器会将其视为非法命名空间，导致后续读取不到 manifest 根节点。
+ * AXML 中真正需要删除的是 URI 字符串为空的命名空间开始/结束 chunk；
+ * 元素的空 namespace 索引和字符串池保留，以免改变原清单的无命名空间语义。
+ */
+function normalizeManifestEditorAxmlEmptyNamespaces($manifestPath) {
+    if (!is_file($manifestPath)) {
+        return false;
+    }
+
+    $content = file_get_contents($manifestPath);
+    $length = is_string($content) ? strlen($content) : 0;
+    if ($length < 8) {
+        return false;
+    }
+
+    $readUInt16 = static function ($offset) use ($content, $length) {
+        if ($offset < 0 || $offset + 2 > $length) {
+            return null;
+        }
+        $decoded = unpack('vvalue', substr($content, $offset, 2));
+        return is_array($decoded) && isset($decoded['value']) ? (int)$decoded['value'] : null;
+    };
+    $readUInt32 = static function ($offset) use ($content, $length) {
+        if ($offset < 0 || $offset + 4 > $length) {
+            return null;
+        }
+        $decoded = unpack('Vvalue', substr($content, $offset, 4));
+        return is_array($decoded) && isset($decoded['value']) ? (int)$decoded['value'] : null;
+    };
+
+    $fileType = $readUInt16(0);
+    $fileHeaderSize = $readUInt16(2);
+    $declaredLength = $readUInt32(4);
+    // RES_XML_TYPE=0x0003；长度必须精确匹配，避免误改普通文本或截断文件。
+    if ($fileType !== 0x0003 || $fileHeaderSize === null || $fileHeaderSize < 8
+        || $declaredLength === null || $declaredLength !== $length) {
+        return false;
+    }
+
+    // 读取字符串池，找出 URI 值为空的字符串索引。
+    $stringPoolOffset = $fileHeaderSize;
+    $stringPoolType = $readUInt16($stringPoolOffset);
+    $stringPoolHeaderSize = $readUInt16($stringPoolOffset + 2);
+    $stringPoolLength = $readUInt32($stringPoolOffset + 4);
+    if ($stringPoolType !== 0x0001 || $stringPoolHeaderSize === null || $stringPoolHeaderSize < 28
+        || $stringPoolLength === null || $stringPoolLength < $stringPoolHeaderSize
+        || $stringPoolOffset + $stringPoolLength > $length) {
+        return false;
+    }
+
+    $stringCount = $readUInt32($stringPoolOffset + 8);
+    $stringFlags = $readUInt32($stringPoolOffset + 16);
+    $stringsStart = $readUInt32($stringPoolOffset + 20);
+    if ($stringCount === null || $stringFlags === null || $stringsStart === null
+        || $stringPoolOffset + $stringPoolHeaderSize + ($stringCount * 4) > $length
+        || $stringPoolOffset + $stringsStart > $length) {
+        return false;
+    }
+
+    $emptyStringIndexes = [];
+    $isUtf8 = (($stringFlags & 0x00000100) !== 0);
+    $stringOffsetsOffset = $stringPoolOffset + $stringPoolHeaderSize;
+    $stringDataOffset = $stringPoolOffset + $stringsStart;
+    for ($index = 0; $index < $stringCount; $index++) {
+        $relativeOffset = $readUInt32($stringOffsetsOffset + ($index * 4));
+        if ($relativeOffset === null || $stringDataOffset + $relativeOffset >= $length) {
+            return false;
+        }
+        $stringOffset = $stringDataOffset + $relativeOffset;
+        if ($isUtf8) {
+            // UTF-8 字符串以长度字段开头；空字符串的第一个长度字节为 0。
+            if (ord($content[$stringOffset]) === 0) {
+                $emptyStringIndexes[$index] = true;
+            }
+        }
+        elseif ($stringOffset + 2 <= $length && $readUInt16($stringOffset) === 0) {
+            // UTF-16 字符串的空长度字段为 0。
+            $emptyStringIndexes[$index] = true;
+        }
+    }
+
+    $removedRanges = [];
+    $cursor = $fileHeaderSize;
+    while ($cursor < $length) {
+        $chunkType = $readUInt16($cursor);
+        $chunkHeaderSize = $readUInt16($cursor + 2);
+        $chunkLength = $readUInt32($cursor + 4);
+        if ($chunkType === null || $chunkHeaderSize === null || $chunkLength === null
+            || $chunkHeaderSize < 8 || $chunkLength < $chunkHeaderSize
+            || $cursor + $chunkLength > $length) {
+            return false;
+        }
+
+        // RES_XML_START_NAMESPACE_TYPE=0x0100，RES_XML_END_NAMESPACE_TYPE=0x0101。
+        // namespace chunk 的 URI 索引位于 chunk 起始偏移 +20。
+        if (($chunkType === 0x0100 || $chunkType === 0x0101) && $chunkLength >= 24) {
+            $uriIndex = $readUInt32($cursor + 20);
+            if ($uriIndex !== null && isset($emptyStringIndexes[$uriIndex])) {
+                $removedRanges[] = [$cursor, $cursor + $chunkLength];
+            }
+        }
+        $cursor += $chunkLength;
+    }
+
+    if (empty($removedRanges)) {
+        return true;
+    }
+
+    $normalized = '';
+    $lastOffset = 0;
+    foreach ($removedRanges as $range) {
+        $normalized .= substr($content, $lastOffset, $range[0] - $lastOffset);
+        $lastOffset = $range[1];
+    }
+    $normalized .= substr($content, $lastOffset);
+    $normalizedLength = strlen($normalized);
+    if ($normalizedLength < 8) {
+        return false;
+    }
+    $normalized = substr_replace($normalized, pack('V', $normalizedLength), 4, 4);
+    return file_put_contents($manifestPath, $normalized, LOCK_EX) === $normalizedLength;
+}
+
+/**
  * 预检测 ManifestEditor 是否能处理当前 Manifest。
  *
  * 检测在临时副本上执行，避免异常 AXML 让 ManifestEditor 生成 0 字节结果并破坏真实清单。
@@ -6642,7 +6772,9 @@ function canManifestEditorProcess($editorPath, $dirPath) {
 
     $cmd = 'java -jar ' . escapeshellarg($editorPath) . ' ' . escapeshellarg($tmpManifest) . ' -an ' . escapeshellarg('android.app.Application') . ' 2>&1';
     $output = shell_exec($cmd);
-    $ok = is_file($tmpNewManifest)
+    $normalized = normalizeManifestEditorAxmlEmptyNamespaces($tmpNewManifest);
+    $ok = $normalized
+        && is_file($tmpNewManifest)
         && filesize($tmpNewManifest) > 0
         && stripos((string)$output, 'Exception') === false
         && stripos((string)$output, 'failed') === false;
@@ -6695,7 +6827,9 @@ function updateManifest($editorPath, $dirPath, $className) {
     $cmd = 'java -jar ' . escapeshellarg($editorPath) . ' ' . escapeshellarg($manifest) . ' -an ' . escapeshellarg($className) . ' 2>&1';
     $output = shell_exec($cmd);
 
-    if (!is_file($newManifest) || filesize($newManifest) === 0 || stripos((string)$output, 'Exception') !== false) {
+    if (!normalizeManifestEditorAxmlEmptyNamespaces($newManifest)
+        || !is_file($newManifest) || filesize($newManifest) === 0
+        || stripos((string)$output, 'Exception') !== false) {
         echo "修改入口 ManifestEditor 输出异常：{$output}\n";
         return false;
     }
@@ -6784,7 +6918,9 @@ function fix_android_http_limit($editorPath, $dirPath, $className) {
     $cmd = 'java -jar ' . escapeshellarg($editorPath) . ' ' . escapeshellarg($manifest) . ' -aa ' . escapeshellarg($className) . ' 2>&1';
     $output = shell_exec($cmd);
 
-    if (!is_file($newManifest) || filesize($newManifest) === 0 || stripos((string)$output, 'Exception') !== false) {
+    if (!normalizeManifestEditorAxmlEmptyNamespaces($newManifest)
+        || !is_file($newManifest) || filesize($newManifest) === 0
+        || stripos((string)$output, 'Exception') !== false) {
         echo "修改 Manifest 属性输出异常：{$output}\n";
         return false;
     }
@@ -6813,7 +6949,9 @@ function debuggable($editorPath, $dirPath, $debuggable) {
     $cmd = 'java -jar ' . escapeshellarg($editorPath) . ' ' . escapeshellarg($manifest) . ' -d ' . escapeshellarg($debuggable) . ' 2>&1';
     $output = shell_exec($cmd);
 
-    if (!is_file($newManifest) || filesize($newManifest) === 0 || stripos((string)$output, 'Exception') !== false) {
+    if (!normalizeManifestEditorAxmlEmptyNamespaces($newManifest)
+        || !is_file($newManifest) || filesize($newManifest) === 0
+        || stripos((string)$output, 'Exception') !== false) {
         echo "debug ManifestEditor 输出异常：{$output}\n";
         return false;
     }
