@@ -132,26 +132,26 @@ if ($down_type === 'release') {
 }
 
 // 自定义模板优先于前端传入的旧式 name 参数，避免旧页面继续覆盖用户的下载名设置。
-$downloadTemplate = trim((string)($task['apk_download_name_template'] ?? ($app['download_name_template'] ?? '')));
-$templateDownloadName = '';
-if ($downloadTemplate !== '') {
-    $templateDownloadName = renderDownloadNameTemplate($downloadTemplate, [
-        'name' => (string)($task['apk_name'] ?? $app['name'] ?? ''),
-        'date' => date('Ymd'),
-        'version' => (string)($task['apk_version'] ?? $app['version'] ?? ''),
-        'package' => (string)($task['apk_package'] ?? $app['package'] ?? ''),
-        'appid' => (string)($task['apk_id'] ?? $app['id'] ?? ''),
-        'task_id' => (string)($task['id'] ?? ''),
-    ]);
-}
-
-// 确定最终下载文件名：模板、前端显式名称、任务应用名称、内部存储名依次回退。
 $fallbackDownloadName = basename($filename);
 if (!empty($task['apk_name'])) {
     $fallbackDownloadName = $task['apk_name'];
 } elseif (!empty($app['name'])) {
     $fallbackDownloadName = $app['name'];
 }
+$downloadTemplate = trim((string)($task['apk_download_name_template'] ?? ($app['download_name_template'] ?? '')));
+$templateContextName = !empty($task['apk_name'])
+    ? (string)$task['apk_name']
+    : (!empty($app['name']) ? (string)$app['name'] : $fallbackDownloadName);
+$templateDownloadName = renderDownloadNameTemplate($downloadTemplate, [
+    'name' => $templateContextName,
+    'date' => date('Ymd'),
+    'version' => (string)($task['apk_version'] ?? $app['version'] ?? ''),
+    'package' => (string)($task['apk_package'] ?? $app['package'] ?? ''),
+    'appid' => (string)($task['apk_id'] ?? $app['id'] ?? ''),
+    'task_id' => (string)($task['id'] ?? ''),
+]);
+
+// 确定最终下载文件名：模板、前端显式名称、任务应用名称、内部存储名依次回退。
 $downloadName = normalizeDownloadName($templateDownloadName !== '' ? $templateDownloadName : $downloadName, $fallbackDownloadName);
 $downloadCacheKey = buildDownloadCacheKey($filename, $downloadName);
 if (!$isCheck) {
@@ -713,6 +713,7 @@ function tryRedirectMissingRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, st
 
     $task = findInjectTaskByOutputFile($pdo, $filename);
     $defaultName = normalizeDownloadName($task['apk_name'] ?? '', basename($filename));
+    $usesDefaultTemplate = $task && trim((string)($task['download_name_template'] ?? '')) === '';
     // 自定义名称对应摘要对象键；历史记录中的旧对象可能仍带旧 Content-Disposition，
     // 改模板后必须重新探测当前名称对应的对象，不能直接复用旧记录。
     $hasCustomDownloadName = $downloadName !== '' && $downloadName !== $defaultName;
@@ -738,6 +739,17 @@ function tryRedirectMissingRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, st
             if (probePublicBucketUrl($url)) {
                 cacheAndRedirectBucketDownload($redis, $downloadCacheKey !== '' ? $downloadCacheKey : $filename, $url, 'bucket-recovered', $bucket['id']);
                 return true;
+            }
+
+            // 默认规则升级前的对象仍使用内部文件名作为对象键。仅对空模板回退探测，
+            // 自定义模板绝不复用旧对象，避免返回错误的 Content-Disposition。
+            if ($usesDefaultTemplate && $objectFileName !== basename($filename)) {
+                $legacyKey = 'release_downloads/' . $date . '/' . basename($filename);
+                $legacyUrl = buildBucketPublicUrl($bucket['domain'], $legacyKey);
+                if (probePublicBucketUrl($legacyUrl)) {
+                    cacheAndRedirectBucketDownload($redis, $downloadCacheKey !== '' ? $downloadCacheKey : $filename, $legacyUrl, 'bucket-legacy', $bucket['id']);
+                    return true;
+                }
             }
         }
     }

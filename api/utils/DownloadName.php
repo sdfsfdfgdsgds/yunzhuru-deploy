@@ -49,6 +49,17 @@ function downloadNameTemplatePlaceholders(): array
 }
 
 /**
+ * 返回空模板使用的默认下载名称模板。
+ *
+ * 模板保存在数据库时允许为空，空值表示跟随平台默认规则；统一在展开阶段
+ * 补齐日期和“云注入”后缀，避免不同下载端各自实现出不同的默认文件名。
+ */
+function defaultDownloadNameTemplate(): string
+{
+    return '{name}_{date}_云注入.apk';
+}
+
+/**
  * 校验并规范化下载名称模板。
  *
  * 空字符串代表清除自定义模板。未知占位符直接拒绝，避免保存后只能得到
@@ -93,10 +104,11 @@ function normalizeDownloadNameTemplate($template): string
  */
 function renderDownloadNameTemplate(string $template, array $context): string
 {
-    $template = normalizeDownloadNameTemplate($template);
+    $template = trim($template);
     if ($template === '') {
-        return '';
+        $template = defaultDownloadNameTemplate();
     }
+    $template = normalizeDownloadNameTemplate($template);
 
     $values = [
         'name' => trim((string)($context['name'] ?? $context['app_name'] ?? '未命名应用')),

@@ -898,11 +898,19 @@
             maxlength="120"
             show-word-limit
             clearable
-            placeholder="留空使用应用名称，例如：{name}_{version}_{date}">
+            placeholder="例如：{name}_{date}_云注入.apk">
           </el-input>
           <div class="download-name-help">
-            留空沿用应用名称。支持：<code v-for="token in downloadNameTokens" :key="token.key">{{ token.value }}</code>。
-            日期格式为 YYYYMMDD，保存时会阻止路径分隔符和文件名特殊字符。
+            点击变量即可插入：
+            <el-button
+              v-for="token in downloadNameTokens"
+              :key="token.key"
+              link
+              type="primary"
+              size="small"
+              @click="insertDownloadNameToken(token.key)">{{ token.value }}</el-button>。
+            默认模板为 <code>{name}_{date}_云注入.apk</code>，日期格式为 YYYYMMDD。
+            保存时会阻止路径分隔符和文件名特殊字符。
           </div>
           <el-alert
             :title="'预览：' + downloadNamePreview"
@@ -1200,7 +1208,7 @@
         const fileInput = ref(null);
         const downloadNameDialogVisible = ref(false);
         const downloadNameSaving = ref(false);
-        const downloadNameForm = reactive({ id: null, name: '', version: '', package: '', template: '' });
+        const downloadNameForm = reactive({ id: null, name: '', version: '', package: '', template: window.YunzhuruDownloadName.DEFAULT_TEMPLATE });
         const downloadNameTokens = Object.entries(window.YunzhuruDownloadName.TOKEN_LABELS)
           .map(([key, label]) => ({ key, value: `{${key}}（${label}）` }));
         const downloadNamePreview = computed(() => window.YunzhuruDownloadName.resolve(
@@ -1931,8 +1939,22 @@ const permissionOptions = [
           downloadNameForm.name = row && row.name ? row.name : '';
           downloadNameForm.version = row && row.version ? row.version : '';
           downloadNameForm.package = row && row.package ? row.package : '';
-          downloadNameForm.template = row && row.download_name_template ? row.download_name_template : '';
+          downloadNameForm.template = row && row.download_name_template
+            ? row.download_name_template
+            : window.YunzhuruDownloadName.DEFAULT_TEMPLATE;
           downloadNameDialogVisible.value = true;
+        }
+
+        /** 将点击的占位符插入模板扩展名前，便于直接组合文件名规则。 */
+        function insertDownloadNameToken(token) {
+          const value = `{${token}}`;
+          const current = String(downloadNameForm.template || '');
+          const extensionIndex = current.toLowerCase().lastIndexOf('.apk');
+          if (extensionIndex >= 0 && extensionIndex === current.length - 4) {
+            downloadNameForm.template = `${current.slice(0, extensionIndex)}${value}${current.slice(extensionIndex)}`;
+          } else {
+            downloadNameForm.template = `${current}${value}`;
+          }
         }
 
         async function saveDownloadNameSettings() {
@@ -2876,6 +2898,7 @@ onMounted(() => {
           downloadNameForm,
           downloadNameTokens,
           downloadNamePreview,
+          insertDownloadNameToken,
           openDownloadNameSettings,
           saveDownloadNameSettings,
           reuseHelpVisible,

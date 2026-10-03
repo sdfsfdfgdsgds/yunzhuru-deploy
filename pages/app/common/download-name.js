@@ -16,7 +16,7 @@
     appid: 'APPID',
     task_id: '任务 ID'
   });
-  const DEFAULT_TEMPLATE = '{name}';
+  const DEFAULT_TEMPLATE = '{name}_{date}_云注入.apk';
   const TOKEN_PATTERN = /\{(name|date|version|package|appid|task_id)\}/g;
   const INVALID_FILENAME_PATTERN = /[\\/\u0000-\u001f\u007f]/;
 
@@ -39,7 +39,7 @@
 
   /**
    * 展开下载文件名模板，并保证结果带有 APK 扩展名。
-   * 空模板沿用应用名称；未知占位符不参与替换，保存时由页面校验拒绝。
+   * 空模板使用“应用名_日期_云注入.apk”；未知占位符不参与替换，保存时由页面校验拒绝。
    */
   function resolve(template, context, date) {
     const source = context && typeof context === 'object' ? context : {};

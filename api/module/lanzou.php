@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . '/../utils/DownloadName.php';
+
 //获取我的蓝奏信息
 function getlanzou(PDO $pdo, array $input)
 {
@@ -99,15 +101,23 @@ function savefile(PDO $pdo, array $input) {
         throw new Exception('文件不存在,可能已被清理,请删除任务重新注入');
     }
 
-    // 查询应用名称
-    $stmt = $pdo->prepare("SELECT name FROM cainiao_apk WHERE id = :id LIMIT 1");
+    // 查询应用信息，并与普通下载入口共用下载名模板。蓝奏功能当前停用，
+    // 这里仍保留完整合同，后续重新启用时不会退回旧的应用名.apk 规则。
+    ensureApkDownloadNameTemplateColumn($pdo);
+    $stmt = $pdo->prepare("SELECT name, version, package, download_name_template FROM cainiao_apk WHERE id = :id LIMIT 1");
     $stmt->execute([':id' => $task['apk_id']]);
     $apk = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$apk || empty($apk['name'])) {
         throw new Exception('应用文件名为空,请先填好文件名');
     }
 
-    $name = $apk['name'] . '.apk';
+    $name = renderDownloadNameTemplate($apk['download_name_template'] ?? '', [
+        'name' => $apk['name'],
+        'version' => $apk['version'] ?? '',
+        'package' => $apk['package'] ?? '',
+        'appid' => $task['apk_id'],
+        'task_id' => $task['id'],
+    ]);
 
     // 检查蓝奏登录状态
     $data = Lanzou::checkLogin($user['lanzou_cookie']);
@@ -155,7 +165,6 @@ function savefile(PDO $pdo, array $input) {
 
     return $upload['data'];
 }
-
 
 
 
