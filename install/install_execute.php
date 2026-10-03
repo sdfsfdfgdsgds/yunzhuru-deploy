@@ -878,12 +878,25 @@ function installDatabase(PDO $pdo)
         $uriFields = [
             'config_id'     => "INT NOT NULL COMMENT '配置ID'",
             'remark'        => "TEXT NOT NULL COMMENT '备注'",
-            'class_name'    => "VARCHAR(200) NOT NULL COMMENT '类名'",
-            'uri_value'     => "VARCHAR(300) NOT NULL COMMENT 'URI值'",
+            // class_name/uri_value 保留给旧壳；通用 URL 规则使用结构化字段，
+            // 不再把浏览器 Activity 类名当作跨设备匹配条件。
+            'class_name'    => "VARCHAR(200) NOT NULL DEFAULT '' COMMENT '历史目标类名'",
+            'uri_value'     => "VARCHAR(300) NOT NULL DEFAULT '' COMMENT '历史 URI 值'",
+            'match_type'    => "VARCHAR(16) NOT NULL DEFAULT 'class' COMMENT '匹配类型：class/exact/prefix/contains/domain'",
+            'source_pattern'=> "VARCHAR(1000) NOT NULL DEFAULT '' COMMENT '来源 URL 匹配'",
+            'target_url'    => "VARCHAR(2048) NOT NULL DEFAULT '' COMMENT '通用规则目标 URL'",
+            'priority'      => "INT NOT NULL DEFAULT 0 COMMENT '匹配优先级，数值越大越先'",
+            'enabled'       => "TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用'",
             'created_at'    => "DATETIME NOT NULL COMMENT '创建时间'"
         ];
         addFieldsIfNotExist($pdo, $uriHijackTable, $uriFields);
         addForeignKeyIfNotExist($pdo, $uriHijackTable, 'config_id', $configTable, 'id');
+        addIndexIfNotExist(
+            $pdo,
+            $uriHijackTable,
+            'idx_uri_hijack_config_enabled_priority',
+            '`config_id`, `enabled`, `priority`, `id`'
+        );
 
         // --------------------
         // 14. SP 写入劫持表

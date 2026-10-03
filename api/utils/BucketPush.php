@@ -248,7 +248,8 @@ function pushConfigToBucketsUnlocked(PDO $pdo, int $appId, int $stateRetry = 3, 
                     '通杀拦截' => ['enable_popup_kill_all', 'kill_type'],
                     'activity拦截' => ['blackActivities'],
                     '关键词拦截' => ['enable_popup_keywords', 'popup_keywords'],
-                    'URI劫持' => ['replace'],
+                    // 保留旧 replace，同时复制 URL 优先规则，避免复用应用回退到类名匹配。
+                    'URI劫持' => ['replace', 'url_rules'],
                     '静默配置' => ['black_package', 'black_package_list'],
                     '包名检测' => ['black_package', 'new_black_package_list']
                 ];

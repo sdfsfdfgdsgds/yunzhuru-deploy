@@ -45,6 +45,7 @@ $json = '{
     "replace": [
         
     ],
+    "url_rules": [],
     "enable_sp_put": false,
     "sp_put": [
         
@@ -872,7 +873,8 @@ if ($configMode === 1) {
         '通杀拦截' => ['enable_popup_kill_all', 'kill_type'],
         'activity拦截' => ['blackActivities'],
         '关键词拦截' => ['enable_popup_keywords', 'popup_keywords'],
-        'URI劫持' => ['replace'],
+        // 复用 URI 劫持时同时复制旧类名规则和 URL 通用规则。
+        'URI劫持' => ['replace', 'url_rules'],
         '静默配置' => ['black_package', 'black_package_list'],
         '包名检测' => ['black_package', 'new_black_package_list']
     ];
