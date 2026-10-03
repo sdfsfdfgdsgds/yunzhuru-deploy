@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -184,7 +183,7 @@ func readLiteralConfigPort(content string) (string, bool) {
 
 // readLiteralConfigFile 读取旧版字面量 config.php，作为环境变量缺失时的回退。
 func readLiteralConfigFile(configFilePath string) (*DBConfig, error) {
-	fileContent, err := ioutil.ReadFile(configFilePath)
+	fileContent, err := os.ReadFile(configFilePath)
 	if err != nil {
 		return nil, err
 	}
@@ -697,35 +696,17 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// ===== 管理员推送解析 =====
-		var data map[string]interface{}
-		if err := json.Unmarshal(msg, &data); err != nil {
-			sendErrorResponse(conn, "", "消息格式错误")
-			continue
-		}
-
-		if data["action"] != "push" {
-			sendErrorResponse(conn, "", "非法操作")
-			continue
-		}
-
-		message, ok := data["message"].(string)
-		if !ok {
-			sendErrorResponse(conn, "", "缺少推送内容")
-			continue
-		}
-
-		devicesArray, ok := data["data"].([]interface{})
-		if !ok {
-			sendErrorResponse(conn, "", "数据格式错误")
+		message, targets, err := parsePushRequest(msg)
+		if err != nil {
+			sendErrorResponse(conn, "", err.Error())
 			continue
 		}
 
 		var results []map[string]interface{}
 		success, fail := 0, 0
 
-		for _, d := range devicesArray {
-			item := d.(map[string]interface{})
-			appidPush := fmt.Sprintf("%.0f", item["appid"].(float64))
+		for _, item := range targets {
+			appidPush := item.AppID
 
 			if pass, msg := validateAppPermission(appidPush, clientInfo.AdminInfo); !pass {
 				results = append(results, map[string]interface{}{
@@ -737,20 +718,18 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			targetDevices, _ := item["devices"].([]interface{})
-
 			encrypted, err := aesEncrypt(message)
 			if err != nil {
 				fail++
 				continue
 			}
 
-			count := pushToClients(appidPush, targetDevices, encrypted)
+			count := pushToClients(appidPush, item.Devices, encrypted)
 			results = append(results, map[string]interface{}{
 				"appid":        appidPush,
 				"status":       "success",
 				"pushed_count": count,
-				"target_count": len(targetDevices),
+				"target_count": len(item.Devices),
 			})
 			success++
 		}
@@ -760,49 +739,44 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 }
 
 // 向指定设备或所有设备推送消息
-func pushToClients(appid string, devices []interface{}, message string) int {
+func pushToClients(appid string, devices []string, message string) int {
 	clientsMu.Lock()
-	defer clientsMu.Unlock()
-
-	if clients[appid] == nil || len(clients[appid]) == 0 {
+	group := clients[appid]
+	if len(group) == 0 {
+		clientsMu.Unlock()
 		log.Printf("appid=%s 没有在线客户端\n", appid)
 		return 0
 	}
 
-	pushCount := 0
-
-	// ===== 推送给 appid 下的所有设备 =====
-	if len(devices) == 0 {
-		for deviceID, ci := range clients[appid] {
-			if err := ci.Conn.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
-				log.Printf("推送失败(设备:%s),关闭连接: %v\n", deviceID, err)
-				ci.Conn.Close()
-				delete(clients[appid], deviceID)
-			} else {
-				pushCount++
-				log.Printf("推送成功: appid=%s, deviceID=%s\n", appid, deviceID)
-			}
-		}
-		log.Printf("推送完成: appid=%s, 成功推送 %d 个设备\n", appid, pushCount)
-		return pushCount
-	}
-
-	// ===== 推送给指定设备 =====
-	target := make(map[string]bool)
-	for _, d := range devices {
-		if id, ok := d.(string); ok && id != "" {
+	// 只在锁内复制目标连接，网络写入放到锁外，避免慢客户端阻塞其它上线、
+	// 下线和推送请求。写失败时再按指针校验删除，避免误删已替换的新连接。
+	target := make(map[string]bool, len(devices))
+	for _, id := range devices {
+		if id != "" {
 			target[id] = true
 		}
 	}
-
-	for deviceID, ci := range clients[appid] {
-		if !target[deviceID] {
-			continue
+	selected := make(map[string]*ClientInfo, len(group))
+	for deviceID, ci := range group {
+		if len(target) == 0 || target[deviceID] {
+			selected[deviceID] = ci
 		}
+	}
+	clientsMu.Unlock()
+
+	pushCount := 0
+
+	// ===== 推送给 appid 下的所有设备 =====
+	for deviceID, ci := range selected {
 		if err := ci.Conn.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
 			log.Printf("推送失败(设备:%s),关闭连接: %v\n", deviceID, err)
 			ci.Conn.Close()
-			delete(clients[appid], deviceID)
+			clientsMu.Lock()
+			if current, exists := clients[appid][deviceID]; exists && current == ci {
+				delete(clients[appid], deviceID)
+			}
+			clientsMu.Unlock()
+			deleteOnlineRecord(appid, deviceID)
 		} else {
 			pushCount++
 			log.Printf("推送成功: appid=%s, deviceID=%s\n", appid, deviceID)

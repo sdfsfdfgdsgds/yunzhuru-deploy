@@ -1,28 +1,13 @@
 <?php
-//SP数据重写
-function getConfigIdByApk($pdo, $userId, $apkId, $isAdmin = false)
-{
-    if ($isAdmin) {
-        $stmt = $pdo->prepare("SELECT c.id FROM cainiao_apk_config c
-                               WHERE c.apk_id = :apk_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId]);
-    } else {
-        $stmt = $pdo->prepare("SELECT c.id FROM cainiao_apk_config c
-                               JOIN cainiao_apk a ON a.id = c.apk_id
-                               WHERE c.apk_id = :apk_id AND a.user_id = :user_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId, ':user_id' => $userId]);
-    }
 
-    return $stmt->fetchColumn();
-}
-
+require_once __DIR__ . '/../utils/ConfigAccess.php';
 
 // 获取SP重写配置列表
 function getList(PDO $pdo, array $input)
 {
     $user = Auth::check($pdo);
     $isAdmin = $user['role'] === 'admin';
-    $configId = getConfigIdByApk($pdo, $user['id'], $input['apk_id'],$isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $user['id'], $input['apk_id'],$isAdmin);
     if (!$configId) throw new Exception('配置不存在');
     Auth::reset_redis($input['apk_id']);
     $stmt = $pdo->prepare("SELECT id, sp_name, created_at FROM cainiao_sp_override_name WHERE config_id = :cid ORDER BY id DESC");
@@ -35,7 +20,7 @@ function add(PDO $pdo, array $input)
 {
     $user = Auth::check($pdo);
     $isAdmin = $user['role'] === 'admin';
-    $configId = getConfigIdByApk($pdo, $user['id'], $input['apk_id'],$isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $user['id'], $input['apk_id'],$isAdmin);
     if (!$configId) throw new Exception('配置不存在');
 
     $stmt = $pdo->prepare("INSERT INTO cainiao_sp_override_name (config_id, sp_name, created_at)

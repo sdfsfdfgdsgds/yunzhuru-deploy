@@ -1,19 +1,6 @@
 <?php
-// remote_dex.php（管理员不验证user_id，普通用户正常校验）
 
-// 公共方法：根据 apk_id 获取 config_id（管理员不校验 user_id）
-function getConfigIdByApk($pdo, $userId, $apkId, $isAdmin = false) {
-    if ($isAdmin) {
-        $stmt = $pdo->prepare("SELECT id FROM cainiao_apk_config WHERE apk_id = :apk_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId]);
-    } else {
-        $stmt = $pdo->prepare("SELECT c.id FROM cainiao_apk_config c
-                               JOIN cainiao_apk a ON a.id = c.apk_id
-                               WHERE c.apk_id = :apk_id AND a.user_id = :user_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId, ':user_id' => $userId]);
-    }
-    return $stmt->fetchColumn();
-}
+require_once __DIR__ . '/../utils/ConfigAccess.php';
 
 // 列表查询（管理员不校验 user_id）
 function getList(PDO $pdo, array $input) {
@@ -23,7 +10,7 @@ function getList(PDO $pdo, array $input) {
     $userId  = (int)$user['id'];
     $isAdmin = (($user['role'] ?? '') === 'admin');
 
-    $configId = getConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
     if (!$configId) throw new Exception('权限不足或配置不存在');
     Auth::reset_redis($input['apk_id']);
     $stmt = $pdo->prepare("SELECT id, url, class_name, method_name, enabled, remark, created_at 
@@ -96,7 +83,7 @@ function add(PDO $pdo, array $input) {
     $userId  = (int)$user['id'];
     $isAdmin = (($user['role'] ?? '') === 'admin');
 
-    $configId = getConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
     if (!$configId) throw new Exception('权限不足或配置不存在');
 
     $stmt = $pdo->prepare("INSERT INTO cainiao_remote_dex 

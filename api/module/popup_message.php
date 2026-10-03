@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . '/../utils/ConfigAccess.php';
+
 require_once __DIR__ . '/../utils/PopupClickStats.php';
 
 function getList1(PDO $pdo, array $input) {
@@ -12,7 +14,7 @@ function getList1(PDO $pdo, array $input) {
     $offset = ($page - 1) * $limit;
 
     // 获取配置ID
-    $configId = getConfigIdByApk($pdo, $userId, $apkId);
+    $configId = resolveConfigIdByApk($pdo, $userId, $apkId);
     if (!$configId) throw new Exception('配置不存在');
 
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM cainiao_popup_message WHERE config_id = :cid");
@@ -154,7 +156,7 @@ function addPopup(PDO $pdo, array $input) {
         $remark = '无';
     }
 
-    $configId = getConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
     if (!$configId) throw new Exception("配置不存在");
 
     $stmt = $pdo->prepare("INSERT INTO cainiao_popup_message (config_id, remark, enable, backgroundColor, title, message, exitpopus, `lock`)
@@ -740,19 +742,6 @@ function recordStat(PDO $pdo, array $input)
     return ['message' => 'ok'];
 }
 
-// 通用配置获取
-function getConfigIdByApk($pdo, $userId, $apkId, $isAdmin = false) {
-    if ($isAdmin) {
-        $stmt = $pdo->prepare("SELECT id FROM cainiao_apk_config WHERE apk_id = :apk_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId]);
-    } else {
-        $stmt = $pdo->prepare("SELECT c.id FROM cainiao_apk_config c 
-                               JOIN cainiao_apk a ON c.apk_id = a.id 
-                               WHERE c.apk_id = :apk_id AND a.user_id = :user_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId, ':user_id' => $userId]);
-    }
-    return $stmt->fetchColumn();
-}
 
 
 //20250626修复鉴权漏洞新增方法

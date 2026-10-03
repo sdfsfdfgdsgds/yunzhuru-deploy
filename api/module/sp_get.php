@@ -1,12 +1,6 @@
 <?php
 
-function getConfigIdByApk($pdo, $userId, $apkId) {
-    $stmt = $pdo->prepare("SELECT c.id FROM cainiao_apk_config c
-                           JOIN cainiao_apk a ON a.id = c.apk_id
-                           WHERE c.apk_id = :apk_id AND a.user_id = :user_id LIMIT 1");
-    $stmt->execute([':apk_id' => $apkId, ':user_id' => $userId]);
-    return $stmt->fetchColumn();
-}
+require_once __DIR__ . '/../utils/ConfigAccess.php';
 
 // 获取 SP 读取列表
 function getList(PDO $pdo, array $input) {
@@ -14,7 +8,7 @@ function getList(PDO $pdo, array $input) {
     $userId = (int)$user['id'];
     $apkId = (int)$input['apk_id'];
 
-    $configId = getConfigIdByApk($pdo, $userId, $apkId);
+    $configId = resolveConfigIdByApk($pdo, $userId, $apkId);
     if (!$configId) throw new Exception('未找到配置');
 
     $stmt = $pdo->prepare("SELECT * FROM cainiao_sp_get_name WHERE config_id = ? ORDER BY id DESC");
@@ -31,7 +25,7 @@ function add(PDO $pdo, array $input) {
 
     if (!$spName) throw new Exception('SP 名称不能为空');
 
-    $configId = getConfigIdByApk($pdo, $userId, $apkId);
+    $configId = resolveConfigIdByApk($pdo, $userId, $apkId);
     if (!$configId) throw new Exception('未找到配置');
 
     $stmt = $pdo->prepare("INSERT INTO cainiao_sp_get_name (config_id, sp_name, created_at) 

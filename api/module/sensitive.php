@@ -1,4 +1,6 @@
 <?php
+
+require_once __DIR__ . '/../utils/ConfigAccess.php';
 //包名检测
 function getList(PDO $pdo, array $input) {
     if (empty($input['apk_id'])) throw new Exception('缺少应用ID');
@@ -8,7 +10,7 @@ function getList(PDO $pdo, array $input) {
     $isAdmin = ($user['role'] ?? '') === 'admin';
 
     // 获取配置ID（管理员不验证user_id）
-    $configId = getConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
     if (!$configId) throw new Exception('权限不足或配置不存在');
     Auth::reset_redis($input['apk_id']);
     $stmt = $pdo->prepare("SELECT * FROM cainiao_sensitive_app WHERE config_id = :config_id ORDER BY id DESC");
@@ -27,7 +29,7 @@ function add(PDO $pdo, array $input) {
     $userId  = (int)$user['id'];
     $isAdmin = ($user['role'] ?? '') === 'admin';
 
-    $configId = getConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
     if (!$configId) {
         throw new Exception('权限不足或配置不存在');
     }
@@ -162,18 +164,4 @@ function delete(PDO $pdo, array $input) {
 
     Auth::afterConfigChange($pdo, $apkId);
     return ['message' => '删除成功'];
-}
-
-// 公共方法：根据 apk_id 获取 config_id（管理员不验证user_id）
-function getConfigIdByApk($pdo, $userId, $apkId, $isAdmin = false) {
-    if ($isAdmin) {
-        $stmt = $pdo->prepare("SELECT id FROM cainiao_apk_config WHERE apk_id = :apk_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId]);
-    } else {
-        $stmt = $pdo->prepare("SELECT c.id FROM cainiao_apk_config c
-                               JOIN cainiao_apk a ON a.id = c.apk_id
-                               WHERE c.apk_id = :apk_id AND a.user_id = :user_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId, ':user_id' => $userId]);
-    }
-    return $stmt->fetchColumn();
 }

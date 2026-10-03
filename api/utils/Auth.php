@@ -64,25 +64,7 @@ class Auth
             }
         }
 
-        // 更新 last_active 字段
-        
-        $ip = self::getRealIp();
-        /*$update = $pdo->prepare("UPDATE `$userTable` 
-            SET last_active = NOW(), ua = :ua, login_ip = :ip 
-            WHERE id = :id");
-        
-        $update->execute([
-            ':ua' => $uaType,
-            ':ip' => $ip,
-            ':id' => $user['id']
-        ]);*/
-        
-        // 仅记录处理后的设备信息（如需保留原始UA，可另存到ua_raw字段）
-        /*$update = $pdo->prepare("UPDATE `$userTable` SET last_active = NOW(), ua = :ua WHERE id = :id");
-        $update->execute([
-            ':ua' => $uaType,
-            ':id' => $user['id']
-        ]);*/
+        // 更新最近活跃时间和设备信息。
         if (!empty($appInfo)) {
             $update = $pdo->prepare("
                 UPDATE `$userTable`
@@ -119,6 +101,21 @@ class Auth
         // 返回用户完整信息
         return $user;
     }
+    /**
+     * 校验当前用户为管理员并返回用户信息。
+     *
+     * 服务管理、文件清理等管理入口统一调用此方法，避免每个 API 模块
+     * 重复实现相同的角色判断和错误消息。
+     */
+    public static function requireAdmin(PDO $pdo): array
+    {
+        $user = self::check($pdo);
+        if (($user['role'] ?? '') !== 'admin') {
+            throw new Exception('无权限操作，仅管理员可执行');
+        }
+        return $user;
+    }
+
     /**
      * 系统发送站内信（不受任何限制）
      * @param PDO $pdo 数据库句柄
@@ -355,7 +352,7 @@ class Auth
     }
     
     
-    public function getIpLocation($ip) {
+    public static function getIpLocation($ip) {
         static $searcher = null;
     
         if (!filter_var($ip, FILTER_VALIDATE_IP)) {

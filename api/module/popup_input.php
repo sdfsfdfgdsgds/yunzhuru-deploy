@@ -1,4 +1,6 @@
 <?php
+
+require_once __DIR__ . '/../utils/ConfigAccess.php';
 function getList1(PDO $pdo, array $input) {
     if (empty($input['apk_id'])) {
         throw new Exception('缺少应用ID');
@@ -149,7 +151,7 @@ function addPopup(PDO $pdo, array $input) {
     }
 
     // 获取配置ID
-    $configId = getConfigIdByApk($pdo, $userId, (int)$input['apk_id'], $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $userId, (int)$input['apk_id'], $isAdmin);
     if (!$configId) {
         throw new Exception('未找到配置或无权限');
     }
@@ -175,21 +177,6 @@ function addPopup(PDO $pdo, array $input) {
     return ['message' => '添加成功,别忘了添加按钮哦'];
 }
 
-function getConfigIdByApk($pdo, $userId, $apkId, $isAdmin = false)
-{
-    if ($isAdmin) {
-        $stmt = $pdo->prepare("SELECT c.id FROM cainiao_apk_config c
-                               WHERE c.apk_id = :apk_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId]);
-    } else {
-        $stmt = $pdo->prepare("SELECT c.id FROM cainiao_apk_config c
-                               JOIN cainiao_apk a ON a.id = c.apk_id
-                               WHERE c.apk_id = :apk_id AND a.user_id = :user_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId, ':user_id' => $userId]);
-    }
-
-    return $stmt->fetchColumn();
-}
 
 function editPopup(PDO $pdo, array $input) {
     if (empty($input['id'])) {
@@ -505,29 +492,7 @@ function getLists(PDO $pdo, array $input) {
     return ['whitelist' => $whitelist, 'blacklist' => $blacklist];
 }
 
-/*function addWhitelist(PDO $pdo, array $input) {
-    $stmt = $pdo->prepare("INSERT INTO cainiao_popup_input_whitelist (popup_id, class_name, created_at, remark) VALUES (?, ?, NOW(), ?)");
-    $stmt->execute([$input['popup_id'], $input['class_name'], $input['remark']]);
-    return ['message' => '添加成功'];
-}
 
-function addBlacklist(PDO $pdo, array $input) {
-    $stmt = $pdo->prepare("INSERT INTO cainiao_popup_input_blacklist (popup_id, class_name, created_at, remark) VALUES (?, ?, NOW(), ?)");
-    $stmt->execute([$input['popup_id'], $input['class_name'], $input['remark']]);
-    return ['message' => '添加成功'];
-}
-
-function deleteWhitelist(PDO $pdo, array $input) {
-    $stmt = $pdo->prepare("DELETE FROM cainiao_popup_input_whitelist WHERE id = ?");
-    $stmt->execute([$input['id']]);
-    return ['message' => '删除成功'];
-}
-
-function deleteBlacklist(PDO $pdo, array $input) {
-    $stmt = $pdo->prepare("DELETE FROM cainiao_popup_input_blacklist WHERE id = ?");
-    $stmt->execute([$input['id']]);
-    return ['message' => '删除成功'];
-}*/
 
 //20260227重写4个方法，修复越权漏洞
 function addWhitelist(PDO $pdo, array $input)

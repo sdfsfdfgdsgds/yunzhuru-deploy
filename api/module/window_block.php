@@ -1,4 +1,6 @@
 <?php
+
+require_once __DIR__ . '/../utils/ConfigAccess.php';
 //activity拦截
 function getList(PDO $pdo, array $input) {
     $user = Auth::check($pdo);
@@ -7,7 +9,7 @@ function getList(PDO $pdo, array $input) {
     if ($apkId <= 0) throw new Exception('参数错误');
     $isAdmin = ($user['role'] ?? '') === 'admin';
 
-    $configId = getConfigIdByApk($pdo, $userId, $apkId, $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $userId, $apkId, $isAdmin);
     if (!$configId) throw new Exception('未找到配置');
     Auth::reset_redis($apkId);
     $stmt = $pdo->prepare("SELECT id, class_name, remark, created_at 
@@ -27,7 +29,7 @@ function add(PDO $pdo, array $input) {
         throw new Exception('参数错误');
     }
 
-    $configId = getConfigIdByApk($pdo, $userId, $apkId, $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $userId, $apkId, $isAdmin);
     if (!$configId) throw new Exception('无权限或配置不存在');
 
     $stmt = $pdo->prepare("INSERT INTO cainiao_window_class (config_id, class_name, remark, created_at)
@@ -108,17 +110,4 @@ function delete(PDO $pdo, array $input) {
 
     Auth::afterConfigChange($pdo, $apkId);
     return ['message' => '删除成功'];
-}
-
-function getConfigIdByApk($pdo, $userId, $apkId, $isAdmin = false) {
-    if ($isAdmin) {
-        $stmt = $pdo->prepare("SELECT id FROM cainiao_apk_config WHERE apk_id = :apk_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId]);
-    } else {
-        $stmt = $pdo->prepare("SELECT c.id FROM cainiao_apk_config c
-                               JOIN cainiao_apk a ON a.id = c.apk_id
-                               WHERE c.apk_id = :apk_id AND a.user_id = :user_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId, ':user_id' => $userId]);
-    }
-    return $stmt->fetchColumn();
 }

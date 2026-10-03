@@ -1,25 +1,13 @@
 <?php
-//关键词拦截
-function getConfigIdByApk($pdo, $userId, $apkId, $isAdmin = false) {
-    if ($isAdmin) {
-        $stmt = $pdo->prepare("SELECT id FROM cainiao_apk_config WHERE apk_id = :apk_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId]);
-    } else {
-        $stmt = $pdo->prepare("SELECT c.id FROM cainiao_apk_config c
-                               JOIN cainiao_apk a ON a.id = c.apk_id
-                               WHERE c.apk_id = :apk_id AND a.user_id = :user_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId, ':user_id' => $userId]);
-    }
-    return $stmt->fetchColumn();
-}
 
+require_once __DIR__ . '/../utils/ConfigAccess.php';
 
 // 关键词管理
 function getKeywords(PDO $pdo, array $input) {
     if (empty($input['apk_id'])) throw new Exception('缺少应用ID');
     $user = Auth::check($pdo);
     $isAdmin = ($user['role'] ?? '') === 'admin';
-    $configId = getConfigIdByApk($pdo, $user['id'], $input['apk_id'], $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $user['id'], $input['apk_id'], $isAdmin);
     if (!$configId) throw new Exception('权限不足');
     Auth::reset_redis($input['apk_id']);
     $stmt = $pdo->prepare("SELECT id, keyword, type, new_keyword, clickAction, clickText, created_at FROM cainiao_keyword WHERE config_id = ?");
@@ -37,7 +25,7 @@ function addKeyword(PDO $pdo, array $input) {
     $isAdmin = ($user['role'] ?? '') === 'admin';
 
     // 管理员不验证用户ID
-    $configId = getConfigIdByApk($pdo, $user['id'], $input['apk_id'], $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $user['id'], $input['apk_id'], $isAdmin);
     if (!$configId) {
         throw new Exception('权限不足');
     }
@@ -145,7 +133,7 @@ function getBlockedTypes(PDO $pdo, array $input) {
     $userId = (int)$user['id'];
     $isAdmin = ($user['role'] ?? '') === 'admin';
 
-    $configId = getConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
     if (!$configId) throw new Exception('权限不足');
     Auth::reset_redis($input['apk_id']);
     $stmt = $pdo->prepare("
@@ -165,7 +153,7 @@ function addBlockedType(PDO $pdo, array $input) {
     $userId = (int)$user['id'];
     $isAdmin = ($user['role'] ?? '') === 'admin';
 
-    $configId = getConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
     if (!$configId) throw new Exception('权限不足');
 
     // 检查是否已有相同记录

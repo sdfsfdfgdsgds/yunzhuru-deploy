@@ -1,4 +1,6 @@
 <?php
+
+require_once __DIR__ . '/../utils/ConfigAccess.php';
 function getHtmlPopupList(PDO $pdo, array $input)
 {
     $user = Auth::check($pdo);
@@ -217,7 +219,7 @@ function addHtmlPopup(PDO $pdo, array $input)
         if (empty($input[$key])) throw new Exception("缺少参数：$key");
     }
 
-    $configId = getConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
     if (!$configId) throw new Exception("配置不存在");
     if(!$user['isVip']){
         $max = Auth::getSetting($pdo,"html","5");
@@ -527,22 +529,4 @@ function deleteBlacklist(PDO $pdo, array $input)
     if ($apkId > 0) Auth::afterConfigChange($pdo, $apkId);
 
     return ['message' => '删除成功'];
-}
-
-
-// 工具函数：通过应用 ID 获取配置 ID
-function getConfigIdByApk($pdo, $userId, $apkId, $isAdmin = false)
-{
-    if ($isAdmin) {
-        $stmt = $pdo->prepare("SELECT c.id FROM cainiao_apk_config c
-                               WHERE c.apk_id = :apk_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId]);
-    } else {
-        $stmt = $pdo->prepare("SELECT c.id FROM cainiao_apk_config c
-                               JOIN cainiao_apk a ON a.id = c.apk_id
-                               WHERE c.apk_id = :apk_id AND a.user_id = :user_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId, ':user_id' => $userId]);
-    }
-
-    return $stmt->fetchColumn();
 }

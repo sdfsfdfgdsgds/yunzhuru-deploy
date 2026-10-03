@@ -1,17 +1,6 @@
 <?php
-// 获取配置ID（管理员不验证user_id）
-function getConfigIdByApk($pdo, $userId, $apkId, $isAdmin = false) {
-    if ($isAdmin) {
-        $stmt = $pdo->prepare("SELECT id FROM cainiao_apk_config WHERE apk_id = :apk_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId]);
-    } else {
-        $stmt = $pdo->prepare("SELECT c.id FROM cainiao_apk_config c
-                               JOIN cainiao_apk a ON a.id = c.apk_id
-                               WHERE c.apk_id = :apk_id AND a.user_id = :user_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId, ':user_id' => $userId]);
-    }
-    return $stmt->fetchColumn();
-}
+
+require_once __DIR__ . '/../utils/ConfigAccess.php';
 
 // 关键词视图：查询（管理员不验证user_id）
 function getViews(PDO $pdo, array $input) {
@@ -19,7 +8,7 @@ function getViews(PDO $pdo, array $input) {
     $user = Auth::check($pdo);
     $isAdmin = ($user['role'] ?? '') === 'admin';
 
-    $configId = getConfigIdByApk($pdo, $user['id'], $input['apk_id'], $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $user['id'], $input['apk_id'], $isAdmin);
     if (!$configId) throw new Exception('权限不足');
     Auth::reset_redis($input['apk_id']);
     $stmt = $pdo->prepare("SELECT id, activity, view_class, view_id, visibility, clickable, imageview, textview, clickAction, clickText, enabled, created_at
@@ -38,7 +27,7 @@ function addView(PDO $pdo, array $input) {
     $user = Auth::check($pdo);
     $isAdmin = ($user['role'] ?? '') === 'admin';
 
-    $configId = getConfigIdByApk($pdo, $user['id'], $input['apk_id'], $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $user['id'], $input['apk_id'], $isAdmin);
     if (!$configId) throw new Exception('权限不足');
 
     $stmt = $pdo->prepare("INSERT INTO cainiao_view 

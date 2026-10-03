@@ -1019,43 +1019,7 @@ function getIpLocation($ip) {
 
     return $result;
 }
-/*
-function getIpLocation($ip) {
-    static $searcher = null;
-    if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-        return [
-            'ip' => $ip,
-            'country' => '',
-            'region' => '',
-            'city' => '',
-            'isp' => '',
-            'location' => '无效IP'
-        ];
-    }
 
-    if ($searcher === null) {
-        $dbFile = __DIR__ . '/bin/ip2region.xdb';
-        $searcher = XdbSearcher::newWithFileOnly($dbFile);
-    }
-    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-        // IPv4，正常查询
-        $region = $searcher->search($ip);
-    } else {
-        // IPv6 或无效 IP，跳过或自定义处理
-        $region = "IPV6未知";
-    }
-    //$region = $searcher->search($ip);
-    $parts = explode('|', $region);
-
-    return [
-        'ip' => $ip,
-        'country' => $parts[0] ?? '',
-        'region' => $parts[2] ?? '',
-        'city' => $parts[3] ?? '',
-        'isp' => $parts[4] ?? '',
-        'location' => trim(($parts[0] ?? '') . ' ' . ($parts[2] ?? '') . ' ' . ($parts[3] ?? ''))
-    ];
-}*/
 function getClientIp(): string {
     if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
         // 多级代理会返回多个IP，取第一个

@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . '/../utils/ApkNameHeuristics.php';
+
 require_once __DIR__ . '/../utils/DeletedApp.php';
 require_once __DIR__ . '/../utils/AppPhysicalDelete.php';
 require_once __DIR__ . '/../utils/AppConfigInvalidation.php';
@@ -41,136 +43,7 @@ function cleanupExpiredOssDownloadFiles(PDO $pdo) {
     return $lastResult;
 }
 
-/*function getMyAppList(PDO $pdo, array $input)
-{
-    $user = Auth::check($pdo);
-    $userId = $user['id'];
 
-    $table = 'cainiao_apk';
-
-    $page = isset($input['page']) && is_numeric($input['page']) ? max(1, (int)$input['page']) : 1;
-    $limit = isset($input['limit']) && is_numeric($input['limit']) ? max(1, (int)$input['limit']) : 20;
-    $offset = ($page - 1) * $limit;
-
-    //$where = "WHERE user_id = :user_id";
-    //$params = [':user_id' => $userId];
-    $params = [];
-    
-    $where = "WHERE 1=1";
-
-    if($user['role'] !== 'admin'){
-        $where .= " AND user_id = :user_id";
-        $params = [':user_id' => $userId];
-    }else if($user['role'] == 'admin'){
-        if (!empty($input['uid'])) {
-        $where .= " AND user_id LIKE :user_id";
-        $params[':user_id'] = $input['uid'];
-    }
-    }
-    
-
-    if (!empty($input['name'])) {
-        $where .= " AND name LIKE :name";
-        $params[':name'] = '%' . $input['name'] . '%';
-    }
-    
-    if (!empty($input['appid'])) {
-        $where .= " AND id LIKE :id";
-        $params[':id'] = $input['appid'];
-    }
-
-    if (!empty($input['version'])) {
-        $where .= " AND version LIKE :version";
-        $params[':version'] = '%' . $input['version'] . '%';
-    }
-
-    if (!empty($input['package'])) {
-        $where .= " AND package LIKE :package";
-        $params[':package'] = '%' . $input['package'] . '%';
-    }
-    //获取上传保留最长天数
-    $uploadday = (int)Auth::getSetting($pdo, "uploadday", "3");
-    $delete_app = autoClearExpiredAppFile($pdo, $uploadday);//自动删除过期安装包
-    
-    //获取可用总容量
-    $storageMB = (int)Auth::getSetting($pdo, "storage", "500");
-    $now = date('Y-m-d H:i:s');
-    $isVip = isset($user['vip_expire_time']) && $user['vip_expire_time'] > $now;
-    if ($isVip) {
-        $storageMB = (int)Auth::getSetting($pdo, "vipstorage", "5120");
-    } else {
-        $storageMB = (int)Auth::getSetting($pdo, "storage", "512");
-    }
-    if ($user['role'] == 'admin') {
-        // 获取当前目录所在分区的可用空间（单位：字节）
-        $freeBytes = disk_free_space(__DIR__);
-        // 转换为 MB，向下取整
-        $storageMB = (int)($freeBytes / 1024 / 1024);//管理员没用可用总空间，而是返回服务器剩余空间
-    }
-    $storageGB = round($storageMB / 1024, 2); // 保留2位小数
-    $totalBytes = $storageGB * 1024 * 1024 * 1024;
-    // 计算已用容量（单位字节）
-    if ($user['role'] === 'admin') {
-        $stmt = $pdo->query("SELECT SUM(size) FROM `$table`");
-        $usedBytes = (int)$stmt->fetchColumn();
-    } else {
-        $stmt = $pdo->prepare("SELECT SUM(size) FROM `$table` WHERE user_id = :uid");
-        $stmt->execute([':uid' => $userId]);
-        $usedBytes = (int)$stmt->fetchColumn();
-    }
-    // 已用容量 GB，保留两位小数
-    $usedGB = round($usedBytes / (1024 * 1024 * 1024), 2);
-    $usedPercent = $totalBytes > 0 ? round($usedBytes / $totalBytes * 100, 2) : 0;
-    
-    // 获取总数
-    $countStmt = $pdo->prepare("SELECT COUNT(*) FROM `$table` $where");
-    $countStmt->execute($params);
-    $total = (int)$countStmt->fetchColumn();
-    $pages = (int)ceil($total / $limit);
-
-    // 获取数据
-    $dataStmt = $pdo->prepare("SELECT * FROM `$table` $where ORDER BY id DESC LIMIT :offset, :limit");
-    foreach ($params as $key => $val) {
-        $dataStmt->bindValue($key, $val);
-    }
-    $dataStmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-    $dataStmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-    $dataStmt->execute();
-
-    $list = $dataStmt->fetchAll(PDO::FETCH_ASSOC);
-
-    // 查询被复用应用的信息并附加
-    foreach ($list as &$app) {
-        if ($app['config_mode'] == 1 && !empty($app['reuse_apk_id'])) {
-            $stmt = $pdo->prepare("SELECT name, package FROM `$table` WHERE id = :id LIMIT 1");
-            $stmt->execute([':id' => $app['reuse_apk_id']]);
-            $reuseInfo = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($reuseInfo) {
-                $app['reuse_apk_name'] = $reuseInfo['name'];
-                $app['reuse_apk_package'] = $reuseInfo['package'];
-            } else {
-                $app['reuse_apk_name'] = '';
-                $app['reuse_apk_package'] = '';
-            }
-        } else {
-            $app['reuse_apk_name'] = '';
-            $app['reuse_apk_package'] = '';
-        }
-        
-    }
-
-    return [
-        'list'  => $list,
-        'total' => $total,
-        'pages' => $pages,
-        'page'  => $page,
-        'used_storage' => $usedGB,
-        'total_storage'=> $storageGB,
-        'used_percent' => $usedPercent,
-        //'delete_app' => $delete_app,
-        //'delete_day' => $uploadday
-    ];
-}*/
 
 // 确保旧库也具备“可作为复用目标”的应用标记字段，避免部署后列表接口直接报错。
 function ensureApkReusableColumn(PDO $pdo): void
@@ -3608,7 +3481,6 @@ function hasLaunchActivity(string $apkPath): bool
         return false;
     }
 
-    $cmd = "aapt2 dump xmltree {$apkPath} --file AndroidManifest.xml";
     $cmd = 'aapt2 dump xmltree ' . escapeshellarg($apkPath) . ' --file AndroidManifest.xml';
     $output = shell_exec($cmd);
     if (!$output) {
@@ -3962,131 +3834,6 @@ function extractApkIcon_aapt(string $apkPath, string $outputDir, string $outputN
 
 
 
-//上传加固检测,特征检测
-function isApkObfuscated1($apkPath, $pdo) {
-    if (!file_exists($apkPath)) {
-        throw new Exception("APK 文件不存在: " . $apkPath);
-    }
-    $startTime = microtime(true); // 开始计时
-    // 预定义加固/混淆类型及其关键词和提示语
-    $rules = [
-        [
-            'type' => '大纸片混淆',
-            'keywords' => ['大纸片'],
-            'message' => '检测到大纸片混淆'
-        ],
-        [
-            'type' => '360加固',
-            'keywords' => ['libjiagu.so', 'libprotectClass.so', 'libsecmain.so','libjiagu_a64.so','libjiagu_x64.so'],
-            'message' => '检测到 360 加固'
-        ],
-        [
-            'type' => 'Epic加固',
-            'keywords' => ['Epic.vmp', 'Epic_dexs'],
-            'message' => '检测到 Epic 加固'
-        ],
-        [
-            'type' => '腾讯加固',
-            'keywords' => ['libshell-super.so', 'libtencentloc.so'],
-            'message' => '检测到 腾讯加固'
-        ],
-        [
-            'type' => '梆梆加固',
-            'keywords' => ['libsecexe.so', 'libsecpreload.so'],
-            'message' => '检测到 梆梆加固'
-        ],
-        [
-            'type' => '百度加固',
-            'keywords' => ['baiduprotect'],
-            'message' => '检测到 百度加固'
-        ],
-        [
-            'type' => '通用混淆',
-            'keywords' => ['混淆', 'obfuscate', 'libjiagu_x64.so', 'libjiagu_a64.so', 'jiagu', 'oOo0o','OoO0o'],
-            'message' => '检测到混淆加固迹象'
-        ],
-        [
-            'type' => '深思数盾',
-            'keywords' => ['l********_a32.so','l********_a64.so','l********_x64.so','l********_x86.so'],
-            'message' => '检测到深思数盾加固迹象'
-        ],
-        [
-            'type' => '云镜',
-            'keywords' => ['by_yunjing'],
-            'message' => '检测到云镜加固'
-        ]
-    ];
-
-    // 调用 unzip -l 获取文件列表
-    $cmd = "nice -n 19 ionice -c2 -n7 unzip -l " . escapeshellarg($apkPath). " | grep -viE '^.*res/'";
-    $output = shell_exec($cmd);
-
-    if (!$output) {
-        throw new Exception("无法解析 APK 文件，unzip 执行失败");
-    }
-
-    $apkMd5 = md5_file($apkPath);
-    $lines = explode("\n", strtolower($output)); // 全部转小写，统一匹配
-
-    foreach ($rules as $rule) {
-        foreach ($rule['keywords'] as $keyword) {
-            if (is_array($keyword)) {
-                $allMatched = true;
-                foreach ($keyword as $subKeyword) {
-                    $matched = false;
-                    $pattern = '/^.*' . str_replace('\*', '.*', preg_quote(strtolower($subKeyword), '/')) . '.*$/';
-                    foreach ($lines as $line) {
-                        if (preg_match($pattern, $line)) {
-                            $matched = true;
-                            break;
-                        }
-                    }
-                    if (!$matched) {
-                        $allMatched = false;
-                        break;
-                    }
-                }
-                if ($allMatched) {
-                    $timeUsed = round((microtime(true) - $startTime) * 1000); // 毫秒
-                    return [
-                        'matched' => true,
-                        'type' => $rule['type'],
-                        'message' => $rule['message']. "（耗时 {$timeUsed}ms）"
-                    ];
-                }
-            } else {
-                // 支持 MD5 直接匹配
-                if (strtolower($keyword) === strtolower($apkMd5)) {
-                    $timeUsed = round((microtime(true) - $startTime) * 1000); // 毫秒
-                    return [
-                        'matched' => true,
-                        'type' => $rule['type'],
-                        'message' => $rule['message']. "（耗时 {$timeUsed}ms）"
-                    ];
-                }
-
-                // 支持通配匹配（* 转为正则）
-                $pattern = '/^.*' . str_replace('\*', '.*', preg_quote(strtolower($keyword), '/')) . '.*$/';
-                foreach ($lines as $line) {
-                    if (preg_match($pattern, $line)) {
-                        $timeUsed = round((microtime(true) - $startTime) * 1000); // 毫秒
-                        return [
-                            'matched' => true,
-                            'type' => $rule['type'],
-                            'message' => $rule['message']. "（耗时 {$timeUsed}ms）"
-                        ];
-                    }
-                }
-            }
-        }
-    }
-    $timeUsed = round((microtime(true) - $startTime) * 1000); // 毫秒
-    return [
-        'matched' => false,
-        'type' => '',
-        'message' => '未检测到已知混淆或加固'. "（耗时 {$timeUsed}ms）"
-    ];
-}
 //上传加固检测,特征检测 PHP内置方法实现
 function isApkObfuscated($apkPath, $pdo) {
     if (!file_exists($apkPath)) {
@@ -4185,7 +3932,7 @@ function isApkObfuscated($apkPath, $pdo) {
     
     $garbledCount = 0;
     foreach ($lines as $line) {
-        if (isGarbledName($line,$ascii)) {
+        if (isGarbledApkName($line, $ascii)) {
             $garbledCount++;
         }
     }
@@ -4258,21 +4005,6 @@ function isApkObfuscated($apkPath, $pdo) {
         'message' => '未检测到已知混淆或加固'. "（耗时 {$timeUsed}ms）"
     ];
 }
-//乱码检测
-function isGarbledName($name, $ascii = 0.4) {
-    if($ascii<0.4){
-        $ascii=0.4;
-    }
-    if($ascii>1){
-        $ascii=1;
-    }
-    $totalLength = mb_strlen($name, 'UTF-8');
-    if ($totalLength === false || $totalLength === 0) return false;
-    $asciiCount = preg_match_all('/[\x20-\x7E]/', $name);
-    $nonAsciiRatio = 1 - ($asciiCount / $totalLength);
-    return $nonAsciiRatio > $ascii;//「非 ASCII 字符比例 > 40%」认为是乱码
-}
-
 //框架应用特征检测
 function detectApkFramework($apkPath) {
     if (!file_exists($apkPath)) {

@@ -1,4 +1,6 @@
 <?php
+
+require_once __DIR__ . '/../utils/ConfigAccess.php';
 //通杀拦截
 function getPopupTypes(PDO $pdo, array $input = null) {
     // 获取所有弹窗类型，用于下拉选择
@@ -53,7 +55,7 @@ function addKill(PDO $pdo, array $input) {
     $userId = (int)$user['id'];
     $apkId = (int)$input['apk_id'];
     $isAdmin = $user['role'] === 'admin';
-    $configId = getConfigIdByApk($pdo, $userId, $apkId, $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $userId, $apkId, $isAdmin);
     if (!$configId) throw new Exception('配置不存在或无权限');
     //throw new Exception('功能暂时不可用');
     //throw new Exception('测试:' . $configId .'|'. $input['popup_id']);
@@ -109,23 +111,5 @@ function deleteKill(PDO $pdo, array $input) {
     }
 
     return ['message' => '删除成功'];
-}
-
-
-// 工具方法：通过 apk_id 获取 config_id
-function getConfigIdByApk($pdo, $userId, $apkId, $isAdmin = false) {
-    if ($isAdmin) {
-        $stmt = $pdo->prepare("SELECT id FROM cainiao_apk_config WHERE apk_id = :apk_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId]);
-    } else {
-        $stmt = $pdo->prepare("
-            SELECT c.id FROM cainiao_apk_config c
-            JOIN cainiao_apk a ON a.id = c.apk_id
-            WHERE c.apk_id = :apk_id AND a.user_id = :user_id LIMIT 1
-        ");
-        $stmt->execute([':apk_id' => $apkId, ':user_id' => $userId]);
-    }
-
-    return $stmt->fetchColumn();
 }
 

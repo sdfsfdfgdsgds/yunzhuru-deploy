@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . '/../utils/ConfigAccess.php';
+
 require_once __DIR__ . '/../utils/PopupClickStats.php';
 function getList2(PDO $pdo, array $input)
 {
@@ -224,7 +226,7 @@ function addPopup(PDO $pdo, array $input)
     }
 
     // 根据 apk_id 和当前用户ID 获取配置ID
-    $configId = getConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
+    $configId = resolveConfigIdByApk($pdo, $userId, $input['apk_id'], $isAdmin);
     if (!$configId) {
         throw new Exception("配置不存在");
     }
@@ -855,21 +857,4 @@ function recordStat(PDO $pdo, array $input)
     ")->execute([$popupId, $type, $buttonIndex, $clickType, $clickText, $deviceId]);
 
     return ['message' => 'ok'];
-}
-
-// 工具函数：通过应用 ID 获取配置 ID
-function getConfigIdByApk($pdo, $userId, $apkId, $isAdmin = false)
-{
-    if ($isAdmin) {
-        $stmt = $pdo->prepare("SELECT c.id FROM cainiao_apk_config c
-                               WHERE c.apk_id = :apk_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId]);
-    } else {
-        $stmt = $pdo->prepare("SELECT c.id FROM cainiao_apk_config c
-                               JOIN cainiao_apk a ON a.id = c.apk_id
-                               WHERE c.apk_id = :apk_id AND a.user_id = :user_id LIMIT 1");
-        $stmt->execute([':apk_id' => $apkId, ':user_id' => $userId]);
-    }
-
-    return $stmt->fetchColumn();
 }

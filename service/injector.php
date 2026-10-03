@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/../api/utils/BucketFeature.php';
+require_once __DIR__ . '/../api/utils/ApkNameHeuristics.php';
 
 /**
  * 注入逻辑核心入口
@@ -6138,7 +6139,7 @@ function isApkObfuscated($apkPath, $pdo) {
 
     $garbledCount = 0;
     foreach ($lines as $line) {
-        if (isGarbledName($line,$ascii)) {
+        if (isGarbledApkName($line, $ascii)) {
             $garbledCount++;
         }
     }
@@ -6211,22 +6212,6 @@ function isApkObfuscated($apkPath, $pdo) {
         'message' => '未知'. "（耗时 {$timeUsed}ms）"
     ];
 }
-//乱码检测
-function isGarbledName($name, $ascii = 0.4) {
-    if($ascii<0.4){
-        $ascii=0.4;
-    }
-    if($ascii>1){
-        $ascii=1;
-    }
-    $totalLength = mb_strlen($name, 'UTF-8');
-    if ($totalLength === false || $totalLength === 0) return false;
-    $asciiCount = preg_match_all('/[\x20-\x7E]/', $name);
-    $nonAsciiRatio = 1 - ($asciiCount / $totalLength);
-    return $nonAsciiRatio > $ascii;//「非 ASCII 字符比例 > 40%」认为是乱码
-}
-
-
 /**
  * 将 $srcRoot/lib 目录（含所有子目录与文件）覆盖到 $dstRoot/lib。
  * 若目标 lib 不存在则创建；若已存在则整体覆盖（会删除目标中多余文件）。
