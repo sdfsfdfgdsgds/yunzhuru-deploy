@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/../utils/ApkNameHeuristics.php';
+require_once __DIR__ . '/../utils/DownloadName.php';
 
 require_once __DIR__ . '/../utils/DeletedApp.php';
 require_once __DIR__ . '/../utils/AppPhysicalDelete.php';
@@ -76,6 +77,7 @@ function getMyAppList(PDO $pdo, array $input)
 
     $table = 'cainiao_apk';
     ensureApkReusableColumn($pdo);
+    ensureApkDownloadNameTemplateColumn($pdo);
     ensureApkDeleteMarkerTable($pdo);
 
     $page = isset($input['page']) && is_numeric($input['page']) ? max(1, (int)$input['page']) : 1;
@@ -4385,6 +4387,7 @@ function updateAppInfo(PDO $pdo, array $input)
     $userId = (int)$user['id'];
     $apkTable = 'cainiao_apk';
     ensureApkReusableColumn($pdo);
+    ensureApkDownloadNameTemplateColumn($pdo);
     ensureApkDeleteMarkerTable($pdo);
 
     if (empty($input['id']) || !is_numeric($input['id'])) {
@@ -4433,6 +4436,10 @@ function updateAppInfo(PDO $pdo, array $input)
     if (isset($input['name'])) {
         $fields[] = "name = :name";
         $params[':name'] = trim($input['name']);
+    }
+    if (array_key_exists('download_name_template', $input)) {
+        $fields[] = "download_name_template = :download_name_template";
+        $params[':download_name_template'] = normalizeDownloadNameTemplate($input['download_name_template']);
     }
     //修改app卡密解绑授权码
     if (isset($input['app_key'])) {
@@ -5521,6 +5528,7 @@ function getUnifiedTaskList(PDO $pdo, array $input)
 {
     $user = Auth::check($pdo);
     $userId = (int)$user['id'];
+    ensureApkDownloadNameTemplateColumn($pdo);
 
     $page  = max(1, intval($input['page'] ?? 1));
     $limit = max(1, intval($input['limit'] ?? 20));
@@ -5612,6 +5620,7 @@ function getUnifiedTaskList(PDO $pdo, array $input)
             a.name    AS apk_name,
             a.version AS apk_version,
             a.package AS apk_package,
+            a.download_name_template,
     
             s.name    AS sign_name,
             s.alias   AS sign_alias,
@@ -5645,6 +5654,15 @@ function getUnifiedTaskList(PDO $pdo, array $input)
             t.completed_at,
             t.size,
             t.injected_apk,
+
+            NULL        AS network,
+            NULL        AS vpncheck,
+            NULL        AS launcher,
+            NULL        AS debug,
+            NULL        AS killsign,
+            NULL        AS killpath,
+            NULL        AS dexmerge,
+            NULL        AS confuse,
     
             '加固任务' AS template_name,
             t.type      AS template_version,
@@ -5655,18 +5673,11 @@ function getUnifiedTaskList(PDO $pdo, array $input)
             NULL AS tv,
             NULL AS jiagu,
             NULL AS isMainProcess,
-            NULL AS network,
-            NULL AS vpncheck,
-            NULL AS launcher,
-            NULL AS debug,
-            NULL AS killsign,
-            NULL AS killpath,
-            NULL AS dexmerge,
-            NULL AS confuse,
     
             a.name    AS apk_name,
             a.version AS apk_version,
             a.package AS apk_package,
+            a.download_name_template,
     
             s.name    AS sign_name,
             s.alias   AS sign_alias,
@@ -5710,6 +5721,7 @@ function getJiaguTaskList(PDO $pdo, array $input)
 {
     $user = Auth::check($pdo);
     $userId = (int)$user['id'];
+    ensureApkDownloadNameTemplateColumn($pdo);
 
     $page  = max(1, intval($input['page'] ?? 1));
     $limit = max(1, intval($input['limit'] ?? 20));
@@ -5757,6 +5769,7 @@ function getJiaguTaskList(PDO $pdo, array $input)
             a.name     AS apk_name,
             a.version  AS apk_version,
             a.package  AS apk_package,
+            a.download_name_template,
 
             s.name     AS sign_name,
             s.alias    AS sign_alias
@@ -5858,6 +5871,7 @@ function getInjectTaskList(PDO $pdo, array $input)
 {
     $user = Auth::check($pdo);
     $userId = (int)$user['id'];
+    ensureApkDownloadNameTemplateColumn($pdo);
 
     $page = max(1, intval($input['page'] ?? 1));
     $limit = max(1, intval($input['limit'] ?? 20));
@@ -5896,6 +5910,7 @@ function getInjectTaskList(PDO $pdo, array $input)
         SELECT 
             t.*, 
             a.name AS apk_name, a.version AS apk_version, a.package AS apk_package,
+            a.download_name_template,
             tpl.name AS template_name, tpl.version AS template_version,
             CASE
                 WHEN COALESCE(t.sign_id, 0) = 0 THEN '随机签名'

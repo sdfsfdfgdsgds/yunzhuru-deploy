@@ -2,7 +2,6 @@
 
 $filename = $_GET['file'] ?? '';
 $downloadName = $_GET['name'] ?? '';
-$downloadCacheKey = buildDownloadCacheKey($filename, $downloadName);
 $isCheck = isset($_GET['check']) && $_GET['check'] === '1';
 $debug = $_GET['debug'] ?? '';//如果有值，则不记录高速下载次数
 $debug_pass = 'yunzhuru';
@@ -20,17 +19,12 @@ if (!defined('OSS_SIGNED_URL_MIN_SECONDS')) {
 
 require_once __DIR__ . '/config/redis.php';
 $redis = getRedisConnection(5);
-$exists = $redis->get($downloadCacheKey);
-if($exists !== false){
-    header('X-Download-Source: cached-redirect');
-    header("location:{$exists}");
-    exit;
-}
 
 
 
 set_time_limit(0); // 脚本永不超时
 require_once __DIR__ . '/config/db.php';
+require_once __DIR__ . '/api/utils/DownloadName.php';
 ini_set("max_execution_time", 0);
 
 $uploadDir = __DIR__ . '/uploads/';
@@ -41,11 +35,16 @@ foreach (glob($utilsDir . '*.php') as $file) {
     require_once $file;
 }
 $ossObj = new OSS();
+ensureApkDownloadNameTemplateColumn($pdo);
 //初始化数据库和OSS对象
 
 
 
 
+
+$app = [];
+$task = [];
+$appTmpDir = '';
 
 //
 if (strpos($filename, '.build.aligned.signed.apk') !== false) {
@@ -117,7 +116,54 @@ if($down_type == 'uploads'){
     }
 }
 
-if ((!$filePath || !file_exists($filePath)) && tryRedirectMissingRailwayReleaseDownloadViaBuckets($pdo, $redis, $down_type, $filename)) {
+// 下载名配置在读取重定向缓存之前解析，改名后不会复用旧名称的缓存。
+if ($down_type === 'release') {
+    $stmtTask = $pdo->prepare("
+        SELECT t.*, a.name AS apk_name, a.version AS apk_version,
+               a.package AS apk_package, a.download_name_template AS apk_download_name_template
+        FROM `cainiao_inject_task` t
+        LEFT JOIN `cainiao_apk` a ON a.id = t.apk_id
+        WHERE t.injected_apk = :filename
+        LIMIT 1
+    ");
+    $stmtTask->execute([':filename' => $filename]);
+    $task = $stmtTask->fetch(PDO::FETCH_ASSOC);
+    if (!$task) $task = [];
+}
+
+// 自定义模板优先于前端传入的旧式 name 参数，避免旧页面继续覆盖用户的下载名设置。
+$downloadTemplate = trim((string)($task['apk_download_name_template'] ?? ($app['download_name_template'] ?? '')));
+$templateDownloadName = '';
+if ($downloadTemplate !== '') {
+    $templateDownloadName = renderDownloadNameTemplate($downloadTemplate, [
+        'name' => (string)($task['apk_name'] ?? $app['name'] ?? ''),
+        'date' => date('Ymd'),
+        'version' => (string)($task['apk_version'] ?? $app['version'] ?? ''),
+        'package' => (string)($task['apk_package'] ?? $app['package'] ?? ''),
+        'appid' => (string)($task['apk_id'] ?? $app['id'] ?? ''),
+        'task_id' => (string)($task['id'] ?? ''),
+    ]);
+}
+
+// 确定最终下载文件名：模板、前端显式名称、任务应用名称、内部存储名依次回退。
+$fallbackDownloadName = basename($filename);
+if (!empty($task['apk_name'])) {
+    $fallbackDownloadName = $task['apk_name'];
+} elseif (!empty($app['name'])) {
+    $fallbackDownloadName = $app['name'];
+}
+$downloadName = normalizeDownloadName($templateDownloadName !== '' ? $templateDownloadName : $downloadName, $fallbackDownloadName);
+$downloadCacheKey = buildDownloadCacheKey($filename, $downloadName);
+if (!$isCheck) {
+    $exists = $redis->get($downloadCacheKey);
+    if ($exists !== false) {
+        header('X-Download-Source: cached-redirect');
+        header("location:{$exists}");
+        exit;
+    }
+}
+
+if ((!$filePath || !file_exists($filePath)) && tryRedirectMissingRailwayReleaseDownloadViaBuckets($pdo, $redis, $down_type, $filename, $downloadName, $downloadCacheKey)) {
     exit;
 }
 
@@ -179,15 +225,6 @@ if($down_type == 'release'){
     
     header("IP:{$ip}");
     header("IpLocation:" . iconv('UTF-8', 'GBK', $IpLocation));
-    $stmtTask = $pdo->prepare("
-        SELECT t.*, a.name AS apk_name
-        FROM `cainiao_inject_task` t
-        LEFT JOIN `cainiao_apk` a ON a.id = t.apk_id
-        WHERE t.injected_apk = :filename
-        LIMIT 1
-    ");
-    $stmtTask->execute([':filename' => $filename]);
-    $task = $stmtTask->fetch(PDO::FETCH_ASSOC);
     if (!$task) {
         // 没有找到任务
         $task = [];
@@ -209,12 +246,6 @@ if($down_type == 'release'){
     }
 }
 
-// 确定最终下载文件名：优先使用前端传入的应用名，其次回退到任务关联的应用名，最后才使用内部存储文件名。
-$fallbackDownloadName = basename($filePath);
-if (!empty($task['apk_name'])) {
-    $fallbackDownloadName = $task['apk_name'];
-}
-$downloadName = normalizeDownloadName($downloadName, $fallbackDownloadName);
 //此时已经拿到了全部参数了
 if($_GET['debug'] == 'yunzhuru'){
     $oss = false;//调试机不走oss通道下载
@@ -620,7 +651,12 @@ function tryRedirectRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, string $d
         return false;
     }
 
-    $objectKey = 'release_downloads/' . date('Ymd') . '/' . basename($filename);
+    // 同一制品允许按不同模板下载；将名称摘要纳入对象键，避免公开桶上旧
+    // Content-Disposition 覆盖新名称。未自定义名称时保持历史键，便于旧对象恢复。
+    $objectBaseName = basename($filename);
+    $defaultName = normalizeDownloadName($task['apk_name'] ?? '', $objectBaseName);
+    $objectFileName = buildReleaseDownloadObjectFileName($objectBaseName, $downloadName, $defaultName);
+    $objectKey = 'release_downloads/' . date('Ymd') . '/' . $objectFileName;
     $contentDisposition = buildContentDispositionHeaderValue($downloadName);
     foreach ($buckets as $bucket) {
         try {
@@ -670,16 +706,20 @@ function buildBucketPublicUrl(string $domain, string $objectKey): string {
     return rtrim($domain, '/') . '/' . $encodedKey;
 }
 
-function tryRedirectMissingRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, string $downType, string $filename): bool {
+function tryRedirectMissingRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, string $downType, string $filename, string $downloadName = '', string $downloadCacheKey = ''): bool {
     if ($downType !== 'release' || !isRailwayRuntime()) {
         return false;
     }
 
     $task = findInjectTaskByOutputFile($pdo, $filename);
-    if ($task) {
+    $defaultName = normalizeDownloadName($task['apk_name'] ?? '', basename($filename));
+    // 自定义名称对应摘要对象键；历史记录中的旧对象可能仍带旧 Content-Disposition，
+    // 改模板后必须重新探测当前名称对应的对象，不能直接复用旧记录。
+    $hasCustomDownloadName = $downloadName !== '' && $downloadName !== $defaultName;
+    if ($task && !$hasCustomDownloadName) {
         foreach (buildRecordedBucketUrlCandidates($pdo, (int)$task['id']) as $candidate) {
             if (probePublicBucketUrl($candidate['url'])) {
-                cacheAndRedirectBucketDownload($redis, $filename, $candidate['url'], 'bucket-record', $candidate['bucket_id']);
+                cacheAndRedirectBucketDownload($redis, $downloadCacheKey !== '' ? $downloadCacheKey : $filename, $candidate['url'], 'bucket-record', $candidate['bucket_id']);
                 return true;
             }
         }
@@ -692,10 +732,11 @@ function tryRedirectMissingRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, st
 
     foreach (loadReleaseDownloadBuckets($pdo) as $bucket) {
         foreach ($dates as $date) {
-            $objectKey = 'release_downloads/' . $date . '/' . basename($filename);
+            $objectFileName = buildReleaseDownloadObjectFileName(basename($filename), $downloadName, $defaultName);
+            $objectKey = 'release_downloads/' . $date . '/' . $objectFileName;
             $url = buildBucketPublicUrl($bucket['domain'], $objectKey);
             if (probePublicBucketUrl($url)) {
-                cacheAndRedirectBucketDownload($redis, $filename, $url, 'bucket-recovered', $bucket['id']);
+                cacheAndRedirectBucketDownload($redis, $downloadCacheKey !== '' ? $downloadCacheKey : $filename, $url, 'bucket-recovered', $bucket['id']);
                 return true;
             }
         }
@@ -707,9 +748,12 @@ function tryRedirectMissingRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, st
 function findInjectTaskByOutputFile(PDO $pdo, string $filename) {
     try {
         $stmt = $pdo->prepare("
-            SELECT id, injected_apk, created_at, completed_at
-            FROM cainiao_inject_task
-            WHERE injected_apk = :filename
+            SELECT t.id, t.injected_apk, t.created_at, t.completed_at,
+                   a.name AS apk_name, a.version AS apk_version, a.package AS apk_package,
+                   a.download_name_template
+            FROM cainiao_inject_task t
+            LEFT JOIN cainiao_apk a ON a.id = t.apk_id
+            WHERE t.injected_apk = :filename
             LIMIT 1
         ");
         $stmt->execute([':filename' => $filename]);

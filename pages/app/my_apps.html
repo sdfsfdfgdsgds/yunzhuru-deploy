@@ -9,6 +9,7 @@
   <script src="/element/js/vue.global.js"></script>
   <script src="/element/js/index.full.js"></script>
   <script src="/pages/app/common/config-entry-data-viewer.js"></script>
+  <script src="/pages/app/common/download-name.js"></script>
   <script src="/config.js"></script>
   <style>
     .toolbar {
@@ -143,6 +144,20 @@
     }
     .static-api-evidence {
       margin-top: 12px;
+    }
+    .download-name-help {
+      margin-top: 6px;
+      color: #7b879c;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .download-name-help code {
+      display: inline-block;
+      margin: 2px 4px 2px 0;
+      padding: 1px 5px;
+      color: #334155;
+      background: #f1f5f9;
+      border-radius: 4px;
     }
     /* 表格与分页共用同一响应式布局边界；弹层期根宽度统一由公共稳定器管理。 */
     .app-list-layout-frame {
@@ -406,7 +421,7 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="操作" width="320">
+      <el-table-column label="操作" width="370">
         <template #default="scope">
           <el-tooltip v-if="!scope.row.path" content="安装包不存在,请重传" placement="top" effect="dark">
               <el-button type="primary" size="small" disabled>注入</el-button>
@@ -419,6 +434,7 @@
               <el-button type="primary" size="small" disabled>下载</el-button>
           </el-tooltip>
           <el-button v-else size="small" type="success"  @click="downloadInjected(scope.row)">下载</el-button>
+          <el-button size="small" type="info" @click="openDownloadNameSettings(scope.row)">下载名</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -870,6 +886,38 @@
       </template>
     </el-dialog>
 
+    <!-- 下载名只保存模板，实际下载时按当前应用和任务展开。 -->
+    <el-dialog v-model="downloadNameDialogVisible" title="下载名设置" width="560px">
+      <el-form :model="downloadNameForm" label-width="100px">
+        <el-form-item label="应用">
+          <span>[{{ downloadNameForm.id || '-' }}] {{ downloadNameForm.name || '-' }}</span>
+        </el-form-item>
+        <el-form-item label="文件名模板">
+          <el-input
+            v-model="downloadNameForm.template"
+            maxlength="120"
+            show-word-limit
+            clearable
+            placeholder="留空使用应用名称，例如：{name}_{version}_{date}">
+          </el-input>
+          <div class="download-name-help">
+            留空沿用应用名称。支持：<code v-for="token in downloadNameTokens" :key="token.key">{{ token.value }}</code>。
+            日期格式为 YYYYMMDD，保存时会阻止路径分隔符和文件名特殊字符。
+          </div>
+          <el-alert
+            :title="'预览：' + downloadNamePreview"
+            type="info"
+            :closable="false"
+            style="margin-top: 10px;">
+          </el-alert>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="downloadNameDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="downloadNameSaving" @click="saveDownloadNameSettings">保存</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 固定桶是制品证据；API 域名是当前控制面实时列表，两者分页展示以避免倒推历史 APK。 -->
     <el-dialog
       v-model="staticBucketDialogVisible"
@@ -1127,7 +1175,7 @@
   </div>
 
   <script>
-    const { createApp, ref, reactive, watch, onMounted, nextTick } = Vue;
+    const { createApp, ref, reactive, computed, watch, onMounted, nextTick } = Vue;
 
     createApp({
       components: {
@@ -1150,6 +1198,15 @@
         const tableData = ref([]);
         const total = ref(0);
         const fileInput = ref(null);
+        const downloadNameDialogVisible = ref(false);
+        const downloadNameSaving = ref(false);
+        const downloadNameForm = reactive({ id: null, name: '', version: '', package: '', template: '' });
+        const downloadNameTokens = Object.entries(window.YunzhuruDownloadName.TOKEN_LABELS)
+          .map(([key, label]) => ({ key, value: `{${key}}（${label}）` }));
+        const downloadNamePreview = computed(() => window.YunzhuruDownloadName.resolve(
+          downloadNameForm.template,
+          downloadNameForm
+        ));
         // 固定桶快照只消费后端明确返回的公开字段，避免用当前桶配置改写历史制品事实。
         const STATIC_BUCKET_STATE = Object.freeze({
           verified: { label: '已核验', type: 'success', alert: 'success' },
@@ -1861,9 +1918,57 @@ const permissionOptions = [
           showDownloadConfirm.value = false;
           if (pendingDownloadRow) {
             const row = pendingDownloadRow;
-            const url = '/down.php?file=' + encodeURIComponent(row.path) + '&name=' + encodeURIComponent(row.name);
+            const downloadName = window.YunzhuruDownloadName.resolve(row.download_name_template, row);
+            const url = '/down.php?file=' + encodeURIComponent(row.path) + '&name=' + encodeURIComponent(downloadName);
             window.open(url, '_blank');
             pendingDownloadRow = null;
+          }
+        }
+
+        /** 打开独立下载名设置，避免修改应用名称时误改下载规则。 */
+        function openDownloadNameSettings(row) {
+          downloadNameForm.id = row && row.id ? row.id : null;
+          downloadNameForm.name = row && row.name ? row.name : '';
+          downloadNameForm.version = row && row.version ? row.version : '';
+          downloadNameForm.package = row && row.package ? row.package : '';
+          downloadNameForm.template = row && row.download_name_template ? row.download_name_template : '';
+          downloadNameDialogVisible.value = true;
+        }
+
+        async function saveDownloadNameSettings() {
+          const validationError = window.YunzhuruDownloadName.validateTemplate(downloadNameForm.template);
+          if (validationError) {
+            ElementPlus.ElMessage.warning(validationError);
+            return;
+          }
+          if (!downloadNameForm.id) {
+            ElementPlus.ElMessage.warning('应用信息已失效，请刷新后重试');
+            return;
+          }
+          if (downloadNameSaving.value) return;
+          downloadNameSaving.value = true;
+          try {
+            const res = await fetch('/api/index.php?module=app&method=updateAppInfo', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                id: downloadNameForm.id,
+                download_name_template: String(downloadNameForm.template || '').trim()
+              })
+            });
+            const json = await res.json();
+            if (json.code !== 200) {
+              ElementPlus.ElMessage.error(json.message || '下载名保存失败');
+              return;
+            }
+            const target = tableData.value.find(item => Number(item.id) === Number(downloadNameForm.id));
+            if (target) target.download_name_template = String(downloadNameForm.template || '').trim();
+            ElementPlus.ElMessage.success('下载名设置已保存');
+            downloadNameDialogVisible.value = false;
+          } catch (error) {
+            ElementPlus.ElMessage.error('请求失败：' + (error.message || '请稍后重试'));
+          } finally {
+            downloadNameSaving.value = false;
           }
         }
         function goToInjected() {
@@ -2766,6 +2871,13 @@ onMounted(() => {
           killpath,
           debug,
           downloadInjected,
+          downloadNameDialogVisible,
+          downloadNameSaving,
+          downloadNameForm,
+          downloadNameTokens,
+          downloadNamePreview,
+          openDownloadNameSettings,
+          saveDownloadNameSettings,
           reuseHelpVisible,
           mode,
           selectedPermissions,

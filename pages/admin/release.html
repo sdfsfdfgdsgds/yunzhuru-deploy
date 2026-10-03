@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/element/css/index.css">
   <script src="/element/js/vue.global.js"></script>
   <script src="/element/js/index.full.js"></script>
+  <script src="/pages/app/common/download-name.js"></script>
   <script src="/config.js"></script>
   <style>
     body { padding: 20px; }
@@ -135,7 +136,17 @@
             ElementPlus.ElMessage.warning('文件路径不存在');
             return;
           }
-          const url = '/down.php?file=' + encodeURIComponent(row.injected_apk) + '&name=' + encodeURIComponent(row.apk_name);
+          const downloadName = window.YunzhuruDownloadName.resolve(
+            row.download_name_template || row.apk_download_name_template,
+            {
+              name: row.apk_name,
+              version: row.apk_version,
+              package: row.apk_package,
+              appid: row.apk_id,
+              task_id: row.id
+            }
+          );
+          const url = '/down.php?file=' + encodeURIComponent(row.injected_apk) + '&name=' + encodeURIComponent(downloadName);
           window.open(url, '_blank');
         }
 

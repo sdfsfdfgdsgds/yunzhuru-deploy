@@ -9,6 +9,7 @@
   <script src="/element/js/vue.global.js"></script>
   <script src="/element/js/index.full.js"></script>
   <script src="/pages/app/common/config-entry-data-viewer.js"></script>
+  <script src="/pages/app/common/download-name.js"></script>
   <script src="/config.js"></script>
   <style>
     body { padding: 20px; }
@@ -1387,8 +1388,18 @@ function previewImage(url) {
             return;
           }
 
+          const downloadName = window.YunzhuruDownloadName.resolve(
+            row.download_name_template || row.apk_download_name_template,
+            {
+              name: row.apk_name,
+              version: row.apk_version,
+              package: row.apk_package,
+              appid: row.apk_id,
+              task_id: row.id
+            }
+          );
           const confirm = await ElementPlus.ElMessageBox.confirm(
-            `您确定要下载<span style="color: red">注入后</span>的【${row.apk_name}】吗？`,
+            `您确定要下载<span style="color: red">注入后</span>的【${row.apk_name}】吗？<br><span style="color: #909399">文件名：${downloadName}</span>`,
             '提示',
             {
               type: 'warning',
@@ -1400,7 +1411,7 @@ function previewImage(url) {
         
           const fullUrl = location.origin + '/down.php?file=' +
             encodeURIComponent(row.injected_apk) +
-            '&name=' + encodeURIComponent(row.apk_name);
+            '&name=' + encodeURIComponent(downloadName);
         
           const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
         

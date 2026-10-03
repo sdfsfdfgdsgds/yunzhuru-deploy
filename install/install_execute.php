@@ -293,6 +293,7 @@ function installDatabase(PDO $pdo)
 
         $apkFields = [
             'name'           => "VARCHAR(100) NOT NULL COMMENT 'APK 名称'",
+            'download_name_template' => "VARCHAR(255) NOT NULL DEFAULT '' COMMENT 'APK 下载名称模板'",
             'version'        => "VARCHAR(50) NOT NULL COMMENT '版本号'",
             'icon'           => "VARCHAR(50) DEFAULT 'android.png' COMMENT '应用图标文件名'",
             'package'        => "VARCHAR(100) NOT NULL COMMENT '包名'",

@@ -463,6 +463,7 @@ function delete_release_useless(PDO $pdo, array $input) {
 
 function getCompiledList(PDO $pdo, array $input)
 {
+    ensureApkDownloadNameTemplateColumn($pdo);
     $user = Auth::check($pdo);
     if ($user['role'] !== 'admin') {
         throw new Exception('无权访问');
@@ -481,6 +482,7 @@ function getCompiledList(PDO $pdo, array $input)
         SELECT 
             t.*, 
             a.name AS apk_name, a.version AS apk_version, a.package AS apk_package,
+            a.download_name_template,
             tpl.name AS template_name, tpl.version AS template_version,
             s.name AS sign_name, s.alias AS sign_alias,
             u.nickname AS user_name,
@@ -554,4 +556,3 @@ function deleteCompiledFile(PDO $pdo, array $input)
     Auth::sendSystemMessage($pdo, $user['id'], $task['user_id'], '【任务删除提醒】您的注入任务“'.$task['remark'].'”的已编译文件已被删除清理,如需要安装包,请重新注入');
     return ['message' => 'APK 文件已删除，任务记录已保留'];
 }
-
