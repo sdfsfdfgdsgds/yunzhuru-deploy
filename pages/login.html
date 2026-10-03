@@ -879,6 +879,9 @@
                 </el-form-item>
               </div>
 
+              <!--
+                验证码登录控件暂时屏蔽，保留原代码以便后续恢复。
+                当前登录由后端统一使用 captcha="0" 占位，不再请求验证码图片。
               <div class="login-motion login-motion-field" style="--motion-delay: 200ms">
                 <div class="field-label">验证码</div>
                 <el-form-item prop="captcha">
@@ -888,6 +891,7 @@
                   </div>
                 </el-form-item>
               </div>
+              -->
 
               <div class="form-options login-motion" style="--motion-delay: 230ms">
                 <el-checkbox class="law-checkbox" v-model="form.agreeLaw">
@@ -993,16 +997,17 @@
           const form = reactive({
             username: '',
             password: '',
-            captcha: '',
+            // 验证码功能暂时关闭；保留字段以兼容登录接口和后续恢复入口。
+            captcha: '0',
             agreeLaw: false
           });
 
           const rules = {
             username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
-            password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
-            captcha: [{ required: true, message: '请输入验证码', trigger: 'blur' }]
+            password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
           };
 
+          /* 验证码功能暂时关闭，原实现保留如下。
           const captchaUrl = ref(getCaptchaUrl());
           function getCaptchaUrl() {
             return `/captcha.php?time=${Date.now()}`;
@@ -1017,9 +1022,21 @@
               }
             );
           };
+          /*
           function refreshCaptcha() {
             captchaUrl.value = getCaptchaUrl();
           }
+          */
+          const handleForgotPassword = () => {
+            ElementPlus.ElMessageBox.alert(
+              '密码不能找回,只能重置(因为管理员也不知道你的密码)，如需重置请联系管理员QQ:2380494437。',
+              '忘记密码提示',
+              {
+                confirmButtonText: '我知道了',
+                type: 'warning',
+              }
+            );
+          };
 
           function handleLogin() {
             if (loginLoading.value || !formRef.value) return;
@@ -1055,12 +1072,10 @@
                   window.location.href = "/console.html";
                 } else {
                   ElementPlus.ElMessage.error(json.message || '登录失败');
-                  refreshCaptcha();
                 }
               } catch (err) {
                 console.error('登录异常：', err);
                 ElementPlus.ElMessage.error('请求失败，请稍后再试');
-                refreshCaptcha();
               } finally {
                 loginLoading.value = false;
               }
@@ -1137,8 +1152,6 @@
             formRef,
             loginLoading,
             rules,
-            captchaUrl,
-            refreshCaptcha,
             handleLogin,
             showRegister,
             registerForm,
