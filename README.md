@@ -46,7 +46,8 @@ git push origin main
 
 ## 文件说明
 
-- `Dockerfile`：当前 Railway 构建文件。
+- `Dockerfile`：当前 Railway 构建文件；镜像构建阶段会从 `websocket/main.go` 与
+  `websocket/push_protocol.go` 编译 Linux `amd64` 运行文件，避免沿用旧的 `ws.ws`。
 - `entrypoint.sh`：读取环境变量、等待外部 MySQL、准备持久目录并启动 supervisor。
 - `router.php`：公开路径白名单、健康探针和静态资源路由。
 - `supervisord.conf`：PHP、业务 worker、配置失效 worker、API 域名池 worker。

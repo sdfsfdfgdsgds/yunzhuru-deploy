@@ -1,3 +1,13 @@
+# WebSocket 服务必须从当前源码构建，避免把历史预编译 ws.ws 当成最新版本发布。
+# 使用固定 Go 版本复现 server/websocket/go.mod 的 go 1.22.2 合同。
+FROM golang:1.22.2-bookworm AS websocket-builder
+WORKDIR /src/websocket
+COPY websocket/go.mod websocket/go.sum ./
+RUN go mod download
+COPY websocket/main.go websocket/push_protocol.go ./
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -buildvcs=false -o /out/ws.ws .
+
 FROM php:7.4-cli-bullseye
 
 # 系统依赖（含 Android 注入工具链）
@@ -39,6 +49,9 @@ RUN python3 -m pip install --no-cache-dir --disable-pip-version-check \
     -r /tmp/requirements-dex-gate.txt
 
 COPY . /var/www/html/
+# 覆盖仓库内可能遗留的预编译文件，确保运行文件与本次源码提交一致。
+COPY --from=websocket-builder /out/ws.ws /var/www/html/websocket/ws.ws
+RUN chmod 755 /var/www/html/websocket/ws.ws
 RUN chmod 777 /var/www/html/temp
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY entrypoint.sh /entrypoint.sh
