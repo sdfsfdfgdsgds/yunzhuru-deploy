@@ -19,6 +19,7 @@ function login(PDO $pdo, array $input)
     $username = $input['username'];
     $password = $input['password'];
     // 保留接口字段合同；停用验证码期间统一使用占位值。
+    // $captcha = $input['captcha'];
     $captcha  = '0';
     $userTable = 'cainiao_user';
     $verifyTable = 'cainiao_verify';
@@ -53,7 +54,7 @@ function login(PDO $pdo, array $input)
 
 
 
-    // 查询验证码（本地环境跳过）
+    // 验证码查询和校验暂时停用，恢复时同时启用上方参数检查及输入取值。
     /*$stmt = $pdo->prepare("SELECT id, code, time FROM `$verifyTable` WHERE ip_address = :ip LIMIT 1");
     $stmt->execute([':ip' => $ip]);
     $verify = $stmt->fetch(PDO::FETCH_ASSOC);

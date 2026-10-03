@@ -939,7 +939,7 @@
               @update:model-value="val => registerForm.agreed = val"
             >
               我同意
-              <span class="user-agreement" @click.stop="showAgreement = true">《用户协议》</span>
+              <span class="user-agreement" @click.stop.prevent="showAgreement = true">《用户协议》</span>
             </el-checkbox>
         </el-form-item>
         <el-form-item>
@@ -998,13 +998,16 @@
             username: '',
             password: '',
             // 验证码功能暂时关闭；保留字段以兼容登录接口和后续恢复入口。
+            // captcha: '',
             captcha: '0',
             agreeLaw: false
           });
 
           const rules = {
             username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
-            password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
+            password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+            // 验证码必填规则与控件一并停用，恢复功能时同时取消注释。
+            // captcha: [{ required: true, message: '请输入验证码', trigger: 'blur' }]
           };
 
           /* 验证码功能暂时关闭，原实现保留如下。
@@ -1012,17 +1015,6 @@
           function getCaptchaUrl() {
             return `/captcha.php?time=${Date.now()}`;
           }
-          const handleForgotPassword = () => {
-            ElementPlus.ElMessageBox.alert(
-              '密码不能找回,只能重置(因为管理员也不知道你的密码)，如需重置请联系管理员QQ:2380494437。',
-              '忘记密码提示',
-              {
-                confirmButtonText: '我知道了',
-                type: 'warning',
-              }
-            );
-          };
-          /*
           function refreshCaptcha() {
             captchaUrl.value = getCaptchaUrl();
           }
@@ -1072,10 +1064,13 @@
                   window.location.href = "/console.html";
                 } else {
                   ElementPlus.ElMessage.error(json.message || '登录失败');
+                  // 验证码功能暂时关闭，保留失败时的刷新入口。
+                  // refreshCaptcha();
                 }
               } catch (err) {
                 console.error('登录异常：', err);
                 ElementPlus.ElMessage.error('请求失败，请稍后再试');
+                // refreshCaptcha();
               } finally {
                 loginLoading.value = false;
               }
@@ -1152,6 +1147,9 @@
             formRef,
             loginLoading,
             rules,
+            // 验证码功能暂时关闭；恢复控件时同步恢复模板绑定。
+            // captchaUrl,
+            // refreshCaptcha,
             handleLogin,
             showRegister,
             registerForm,
