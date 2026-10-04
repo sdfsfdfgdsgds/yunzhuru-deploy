@@ -4044,23 +4044,37 @@ function renderAndroidVectorXmlToPng(string $xmlTree, string $outputFile): bool
     return $written && is_file($outputFile) && filesize($outputFile) <= 256 * 1024;
 }
 
-//APK图标提取,aapt2的方式
+//APK图标提取，优先使用 aapt2，旧环境回退到 aapt。
 function extractApkIcon_aapt(string $apkPath, string $outputDir, string $outputName) {
     if (!is_file($apkPath) || !is_dir($outputDir)) {
         return false;
     }
 
-    $cmd = "aapt2 dump badging " . escapeshellarg($apkPath);
-    $output = shell_exec($cmd);
-    if (!$output) {
+    $tools = [];
+    foreach (['aapt2', 'aapt'] as $toolName) {
+        $toolPath = trim((string)shell_exec('command -v ' . $toolName . ' 2>/dev/null'));
+        if ($toolPath !== '' && is_executable($toolPath)) {
+            $tools[] = ['path' => $toolPath, 'legacy' => $toolName === 'aapt'];
+        }
+    }
+    if ($tools === []) {
         return false;
     }
 
-    if (!preg_match("/icon='([^']+)'/", $output, $matches)) {
+    $iconPath = null;
+    $iconTool = null;
+    foreach ($tools as $tool) {
+        $cmd = escapeshellarg($tool['path']) . ' dump badging ' . escapeshellarg($apkPath) . ' 2>&1';
+        $output = shell_exec($cmd);
+        if ($output && preg_match("/icon='([^']+)'/", $output, $matches)) {
+            $iconPath = $matches[1];
+            $iconTool = $tool;
+            break;
+        }
+    }
+    if ($iconPath === null || $iconTool === null) {
         return false;
     }
-
-    $iconPath = $matches[1];
 
     $zip = new ZipArchive();
     if ($zip->open($apkPath) !== true) {
@@ -4072,11 +4086,16 @@ function extractApkIcon_aapt(string $apkPath, string $outputDir, string $outputN
         $fallbackIcon = findApkRasterIconFallback($zip, $iconPath);
         if ($fallbackIcon === null) {
             $zip->close();
-            $xmlTreeCmd = 'aapt2 dump xmltree ' . escapeshellarg($apkPath) . ' --file ' . escapeshellarg($iconPath) . ' 2>&1';
-            $xmlTree = shell_exec($xmlTreeCmd);
             $vectorFile = rtrim($outputDir, '/') . '/' . $outputName . '.png';
-            if (renderAndroidVectorXmlToPng((string)$xmlTree, $vectorFile)) {
-                return $outputName . '.png';
+            foreach ($tools as $tool) {
+                $xmlTreeCommand = escapeshellarg($tool['path']) . ' dump xmltree ' . escapeshellarg($apkPath);
+                $xmlTreeCommand .= $tool['legacy']
+                    ? ' ' . escapeshellarg($iconPath)
+                    : ' --file ' . escapeshellarg($iconPath);
+                $xmlTree = shell_exec($xmlTreeCommand . ' 2>&1');
+                if (renderAndroidVectorXmlToPng((string)$xmlTree, $vectorFile)) {
+                    return $outputName . '.png';
+                }
             }
             @unlink($vectorFile);
             return false;
