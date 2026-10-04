@@ -3699,6 +3699,351 @@ function findApkRasterIconFallback(ZipArchive $zip, string $iconPath): ?array {
     return null;
 }
 
+/**
+ * 从 aapt2 xmltree 的属性行读取属性值。
+ *
+ * aapt2 会在属性名后附带资源编号，并根据值类型决定是否加引号；这里统一兼容
+ * 两种输出，避免把二进制 XML 解析逻辑散落到图标提取流程中。
+ */
+function parseAaptXmlTreeAttribute(string $line, string $attribute): ?string
+{
+    $quotedAttribute = preg_quote($attribute, '/');
+    $pattern = '/(?:android:)?' . $quotedAttribute . '(?:\([^)]*\))?\s*=\s*(?:\(type\s+(0x[0-9a-f]+)\)\s*)?(?:"([^"]*)"|\'([^\']*)\'|([^\s]+))/i';
+    if (!preg_match($pattern, $line, $matches)) {
+        return null;
+    }
+
+    $type = strtolower($matches[1] ?? '');
+    $value = $matches[2] !== '' ? $matches[2] : ($matches[3] !== '' ? $matches[3] : ($matches[4] ?? ''));
+    if ($type === '0x1d' && preg_match('/^0x([0-9a-f]{8})$/i', $value, $colorMatches)) {
+        return '#' . strtolower($colorMatches[1]);
+    }
+    if ($type === '0x4' && preg_match('/^0x([0-9a-f]{8})$/i', $value, $floatMatches)) {
+        $unpacked = unpack('Gvalue', pack('N', hexdec($floatMatches[1])));
+        if (is_array($unpacked) && isset($unpacked['value'])) {
+            return (string)$unpacked['value'];
+        }
+    }
+
+    return $value;
+}
+
+/**
+ * 将 Android vector 的颜色转换为 GD 颜色。
+ *
+ * Android 颜色通常是 #AARRGGBB 或 #RRGGBB，GD 的 alpha 通道则以 0（不透明）到
+ * 127（完全透明）表示，因此需要在边界处做一次转换。
+ */
+function androidVectorAllocateColor($image, string $color, float $alpha = 1.0): ?int
+{
+    $color = trim($color);
+    if (!preg_match('/^#([0-9a-f]{6}|[0-9a-f]{8})$/i', $color, $matches)) {
+        return null;
+    }
+
+    $hex = strtolower($matches[1]);
+    if (strlen($hex) === 8) {
+        $a = hexdec(substr($hex, 0, 2)) / 255;
+        $offset = 2;
+    } else {
+        $a = 1.0;
+        $offset = 0;
+    }
+    $r = hexdec(substr($hex, $offset, 2));
+    $g = hexdec(substr($hex, $offset + 2, 2));
+    $b = hexdec(substr($hex, $offset + 4, 2));
+    $gdAlpha = 127 - (int)round(max(0.0, min(1.0, $a * $alpha)) * 127);
+
+    return imagecolorallocatealpha($image, $r, $g, $b, $gdAlpha);
+}
+
+/**
+ * 将 Android vector 的 pathData 切成命令和数字。
+ */
+function tokenizeAndroidVectorPath(string $pathData): array
+{
+    preg_match_all('/[AaCcHhLlMmQqSsTtVvZz]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/', $pathData, $matches);
+    return $matches[0] ?? [];
+}
+
+/**
+ * 读取 pathData 中的数字参数；不足一个完整命令时返回 null。
+ */
+function readAndroidVectorNumbers(array $tokens, int &$index, int $count): ?array
+{
+    if ($index + $count > count($tokens)) {
+        return null;
+    }
+    $numbers = [];
+    for ($offset = 0; $offset < $count; $offset++) {
+        if (preg_match('/^[A-Za-z]$/', $tokens[$index])) {
+            return null;
+        }
+        $numbers[] = (float)$tokens[$index++];
+    }
+    return $numbers;
+}
+
+/**
+ * 采样一条 Android vector 路径中的贝塞尔曲线，交给 GD 多边形填充。
+ */
+function sampleAndroidVectorCurve(array &$points, array $start, array $control1, array $control2, array $end, bool $quadratic = false): void
+{
+    $steps = 16;
+    for ($step = 1; $step <= $steps; $step++) {
+        $t = $step / $steps;
+        $inverse = 1.0 - $t;
+        if ($quadratic) {
+            $points[] = [
+                $inverse * $inverse * $start[0] + 2 * $inverse * $t * $control1[0] + $t * $t * $end[0],
+                $inverse * $inverse * $start[1] + 2 * $inverse * $t * $control1[1] + $t * $t * $end[1],
+            ];
+        } else {
+            $points[] = [
+                $inverse * $inverse * $inverse * $start[0] + 3 * $inverse * $inverse * $t * $control1[0] + 3 * $inverse * $t * $t * $control2[0] + $t * $t * $t * $end[0],
+                $inverse * $inverse * $inverse * $start[1] + 3 * $inverse * $inverse * $t * $control1[1] + 3 * $inverse * $t * $t * $control2[1] + $t * $t * $t * $end[1],
+            ];
+        }
+    }
+}
+
+/**
+ * 将单个 Android vector path 绘制到 GD 画布。
+ *
+ * 支持 Android pathData 的直线、二次/三次贝塞尔曲线和常见相对命令；椭圆弧按终点
+ * 连线降级，保证异常资源仍能得到可用缩略图而不会让上传回退到默认图标。
+ */
+function drawAndroidVectorPath($image, string $pathData, float $viewportWidth, float $viewportHeight, int $color, float $scaleX, float $scaleY): bool
+{
+    $tokens = tokenizeAndroidVectorPath($pathData);
+    $index = 0;
+    $command = null;
+    $current = [0.0, 0.0];
+    $subpathStart = [0.0, 0.0];
+    $lastControl = null;
+    $lastCommand = null;
+    $points = [];
+    $drawSubpath = static function () use (&$points, $image, $color, $scaleX, $scaleY): void {
+        if (count($points) < 3) {
+            $points = [];
+            return;
+        }
+        $flat = [];
+        foreach ($points as $point) {
+            $flat[] = (int)round($point[0] * $scaleX);
+            $flat[] = (int)round($point[1] * $scaleY);
+        }
+        imagefilledpolygon($image, $flat, count($points), $color);
+        $points = [];
+    };
+
+    while ($index < count($tokens)) {
+        if (preg_match('/^[A-Za-z]$/', $tokens[$index])) {
+            $command = $tokens[$index++];
+        } elseif ($command === null) {
+            break;
+        }
+        $absolute = ctype_upper($command);
+        $operation = strtolower($command);
+
+        if ($operation === 'z') {
+            $points[] = $subpathStart;
+            $drawSubpath();
+            $current = $subpathStart;
+            $lastControl = null;
+            $lastCommand = 'z';
+            $command = null;
+            continue;
+        }
+
+        $parameterCount = ['m' => 2, 'l' => 2, 'h' => 1, 'v' => 1, 'c' => 6, 's' => 4, 'q' => 4, 't' => 2, 'a' => 7][$operation] ?? 0;
+        if ($parameterCount === 0) {
+            $command = null;
+            continue;
+        }
+        $values = readAndroidVectorNumbers($tokens, $index, $parameterCount);
+        if ($values === null) {
+            break;
+        }
+
+        if ($operation === 'm') {
+            $next = $absolute ? [$values[0], $values[1]] : [$current[0] + $values[0], $current[1] + $values[1]];
+            if ($points !== []) {
+                $drawSubpath();
+            }
+            $current = $next;
+            $subpathStart = $next;
+            $points[] = $current;
+            $lastControl = null;
+            $lastCommand = 'm';
+            $command = $absolute ? 'L' : 'l';
+            continue;
+        }
+
+        $start = $current;
+        if ($operation === 'l') {
+            $current = $absolute ? [$values[0], $values[1]] : [$current[0] + $values[0], $current[1] + $values[1]];
+            $points[] = $current;
+        } elseif ($operation === 'h') {
+            $current[0] = $absolute ? $values[0] : $current[0] + $values[0];
+            $points[] = $current;
+        } elseif ($operation === 'v') {
+            $current[1] = $absolute ? $values[0] : $current[1] + $values[0];
+            $points[] = $current;
+        } elseif ($operation === 'c') {
+            $control1 = $absolute ? [$values[0], $values[1]] : [$current[0] + $values[0], $current[1] + $values[1]];
+            $control2 = $absolute ? [$values[2], $values[3]] : [$current[0] + $values[2], $current[1] + $values[3]];
+            $current = $absolute ? [$values[4], $values[5]] : [$current[0] + $values[4], $current[1] + $values[5]];
+            sampleAndroidVectorCurve($points, $start, $control1, $control2, $current);
+            $lastControl = $control2;
+        } elseif ($operation === 's') {
+            $control1 = in_array($lastCommand, ['c', 's'], true) && $lastControl !== null
+                ? [2 * $current[0] - $lastControl[0], 2 * $current[1] - $lastControl[1]]
+                : $current;
+            $control2 = $absolute ? [$values[0], $values[1]] : [$current[0] + $values[0], $current[1] + $values[1]];
+            $current = $absolute ? [$values[2], $values[3]] : [$current[0] + $values[2], $current[1] + $values[3]];
+            sampleAndroidVectorCurve($points, $start, $control1, $control2, $current);
+            $lastControl = $control2;
+        } elseif ($operation === 'q') {
+            $control = $absolute ? [$values[0], $values[1]] : [$current[0] + $values[0], $current[1] + $values[1]];
+            $current = $absolute ? [$values[2], $values[3]] : [$current[0] + $values[2], $current[1] + $values[3]];
+            sampleAndroidVectorCurve($points, $start, $control, $control, $current, true);
+            $lastControl = $control;
+        } elseif ($operation === 't') {
+            $control = in_array($lastCommand, ['q', 't'], true) && $lastControl !== null
+                ? [2 * $current[0] - $lastControl[0], 2 * $current[1] - $lastControl[1]]
+                : $current;
+            $current = $absolute ? [$values[0], $values[1]] : [$current[0] + $values[0], $current[1] + $values[1]];
+            sampleAndroidVectorCurve($points, $start, $control, $control, $current, true);
+            $lastControl = $control;
+        } elseif ($operation === 'a') {
+            $current = $absolute ? [$values[5], $values[6]] : [$current[0] + $values[5], $current[1] + $values[6]];
+            $points[] = $current;
+            $lastControl = null;
+        }
+        $lastCommand = $operation;
+    }
+
+    if ($points !== []) {
+        $drawSubpath();
+    }
+    return true;
+}
+
+/**
+ * 将 aapt2 输出的 Android vector XML 树栅格化为 PNG。
+ */
+function renderAndroidVectorXmlToPng(string $xmlTree, string $outputFile): bool
+{
+    if ($xmlTree === '' || !function_exists('imagecreatetruecolor')) {
+        return false;
+    }
+
+    $lines = preg_split('/\r?\n/', $xmlTree);
+    $vectorIndent = null;
+    $width = 0.0;
+    $height = 0.0;
+    $viewportWidth = 0.0;
+    $viewportHeight = 0.0;
+    $paths = [];
+    $currentPath = null;
+    $pathIndent = null;
+
+    $finishPath = static function () use (&$currentPath, &$paths): void {
+        if (is_array($currentPath) && !empty($currentPath['pathData'])) {
+            $paths[] = $currentPath;
+        }
+        $currentPath = null;
+    };
+
+    foreach ($lines as $line) {
+        $indent = strlen($line) - strlen(ltrim($line));
+        if (preg_match('/^\s*E:\s+vector\b/i', $line)) {
+            $vectorIndent = $indent;
+            continue;
+        }
+        if ($vectorIndent === null) {
+            continue;
+        }
+        if (preg_match('/^\s*E:\s+path\b/i', $line)) {
+            $finishPath();
+            $currentPath = ['pathData' => null, 'fillColor' => '#ff000000', 'fillAlpha' => 1.0];
+            $pathIndent = $indent;
+            continue;
+        }
+        if ($currentPath !== null && preg_match('/^\s*E:\s+/i', $line) && $indent <= (int)$pathIndent) {
+            $finishPath();
+            $pathIndent = null;
+        }
+        if ($currentPath !== null && $pathIndent !== null && $indent > $pathIndent && preg_match('/^\s*A:\s+/i', $line)) {
+            $pathData = parseAaptXmlTreeAttribute($line, 'pathData');
+            $fillColor = parseAaptXmlTreeAttribute($line, 'fillColor');
+            $fillAlpha = parseAaptXmlTreeAttribute($line, 'fillAlpha');
+            if ($pathData !== null) {
+                $currentPath['pathData'] = $pathData;
+            }
+            if ($fillColor !== null) {
+                $currentPath['fillColor'] = $fillColor;
+            }
+            if ($fillAlpha !== null && is_numeric($fillAlpha)) {
+                $currentPath['fillAlpha'] = (float)$fillAlpha;
+            }
+            continue;
+        }
+        if ($currentPath === null && $indent > $vectorIndent && preg_match('/^\s*A:\s+/i', $line)) {
+            foreach (['width', 'height', 'viewportWidth', 'viewportHeight'] as $attribute) {
+                $value = parseAaptXmlTreeAttribute($line, $attribute);
+                if ($value === null || !preg_match('/[-+]?\d*\.?\d+/', $value, $number)) {
+                    continue;
+                }
+                $numberValue = (float)$number[0];
+                if ($attribute === 'width') {
+                    $width = $numberValue;
+                } elseif ($attribute === 'height') {
+                    $height = $numberValue;
+                } elseif ($attribute === 'viewportWidth') {
+                    $viewportWidth = $numberValue;
+                } else {
+                    $viewportHeight = $numberValue;
+                }
+            }
+        }
+    }
+    $finishPath();
+
+    if ($viewportWidth <= 0 || $viewportHeight <= 0 || $paths === []) {
+        return false;
+    }
+    $targetWidth = 200;
+    $targetHeight = $height > 0 && $width > 0 ? max(1, (int)round($targetWidth * $height / $width)) : 200;
+    $supersample = 3;
+    $image = imagecreatetruecolor($targetWidth * $supersample, $targetHeight * $supersample);
+    imagealphablending($image, false);
+    imagesavealpha($image, true);
+    $transparent = imagecolorallocatealpha($image, 0, 0, 0, 127);
+    imagefill($image, 0, 0, $transparent);
+    imagealphablending($image, true);
+
+    $scaleX = ($targetWidth * $supersample) / $viewportWidth;
+    $scaleY = ($targetHeight * $supersample) / $viewportHeight;
+    foreach ($paths as $path) {
+        $color = androidVectorAllocateColor($image, (string)$path['fillColor'], (float)$path['fillAlpha']);
+        if ($color === null) {
+            continue;
+        }
+        drawAndroidVectorPath($image, (string)$path['pathData'], $viewportWidth, $viewportHeight, $color, $scaleX, $scaleY);
+    }
+
+    $output = imagecreatetruecolor($targetWidth, $targetHeight);
+    imagealphablending($output, false);
+    imagesavealpha($output, true);
+    imagecopyresampled($output, $image, 0, 0, 0, 0, $targetWidth, $targetHeight, imagesx($image), imagesy($image));
+    $written = @imagepng($output, $outputFile, 9);
+    imagedestroy($output);
+    imagedestroy($image);
+    return $written && is_file($outputFile) && filesize($outputFile) <= 256 * 1024;
+}
+
 //APK图标提取,aapt2的方式
 function extractApkIcon_aapt(string $apkPath, string $outputDir, string $outputName) {
     if (!is_file($apkPath) || !is_dir($outputDir)) {
@@ -3727,6 +4072,13 @@ function extractApkIcon_aapt(string $apkPath, string $outputDir, string $outputN
         $fallbackIcon = findApkRasterIconFallback($zip, $iconPath);
         if ($fallbackIcon === null) {
             $zip->close();
+            $xmlTreeCmd = 'aapt2 dump xmltree ' . escapeshellarg($apkPath) . ' --file ' . escapeshellarg($iconPath) . ' 2>&1';
+            $xmlTree = shell_exec($xmlTreeCmd);
+            $vectorFile = rtrim($outputDir, '/') . '/' . $outputName . '.png';
+            if (renderAndroidVectorXmlToPng((string)$xmlTree, $vectorFile)) {
+                return $outputName . '.png';
+            }
+            @unlink($vectorFile);
             return false;
         }
         $iconPath = $fallbackIcon['path'];
