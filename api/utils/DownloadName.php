@@ -49,6 +49,24 @@ function downloadNameTemplatePlaceholders(): array
 }
 
 /**
+ * 返回用于下载文件名的应用名称。
+ *
+ * 上传流程为了便于后台识别，会把框架检测结果追加到展示名末尾；下载名
+ * 只保留应用本身的名称，避免“应用名(flutter框架)”成为用户保存的文件名。
+ */
+function normalizeDownloadApplicationName($name): string
+{
+    $name = trim((string)$name);
+    if ($name === '') {
+        return '';
+    }
+
+    // 兼容半角/全角括号，并只清理末尾的框架、引擎或安卓壳标记。
+    $cleanName = preg_replace('/\s*[（(][^（）()]*?(?:框架|引擎|安卓壳)[^（）()]*[）)]\s*$/u', '', $name);
+    return trim($cleanName === null ? $name : $cleanName);
+}
+
+/**
  * 返回空模板使用的默认下载名称模板。
  *
  * 模板保存在数据库时允许为空，空值表示跟随平台默认规则；统一在展开阶段
@@ -74,7 +92,7 @@ function normalizeDownloadNameTemplate($template): string
     if (function_exists('mb_strlen') ? mb_strlen($template, 'UTF-8') > 120 : strlen($template) > 120) {
         throw new Exception('下载名称模板不能超过 120 个字符');
     }
-    if (preg_match('/[\\\/<>:"|?*]/u', $template)) {
+    if (preg_match('~[\\\\/<>:"|?*]~u', $template)) {
         throw new Exception('下载名称模板不能包含路径分隔符或文件名特殊字符');
     }
     if (preg_match('/[\x00-\x1F\x7F]/u', $template)) {
@@ -111,7 +129,7 @@ function renderDownloadNameTemplate(string $template, array $context): string
     $template = normalizeDownloadNameTemplate($template);
 
     $values = [
-        'name' => trim((string)($context['name'] ?? $context['app_name'] ?? '未命名应用')),
+        'name' => normalizeDownloadApplicationName($context['name'] ?? $context['app_name'] ?? '未命名应用') ?: '未命名应用',
         'date' => trim((string)($context['date'] ?? date('Ymd'))),
         'version' => trim((string)($context['version'] ?? $context['app_version'] ?? '')),
         'package' => trim((string)($context['package'] ?? $context['app_package'] ?? '')),

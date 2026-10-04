@@ -134,14 +134,14 @@ if ($down_type === 'release') {
 // 自定义模板优先于前端传入的旧式 name 参数，避免旧页面继续覆盖用户的下载名设置。
 $fallbackDownloadName = basename($filename);
 if (!empty($task['apk_name'])) {
-    $fallbackDownloadName = $task['apk_name'];
+    $fallbackDownloadName = normalizeDownloadApplicationName($task['apk_name']);
 } elseif (!empty($app['name'])) {
-    $fallbackDownloadName = $app['name'];
+    $fallbackDownloadName = normalizeDownloadApplicationName($app['name']);
 }
 $downloadTemplate = trim((string)($task['apk_download_name_template'] ?? ($app['download_name_template'] ?? '')));
 $templateContextName = !empty($task['apk_name'])
-    ? (string)$task['apk_name']
-    : (!empty($app['name']) ? (string)$app['name'] : $fallbackDownloadName);
+    ? normalizeDownloadApplicationName($task['apk_name'])
+    : (!empty($app['name']) ? normalizeDownloadApplicationName($app['name']) : $fallbackDownloadName);
 $templateDownloadName = renderDownloadNameTemplate($downloadTemplate, [
     'name' => $templateContextName,
     'date' => date('Ymd'),
@@ -654,7 +654,10 @@ function tryRedirectRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, string $d
     // 同一制品允许按不同模板下载；将名称摘要纳入对象键，避免公开桶上旧
     // Content-Disposition 覆盖新名称。未自定义名称时保持历史键，便于旧对象恢复。
     $objectBaseName = basename($filename);
-    $defaultName = normalizeDownloadName($task['apk_name'] ?? '', $objectBaseName);
+    $defaultName = normalizeDownloadName(
+        normalizeDownloadApplicationName($task['apk_name'] ?? ''),
+        $objectBaseName
+    );
     $objectFileName = buildReleaseDownloadObjectFileName($objectBaseName, $downloadName, $defaultName);
     $objectKey = 'release_downloads/' . date('Ymd') . '/' . $objectFileName;
     $contentDisposition = buildContentDispositionHeaderValue($downloadName);
@@ -712,7 +715,10 @@ function tryRedirectMissingRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, st
     }
 
     $task = findInjectTaskByOutputFile($pdo, $filename);
-    $defaultName = normalizeDownloadName($task['apk_name'] ?? '', basename($filename));
+    $defaultName = normalizeDownloadName(
+        normalizeDownloadApplicationName($task['apk_name'] ?? ''),
+        basename($filename)
+    );
     $usesDefaultTemplate = $task && trim((string)($task['download_name_template'] ?? '')) === '';
     // 自定义名称对应摘要对象键；历史记录中的旧对象可能仍带旧 Content-Disposition，
     // 改模板后必须重新探测当前名称对应的对象，不能直接复用旧记录。

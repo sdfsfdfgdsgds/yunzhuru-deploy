@@ -28,9 +28,17 @@
       .trim();
   }
 
+  /** 清理上传流程追加在应用展示名末尾的框架、引擎或安卓壳标记。 */
+  function normalizeApplicationName(value) {
+    return normalizePart(value)
+      .replace(/\s*[（(][^（）()]*?(?:框架|引擎|安卓壳)[^（）()]*[）)]\s*$/u, '')
+      .trim();
+  }
+
   /** 使用本地日期生成文件名友好的 YYYYMMDD 日期。 */
   function formatDate(date) {
-    const value = date instanceof Date && !Number.isNaN(date.getTime()) ? date : new Date();
+    const value = date && typeof date.getTime === 'function' && !Number.isNaN(date.getTime())
+      ? date : new Date();
     const year = value.getFullYear();
     const month = String(value.getMonth() + 1).padStart(2, '0');
     const day = String(value.getDate()).padStart(2, '0');
@@ -44,7 +52,7 @@
   function resolve(template, context, date) {
     const source = context && typeof context === 'object' ? context : {};
     const values = {
-      name: normalizePart(source.name || source.apk_name || 'download'),
+      name: normalizeApplicationName(source.name || source.apk_name || 'download') || 'download',
       date: formatDate(date),
       version: normalizePart(source.version || source.apk_version || ''),
       package: normalizePart(source.package || source.apk_package || ''),
