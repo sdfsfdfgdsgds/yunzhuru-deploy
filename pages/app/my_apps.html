@@ -36,6 +36,8 @@
     .pending-details-dialog .pending-plan-item,
     .edit-app-info-dialog .pending-plan-item { margin: 0; min-width: 0; }
     .edit-app-info-dialog { width: min(820px, 94vw) !important; }
+    .edit-basic-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
+    .edit-basic-grid .el-form-item { min-width: 0; }
     .pending-inline-change {
       margin-top: 8px;
       padding: 0;
@@ -56,10 +58,17 @@
     .pending-inline-value .pending-value-label { display: block; margin-bottom: 1px; }
     .pending-preview-tags { display: flex; flex-wrap: wrap; gap: 4px; }
     .pending-preview-select { display: inline-block; padding: 2px 8px; border: 1px solid var(--el-border-color, #dcdfe6); border-radius: 4px; background: var(--el-fill-color-blank, #fff); }
+    .pending-control-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; width: 100%; }
+    .pending-control-pair--single { grid-template-columns: minmax(0, 1fr); }
+    .pending-control-column { min-width: 0; }
+    .pending-control-label { color: var(--el-text-color-secondary, #909399); font-size: 12px; margin-bottom: 4px; }
+    .pending-control-column > .el-select { width: 100%; }
     .pending-summary-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
     @media (max-width: 760px) {
       .pending-details-dialog .pending-plan-list,
       .edit-app-info-dialog .pending-plan-list { grid-template-columns: minmax(0, 1fr); }
+      .pending-control-pair { grid-template-columns: minmax(0, 1fr); }
+      .edit-basic-grid { grid-template-columns: minmax(0, 1fr); }
     }
     @media (max-width: 480px) {
       .pending-change-values,
@@ -544,22 +553,24 @@
 
     <el-dialog title="修改应用信息（可选择延迟生效）" v-model="editDialogVisible" width="500px" class="edit-app-info-dialog">
       <el-form :model="editForm" label-width="80px">
-        <el-form-item label="名称">
-          <el-input v-model="editForm.name"></el-input>
-          <pending-inline-changes field="name" :changes="pendingFieldChanges('name')" :row="editPendingRow"></pending-inline-changes>
-        </el-form-item>
-        <el-form-item label="版本号">
-          <el-input v-model="editForm.version" disabled></el-input>
-        </el-form-item>
-        <el-form-item label="包名">
-          <el-input v-model="editForm.package" disabled></el-input>
-        </el-form-item>
-        <el-form-item label="APPID">
+        <div class="edit-basic-grid">
+          <el-form-item label="APPID">
           <el-input v-model="editForm.id" disabled></el-input>
           <div style="margin-top: 5px; color: #FF0000; font-size: 12px;">
             在官网首页解绑卡密时会用到
+          </div>
+          </el-form-item>
+          <el-form-item label="名称">
+            <el-input v-model="editForm.name"></el-input>
+            <pending-inline-changes field="name" :changes="pendingFieldChanges('name')" :row="editPendingRow"></pending-inline-changes>
+          </el-form-item>
+          <el-form-item label="包名">
+            <el-input v-model="editForm.package" disabled></el-input>
+          </el-form-item>
+          <el-form-item label="版本号">
+            <el-input v-model="editForm.version" disabled></el-input>
+          </el-form-item>
         </div>
-        </el-form-item>
         <el-form-item label="解绑码">
           <el-input v-model="editForm.app_key"></el-input>
           <div style="margin-top: 5px; color: #FF0000; font-size: 12px;">
@@ -611,40 +622,57 @@
         </el-form-item>
         
         <el-form-item v-if="editForm.config_mode === 1 || pendingFieldChanges('reuse_apk_id').length" label="复用谁">
-          <el-select v-model="editForm.reuse_apk_id" placeholder="请选择复用的应用" :disabled="editForm.config_mode !== 1">
-            <el-option
-              v-for="app in allApps"
-              :key="app.id"
-              :label="reuseAppLabel(app)"
-              :disabled="app.unavailable || app.id === Number(editForm.id)"
-              :value="app.id">
-            </el-option>
-          </el-select>
-          <pending-inline-changes field="reuse_apk_id" :changes="pendingFieldChanges('reuse_apk_id')" :row="editPendingRow"></pending-inline-changes>
+          <div class="pending-control-pair" :class="{ 'pending-control-pair--single': !pendingFieldChanges('reuse_apk_id').length }">
+            <div class="pending-control-column">
+              <div v-if="pendingFieldChanges('reuse_apk_id').length" class="pending-control-label">当前生效</div>
+              <el-select v-model="editForm.reuse_apk_id" placeholder="请选择复用的应用" :disabled="editForm.config_mode !== 1">
+                <el-option
+                  v-for="app in allApps"
+                  :key="app.id"
+                  :label="reuseAppLabel(app)"
+                  :disabled="app.unavailable || app.id === Number(editForm.id)"
+                  :value="app.id">
+                </el-option>
+              </el-select>
+            </div>
+            <div v-if="pendingFieldChanges('reuse_apk_id').length" class="pending-control-column">
+              <div class="pending-control-label">待生效</div>
+              <el-select :model-value="pendingReuseId('reuse_apk_id')" disabled>
+                <el-option :label="pendingReuseLabel('reuse_apk_id')" :value="pendingReuseId('reuse_apk_id')"></el-option>
+              </el-select>
+            </div>
+          </div>
         </el-form-item>
         <el-form-item v-if="editForm.config_mode === 1 || pendingFieldChanges('reuse_options').length" label="复用选项">
-          <div style="margin-bottom: 8px;">
-            <el-button type="primary" plain size="small" @click="selectAllReuseOptions" :disabled="editForm.config_mode !== 1">全选</el-button>
-            <el-button size="small" @click="clearReuseOptions" :disabled="editForm.config_mode !== 1">清空</el-button>
+          <div class="pending-control-pair" :class="{ 'pending-control-pair--single': !pendingFieldChanges('reuse_options').length }">
+            <div class="pending-control-column">
+              <div v-if="pendingFieldChanges('reuse_options').length" class="pending-control-label">当前生效</div>
+              <div style="margin-bottom: 8px;">
+                <el-button type="primary" plain size="small" @click="selectAllReuseOptions" :disabled="editForm.config_mode !== 1">全选</el-button>
+                <el-button size="small" @click="clearReuseOptions" :disabled="editForm.config_mode !== 1">清空</el-button>
+              </div>
+              <el-checkbox-group v-model="editForm.reuse_options" :disabled="editForm.config_mode !== 1">
+                <el-checkbox label="卡密数据"></el-checkbox>
+                <el-checkbox label="全屏弹窗"></el-checkbox>
+                <el-checkbox label="图片弹窗"></el-checkbox>
+                <el-checkbox label="文字弹窗"></el-checkbox>
+                <el-checkbox label="输入框弹窗"></el-checkbox>
+                <el-checkbox label="HTML弹窗"></el-checkbox>
+                <el-checkbox label="SP写入劫持"></el-checkbox>
+                <el-checkbox label="SP读取劫持"></el-checkbox>
+                <el-checkbox label="SP重写"></el-checkbox>
+                <el-checkbox label="通杀拦截"></el-checkbox>
+                <el-checkbox label="activity拦截"></el-checkbox>
+                <el-checkbox label="关键词拦截"></el-checkbox>
+                <el-checkbox label="URI劫持"></el-checkbox>
+                <el-checkbox label="包名检测"></el-checkbox>
+              </el-checkbox-group>
+            </div>
+            <div v-if="pendingFieldChanges('reuse_options').length" class="pending-control-column">
+              <div class="pending-control-label">待生效</div>
+              <pending-reuse-options-preview :items="pendingReuseOptions()"></pending-reuse-options-preview>
+            </div>
           </div>
-          <el-checkbox-group v-model="editForm.reuse_options" :disabled="editForm.config_mode !== 1">
-            <el-checkbox label="卡密数据"></el-checkbox>
-            <el-checkbox label="全屏弹窗"></el-checkbox>
-            <el-checkbox label="图片弹窗"></el-checkbox>
-            <el-checkbox label="文字弹窗"></el-checkbox>
-            <el-checkbox label="输入框弹窗"></el-checkbox>
-            <el-checkbox label="HTML弹窗"></el-checkbox>
-            <el-checkbox label="SP写入劫持"></el-checkbox>
-            <el-checkbox label="SP读取劫持"></el-checkbox>
-            <el-checkbox label="SP重写"></el-checkbox>
-            <el-checkbox label="通杀拦截"></el-checkbox>
-            <el-checkbox label="activity拦截"></el-checkbox>
-            <el-checkbox label="关键词拦截"></el-checkbox>
-            <el-checkbox label="URI劫持"></el-checkbox>
-            <el-checkbox label="包名检测"></el-checkbox>
-            
-          </el-checkbox-group>
-          <pending-inline-changes field="reuse_options" :changes="pendingFieldChanges('reuse_options')" :row="editPendingRow"></pending-inline-changes>
         </el-form-item>
         <el-form-item label="生效延迟">
           <el-select v-model="editForm.apply_after_seconds" placeholder="请选择生效时间" style="width: 100%;">
@@ -1389,10 +1417,32 @@
       </div>`
     };
 
+    /** 复用选项的只读预览，沿用编辑表单的复选框样式展示待生效结果。 */
+    const PendingReuseOptionsPreview = {
+      props: { items: { type: Array, default: () => [] } },
+      template: `<el-checkbox-group :model-value="items" disabled>
+        <el-checkbox label="卡密数据"></el-checkbox>
+        <el-checkbox label="全屏弹窗"></el-checkbox>
+        <el-checkbox label="图片弹窗"></el-checkbox>
+        <el-checkbox label="文字弹窗"></el-checkbox>
+        <el-checkbox label="输入框弹窗"></el-checkbox>
+        <el-checkbox label="HTML弹窗"></el-checkbox>
+        <el-checkbox label="SP写入劫持"></el-checkbox>
+        <el-checkbox label="SP读取劫持"></el-checkbox>
+        <el-checkbox label="SP重写"></el-checkbox>
+        <el-checkbox label="通杀拦截"></el-checkbox>
+        <el-checkbox label="activity拦截"></el-checkbox>
+        <el-checkbox label="关键词拦截"></el-checkbox>
+        <el-checkbox label="URI劫持"></el-checkbox>
+        <el-checkbox label="包名检测"></el-checkbox>
+      </el-checkbox-group>`
+    };
+
     createApp({
       components: {
         PendingAppChanges,
         PendingInlineChanges,
+        PendingReuseOptionsPreview,
         ConfigEntryDataViewer: window.YunzhuruConfigEntryDataViewer,
       },
       setup() {
@@ -2859,6 +2909,30 @@ function pendingFieldChanges(field) {
     .map(change => ({ ...change, apply_at: plan.apply_at, schedule_id: plan.schedule_id })));
 }
 
+/** 读取字段最后一条待生效结果，用于复制原表单控件做只读预览。 */
+function pendingFieldAfter(field) {
+  const changes = pendingFieldChanges(field);
+  return changes.length ? changes[changes.length - 1].after : null;
+}
+
+function pendingReuseId(field) {
+  const value = pendingFieldAfter(field);
+  return value === null || value === '' || value === undefined ? null : Number(value);
+}
+
+function pendingReuseLabel(field) {
+  const id = pendingReuseId(field);
+  if (!id) return '未设置';
+  const row = editPendingRow.value || {};
+  const targets = row.pending_reuse_targets || {};
+  const target = targets[id] || allApps.value.find(app => Number(app.id) === id) || { id, name: '应用不可用', package: '' };
+  return reuseAppLabel(target);
+}
+
+function pendingReuseOptions() {
+  return normalizeReuseOptions(pendingFieldAfter('reuse_options'));
+}
+
 function openPendingDetails(row) {
   pendingDetailRow.value = row;
   pendingDetailsVisible.value = true;
@@ -3303,6 +3377,9 @@ onUnmounted(() => {
           editPendingCount,
           editPendingRow,
           pendingFieldChanges,
+          pendingReuseId,
+          pendingReuseLabel,
+          pendingReuseOptions,
           pendingClock,
           pendingDetailsVisible,
           pendingDetailRow,
