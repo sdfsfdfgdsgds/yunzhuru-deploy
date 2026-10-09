@@ -37,7 +37,7 @@
     .edit-app-info-dialog .pending-plan-item { margin: 0; min-width: 0; }
     .edit-app-info-dialog { width: min(980px, 96vw) !important; }
     .edit-id-reuse-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
-    .edit-basic-grid { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.6fr) minmax(0, .5fr); gap: 0 18px; }
+    .edit-basic-grid { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.6fr) minmax(0, .55fr); gap: 0 18px; }
     .edit-id-reuse-grid .el-form-item,
     .edit-basic-grid .el-form-item { min-width: 0; }
     .pending-inline-change {
@@ -66,6 +66,15 @@
     .pending-control-label { color: var(--el-text-color-secondary, #909399); font-size: 12px; margin-bottom: 4px; }
     .pending-control-column > .el-select { width: 100%; }
     .pending-list-control { width: 100%; }
+    .app-action-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 6px; width: 100%; }
+    .app-action-cell { display: flex; min-width: 0; }
+    .app-action-cell > .el-button,
+    .app-action-cell > .el-tooltip,
+    .app-action-cell > .el-tooltip > .el-button { width: 100%; margin-left: 0; }
+    .app-action-cell > .el-tooltip { display: block; }
+    .delete-delay-control { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+    .delete-delay-control select { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--el-border-color, #dcdfe6); border-radius: 4px; background: var(--el-bg-color, #fff); color: var(--el-text-color-primary, #303133); }
+    .pending-delete-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
     .pending-summary-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
     @media (max-width: 760px) {
       .pending-details-dialog .pending-plan-list,
@@ -456,9 +465,14 @@
 
       <el-table-column label="待生效" min-width="150">
         <template #default="scope">
-          <div v-if="pendingUpdateCount(scope.row) > 0" class="pending-summary-cell">
-            <el-tag type="warning" size="small">{{ pendingUpdateLabel(scope.row) }}</el-tag>
-            <el-button type="primary" link size="small" @click="openPendingDetails(scope.row)">查看修改</el-button>
+          <div v-if="pendingUpdateCount(scope.row) > 0 || pendingDeleteCount(scope.row) > 0">
+            <div v-if="pendingUpdateCount(scope.row) > 0" class="pending-summary-cell">
+              <el-tag type="warning" size="small">{{ pendingUpdateLabel(scope.row) }}</el-tag>
+              <el-button type="primary" link size="small" @click="openPendingDetails(scope.row)">查看修改</el-button>
+            </div>
+            <div v-if="pendingDeleteCount(scope.row) > 0" class="pending-delete-summary">
+              <el-tag type="danger" size="small">{{ pendingDeleteLabel(scope.row) }}</el-tag>
+            </div>
           </div>
           <span v-else>-</span>
         </template>
@@ -499,18 +513,29 @@
 
       <el-table-column label="操作" width="370">
         <template #default="scope">
-          <el-tooltip v-if="!scope.row.path" content="安装包不存在,请重传" placement="top" effect="dark">
-              <el-button type="primary" size="small" disabled>注入</el-button>
-          </el-tooltip>
-          <el-button v-else type="primary" size="small" @click="injectApp(scope.row)">注入</el-button>
-          <el-button size="small" @click="editInfo(scope.row)">编辑</el-button>
-          <el-button size="small" type="warning" @click="replaceApk(scope.row)">重传</el-button>
-          <el-button type="danger" size="small" @click="handleDelete(scope.row)">删除</el-button>
-          <el-tooltip v-if="!scope.row.path" content="安装包不存在" placement="top" effect="dark">
-              <el-button type="primary" size="small" disabled>下载</el-button>
-          </el-tooltip>
-          <el-button v-else size="small" type="success"  @click="downloadInjected(scope.row)">下载</el-button>
-          <el-button size="small" type="info" @click="openDownloadNameSettings(scope.row)">下载名</el-button>
+          <div class="app-action-grid">
+            <div class="app-action-cell">
+              <el-tooltip v-if="!scope.row.path" content="安装包不存在,请重传" placement="top" effect="dark">
+                <el-button type="primary" size="small" disabled>注入</el-button>
+              </el-tooltip>
+              <el-button v-else type="primary" size="small" @click="injectApp(scope.row)">注入</el-button>
+            </div>
+            <div class="app-action-cell"><el-button size="small" @click="editInfo(scope.row)">编辑</el-button></div>
+            <div class="app-action-cell"><el-button size="small" type="warning" @click="replaceApk(scope.row)">重传</el-button></div>
+            <div class="app-action-cell">
+              <el-tooltip v-if="pendingDeleteCount(scope.row) > 0" :content="pendingDeleteLabel(scope.row)" placement="top" effect="dark">
+                <el-button type="danger" size="small" disabled>待删除</el-button>
+              </el-tooltip>
+              <el-button v-else type="danger" size="small" @click="handleDelete(scope.row)">删除</el-button>
+            </div>
+            <div class="app-action-cell">
+              <el-tooltip v-if="!scope.row.path" content="安装包不存在" placement="top" effect="dark">
+                <el-button type="primary" size="small" disabled>下载</el-button>
+              </el-tooltip>
+              <el-button v-else size="small" type="success" @click="downloadInjected(scope.row)">下载</el-button>
+            </div>
+            <div class="app-action-cell"><el-button size="small" type="info" @click="openDownloadNameSettings(scope.row)">下载名</el-button></div>
+          </div>
         </template>
       </el-table-column>
     </el-table>
@@ -573,7 +598,7 @@
               inactive-text="不展示">
             </el-switch>
             <div style="margin-top: 5px; color: #FF0000; font-size: 12px;">
-              开启后，这个应用才会出现在其它应用的“复用谁”列表里；它仍然可以正常作为独立应用使用。
+              开启后可被其它应用复用。
             </div>
             <pending-inline-changes field="is_reusable" :changes="pendingFieldChanges('is_reusable')" :row="editPendingRow"></pending-inline-changes>
           </el-form-item>
@@ -2549,7 +2574,7 @@ function showDeleteResultDialog(row, method, source, fallbackMessage) {
   const hasFailed = Number(summary.failed || 0) > 0;
   const hasWarning = Number(summary.warning || 0) > 0;
   const titlePrefix = method === 'clearAppFile' ? '仅删除文件结果' : '应用删除结果';
-  const titleSuffix = payload.async_cleanup && payload.cleanup_started !== false ? (payload.queued_cleanup ? '后台清理已排队' : '后台清理已启动') : (hasFailed ? '有失败项' : '已完成');
+  const titleSuffix = payload.scheduled ? '已安排' : (payload.async_cleanup && payload.cleanup_started !== false ? (payload.queued_cleanup ? '后台清理已排队' : '后台清理已启动') : (hasFailed ? '有失败项' : '已完成'));
   ElementPlus.ElMessageBox.alert(
     buildDeleteResultHtml(row, payload, fallbackMessage),
     `${titlePrefix}：${titleSuffix}`,
@@ -2595,13 +2620,28 @@ function applyDeleteLocalChange(method, row) {
   });
 }
 
+function applyDeleteScheduledLocalChange(row, pending) {
+  if (!row || !row.id) return;
+  tableData.value = tableData.value.map(item => {
+    if (Number(item.id) !== Number(row.id)) return item;
+    return {
+      ...item,
+      pending_delete_count: 1,
+      pending_delete_status: pending?.status || 'pending',
+      pending_delete_schedule_id: pending?.schedule_id || 0,
+      pending_delete_apply_at: pending?.apply_at || '',
+      pending_delete_remaining_seconds: Number(pending?.remaining_seconds || 0)
+    };
+  });
+}
+
 function refreshDeleteListLater() {
   setTimeout(() => {
     loadData();
   }, 300);
 }
 
-async function postAppDelete(method, row, successMessage) {
+async function postAppDelete(method, row, successMessage, options = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 120000);
   const progressToken = `del_${row.id}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -2659,10 +2699,15 @@ async function postAppDelete(method, row, successMessage) {
   pollDeleteProgress();
 
   try {
+    const body = { id: row.id, progress_token: progressToken };
+    const deleteAfterSeconds = Number(options.deleteAfterSeconds || 0);
+    if (method === 'deleteApp' && deleteAfterSeconds > 0) {
+      body.delete_after_seconds = deleteAfterSeconds;
+    }
     const res = await fetch(`/api/index.php?module=app&method=${method}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: row.id, progress_token: progressToken }),
+      body: JSON.stringify(body),
       signal: controller.signal
     });
     const text = await res.text();
@@ -2678,7 +2723,11 @@ async function postAppDelete(method, row, successMessage) {
 
     if (json.code === 200) {
       handledResult = true;
-      applyDeleteLocalChange(method, row);
+      if (method === 'deleteApp' && json.data?.scheduled) {
+        applyDeleteScheduledLocalChange(row, json.data.pending_delete || {});
+      } else {
+        applyDeleteLocalChange(method, row);
+      }
       showDeleteResultDialog(row, method, json, json.data?.message || json.message || successMessage);
       refreshDeleteListLater();
     } else {
@@ -2720,9 +2769,10 @@ async function postAppDelete(method, row, successMessage) {
 function handleDelete(row) {
   ElementPlus.ElMessageBox({
     title: '提示',
-    message: `确定要删除应用「${row.name}」吗？<br>
+    message: `确定要删除应用「${escapeDeleteHtml(row.name)}」吗？<br>
     仅删除文件：不影响远程配置，注入时需重传安装包<br>
-    全部删除：你将彻底失去这个应用的控制权`,
+    全部删除：你将彻底失去这个应用的控制权
+    <div class="delete-delay-control"><label for="delete-delay-select">生效延迟</label><select id="delete-delay-select"><option value="0">立即生效</option><option value="1800">30 分钟后</option><option value="3600">1 小时后</option><option value="10800">3 小时后</option><option value="21600">6 小时后</option><option value="43200">12 小时后</option><option value="86400">24 小时后</option></select></div>`,
     type: 'warning',
     dangerouslyUseHTMLString: true,
     showCancelButton: true,
@@ -2732,13 +2782,16 @@ function handleDelete(row) {
     distinguishCancelAndClose: true
   }).then(action => {
     if (action === 'confirm') {
+      const delaySelect = document.getElementById('delete-delay-select');
+      const deleteAfterSeconds = Number(delaySelect?.value || 0);
+      const delayText = deleteAfterSeconds > 0 ? `，将在 ${formatCountdown(deleteAfterSeconds)} 后生效` : '';
       // 再次确认“全部删除”
       ElementPlus.ElMessageBox.confirm(
-        '删除后该应用将不再被你控制，是否确认？',
+        `删除后该应用将不再被你控制${delayText}，是否确认？`,
         '请确认',
         { type: 'warning' }
       ).then(async () => {
-        await postAppDelete('deleteApp', row, '删除成功');
+        await postAppDelete('deleteApp', row, '删除成功', { deleteAfterSeconds });
       }).catch(() => {});
     }
   }).catch(() => {});
@@ -2877,8 +2930,26 @@ function pendingUpdateLabel(row) {
   return '后台处理中';
 }
 
+function pendingDeleteRemaining(row) {
+  pendingClock.value;
+  const applyAt = Date.parse(String(row && row.pending_delete_apply_at || ''));
+  if (!Number.isFinite(applyAt)) return Number(row && row.pending_delete_remaining_seconds || 0);
+  return Math.max(0, Math.ceil((applyAt - Date.now()) / 1000));
+}
+
+function pendingDeleteCount(row) {
+  const count = Number(row && row.pending_delete_count);
+  if (Number.isFinite(count) && count > 0) return Math.floor(count);
+  return row && row.pending_delete_status ? 1 : 0;
+}
+
+function pendingDeleteLabel(row) {
+  const remaining = pendingDeleteRemaining(row);
+  return remaining > 0 ? formatCountdown(remaining) + ' 后删除' : '删除处理中';
+}
+
 function updatePendingRefreshTimer() {
-  const hasPending = tableData.value.some(row => pendingUpdateCount(row) > 0);
+  const hasPending = tableData.value.some(row => pendingUpdateCount(row) > 0 || pendingDeleteCount(row) > 0);
   if (!hasPending) {
     if (pendingRefreshTimer) window.clearInterval(pendingRefreshTimer);
     pendingRefreshTimer = null;
@@ -3444,6 +3515,9 @@ onUnmounted(() => {
           pendingUpdateCount,
           pendingUpdateLabel,
           pendingUpdateRemaining,
+          pendingDeleteCount,
+          pendingDeleteLabel,
+          pendingDeleteRemaining,
           chainDialogVisible,
           injectToTop,
           confirmInject,

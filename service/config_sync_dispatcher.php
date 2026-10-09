@@ -32,10 +32,19 @@ try {
     require_once __DIR__ . '/../config/db.php';
     require_once __DIR__ . '/../config/redis.php';
     require_once __DIR__ . '/../api/utils/ConfigSyncState.php';
-    require_once __DIR__ . '/../api/utils/AppInfoSchedule.php';
+    // 正式运行目录具备应用计划模块；隔离同步回归只复制同步依赖时，跳过这些可选业务模块。
+    // 这样配置同步恢复测试仍能验证自身合同，不会被无关业务文件缺失阻断。
+    $appInfoScheduleFile = __DIR__ . '/../api/utils/AppInfoSchedule.php';
+    $appDeleteScheduleFile = __DIR__ . '/../api/utils/AppDeleteSchedule.php';
+    $appModuleFile = __DIR__ . '/../api/module/app.php';
+    if (is_file($appInfoScheduleFile)) require_once $appInfoScheduleFile;
+    if (is_file($appDeleteScheduleFile)) require_once $appDeleteScheduleFile;
+    // 删除计划到期后复用 app 模块中的现有删除队列和运行面失效函数。
+    if (is_file($appModuleFile)) require_once $appModuleFile;
     if (!isset($pdo) || !($pdo instanceof PDO)) throw new RuntimeException('database unavailable');
     ensureConfigSyncStateSchema($pdo);
-    ensureAppInfoScheduleSchema($pdo);
+    if (function_exists('ensureAppInfoScheduleSchema')) ensureAppInfoScheduleSchema($pdo);
+    if (function_exists('ensureAppDeleteScheduleSchema')) ensureAppDeleteScheduleSchema($pdo);
     $booted = true;
     configSyncWorkerLog('dispatcher_started', '', ['pid' => getmypid()]);
     $lastJobId = '';
@@ -43,9 +52,14 @@ try {
     while (true) {
         // 应用信息计划与全局配置同步分开轮询；到期后才写主表并触发原有传播合同。
         try {
-            appInfoScheduleProcessDue($pdo, 5);
+            if (function_exists('appInfoScheduleProcessDue')) appInfoScheduleProcessDue($pdo, 5);
         } catch (Throwable $scheduleError) {
             configSyncWorkerLog('app_info_schedule_failed', '', ['error_line' => $scheduleError->getLine()]);
+        }
+        try {
+            if (function_exists('appDeleteScheduleProcessDue')) appDeleteScheduleProcessDue($pdo, 2);
+        } catch (Throwable $deleteScheduleError) {
+            configSyncWorkerLog('app_delete_schedule_failed', '', ['error_line' => $deleteScheduleError->getLine()]);
         }
         $state = configSyncWorkerReadState($pdo);
         $jobId = (string)($state['job_id'] ?? '');

@@ -10,6 +10,7 @@ require_once __DIR__ . '/../utils/BucketPush.php';
 require_once __DIR__ . '/../utils/ConfigDelivery.php';
 require_once __DIR__ . '/../utils/ApiConfigProbe.php';
 require_once __DIR__ . '/../utils/AppInfoSchedule.php';
+require_once __DIR__ . '/../utils/AppDeleteSchedule.php';
 
 if (!defined('OSS_DOWNLOAD_KEEP_MINUTES')) {
     // 注入产物可能达到数百 MB 到数 GB，OSS 临时下载对象需要覆盖完整下载和断点续传窗口。
@@ -80,6 +81,7 @@ function getMyAppList(PDO $pdo, array $input)
     ensureApkReusableColumn($pdo);
     ensureApkDownloadNameTemplateColumn($pdo);
     ensureApkDeleteMarkerTable($pdo);
+    ensureAppDeleteScheduleSchema($pdo);
 
     $page = isset($input['page']) && is_numeric($input['page']) ? max(1, (int)$input['page']) : 1;
     $limit = isset($input['limit']) && is_numeric($input['limit']) ? max(1, (int)$input['limit']) : 20;
@@ -249,6 +251,7 @@ function getMyAppList(PDO $pdo, array $input)
     bucketAttachLatestAppSnapshots($pdo, $list);
     // 待生效计划按应用独立展示；不会读取或改写全局配置同步任务。
     appInfoScheduleAttachRows($pdo, $list);
+    appDeleteScheduleAttachRows($pdo, $list);
 
     // 批量预查询，避免循环内N+1查询
     $now = date('Y-m-d H:i:s');
@@ -2269,6 +2272,22 @@ function deleteApp(PDO $pdo, array $input)
     if ($progressToken === '') {
         $progressToken = 'srvdel_' . $appId . '_' . time() . '_' . bin2hex(random_bytes(4));
     }
+    $deleteAfterSeconds = appDeleteScheduleNormalizeDelay($input['delete_after_seconds'] ?? 0);
+    ensureAppDeleteScheduleSchema($pdo);
+    if ($deleteAfterSeconds > 0) {
+        $pending = appDeleteScheduleCreate($pdo, $appId, $user, $deleteAfterSeconds, $progressToken);
+        return [
+            'message' => '已安排删除，' . appInfoScheduleFormatDelay($pending['remaining_seconds']) . '后执行',
+            'operation' => 'deleteApp',
+            'scheduled' => 1,
+            'pending_delete' => $pending,
+            'app' => [
+                'id' => $appId,
+                'name' => $pending['app_name'] ?? '',
+                'package' => $pending['app_package'] ?? '',
+            ],
+        ];
+    }
     appDeleteDebugLog($appId, 'delete_start', [
         'user_id' => $userId,
         'role' => $user['role'] ?? '',
@@ -2345,6 +2364,8 @@ function deleteApp(PDO $pdo, array $input)
         if (!$deleteGuard->fetchColumn()) {
             throw new RuntimeException('应用已删除或删除任务已启动');
         }
+        // 立即删除优先级高于已排队的延迟删除，先取消计划再写删除标记。
+        appDeleteScheduleCancelPending($pdo, $appId, '立即删除已接管应用');
         $markStart = microtime(true);
         appDeleteDebugLog($appId, 'db_soft_delete_start', [
             'table' => 'cainiao_apk_deleted',
