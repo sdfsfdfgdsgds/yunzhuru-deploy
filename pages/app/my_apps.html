@@ -74,6 +74,7 @@
     .app-action-cell > .el-tooltip { display: block; }
     .delete-delay-control { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
     .delete-delay-control select { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--el-border-color, #dcdfe6); border-radius: 4px; background: var(--el-bg-color, #fff); color: var(--el-text-color-primary, #303133); }
+    .delete-delay-note { margin-top: 5px; color: var(--el-text-color-secondary, #909399); font-size: 12px; line-height: 1.5; }
     .pending-delete-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
     .pending-summary-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
     @media (max-width: 760px) {
@@ -2529,19 +2530,31 @@ function getDeletePayload(source) {
   return source.data || source;
 }
 
+function formatDeleteScheduledAt(pending) {
+  const value = String(pending?.apply_at || '');
+  return value ? value.replace('T', ' ').replace(/\+08:00$/, '') : '稍后';
+}
+
 function buildDeleteResultHtml(row, payload, fallbackMessage) {
   const app = payload.app || row || {};
   const summary = payload.result_summary || {};
   const items = Array.isArray(payload.result_items) ? payload.result_items : [];
   const appTitle = `[${app.id || row?.id || '-'}] ${app.name || row?.name || '-'}`;
   const packageName = app.package || row?.package || '-';
+  const scheduledHtml = payload.scheduled
+    ? `<div><b>执行时间：</b>${escapeDeleteHtml(formatDeleteScheduledAt(payload.pending_delete))}</div><div><b>说明：</b>执行前应用和远程配置保持不变。</div>`
+    : '';
+  const statsHtml = payload.scheduled
+    ? ''
+    : `<div><b>统计：</b>成功 ${Number(summary.success || 0)} 项，失败 ${Number(summary.failed || 0)} 项，注意 ${Number(summary.warning || 0)} 项，跳过 ${Number(summary.skipped || 0)} 项</div>`;
   const summaryHtml = `
     <div class="delete-result-summary">
       <div><b>应用：</b>${escapeDeleteHtml(appTitle)}</div>
       <div><b>包名：</b>${escapeDeleteHtml(packageName)}</div>
       <div><b>结果：</b>${escapeDeleteHtml(payload.message || fallbackMessage || '处理完成')}</div>
+      ${scheduledHtml}
       ${payload.async_cleanup ? `<div><b>清理方式：</b>${payload.queued_cleanup ? '已先从列表删除，文件/桶/数据库清理会按后台队列依次执行' : '已先从列表删除，文件/桶/数据库清理在后台继续执行'}</div>` : ''}
-      <div><b>统计：</b>成功 ${Number(summary.success || 0)} 项，失败 ${Number(summary.failed || 0)} 项，注意 ${Number(summary.warning || 0)} 项，跳过 ${Number(summary.skipped || 0)} 项</div>
+      ${statsHtml}
     </div>
   `;
   const rows = items.length > 0
@@ -2554,16 +2567,18 @@ function buildDeleteResultHtml(row, payload, fallbackMessage) {
           <td>${escapeDeleteHtml(item.message || '-')}</td>
         </tr>`;
       }).join('')
-    : `<tr><td colspan="4">${escapeDeleteHtml(fallbackMessage || '后端未返回明细')}</td></tr>`;
-  return `
-    <div class="delete-result-dialog">
-      ${summaryHtml}
+    : (payload.scheduled ? '' : `<tr><td colspan="4">${escapeDeleteHtml(fallbackMessage || '后端未返回明细')}</td></tr>`);
+  const detailsTable = rows ? `
       <table class="delete-result-table">
         <thead>
           <tr><th>清理项</th><th>对象</th><th>状态</th><th>说明</th></tr>
         </thead>
         <tbody>${rows}</tbody>
-      </table>
+      </table>` : '';
+  return `
+    <div class="delete-result-dialog">
+      ${summaryHtml}
+      ${detailsTable}
     </div>
   `;
 }
@@ -2767,23 +2782,32 @@ async function postAppDelete(method, row, successMessage, options = {}) {
 }
 
 function handleDelete(row) {
+  // MessageBox 确认后会销毁 HTML 内容，先在选择变化和确认点击时缓存延迟值。
+  let selectedDeleteAfterSeconds = 0;
+  const readSelectedDeleteDelay = () => {
+    selectedDeleteAfterSeconds = Number(document.getElementById('delete-delay-select')?.value || 0);
+  };
   ElementPlus.ElMessageBox({
     title: '提示',
     message: `确定要删除应用「${escapeDeleteHtml(row.name)}」吗？<br>
     仅删除文件：不影响远程配置，注入时需重传安装包<br>
     全部删除：你将彻底失去这个应用的控制权
-    <div class="delete-delay-control"><label for="delete-delay-select">生效延迟</label><select id="delete-delay-select"><option value="0">立即生效</option><option value="1800">30 分钟后</option><option value="3600">1 小时后</option><option value="10800">3 小时后</option><option value="21600">6 小时后</option><option value="43200">12 小时后</option><option value="86400">24 小时后</option></select></div>`,
+    <div class="delete-delay-control"><label for="delete-delay-select">全部删除延迟</label><select id="delete-delay-select"><option value="0">立即生效</option><option value="1800">30 分钟后</option><option value="3600">1 小时后</option><option value="10800">3 小时后</option><option value="21600">6 小时后</option><option value="43200">12 小时后</option><option value="86400">24 小时后</option></select></div>
+    <div class="delete-delay-note">仅对“全部删除（含远程配置）”生效；仅删除文件仍立即执行。</div>`,
     type: 'warning',
     dangerouslyUseHTMLString: true,
     showCancelButton: true,
     showConfirmButton: true,
     confirmButtonText: '全部删除(含远程配置)',
     cancelButtonText: '取消',
-    distinguishCancelAndClose: true
+    distinguishCancelAndClose: true,
+    beforeClose: (action, _instance, done) => {
+      if (action === 'confirm') readSelectedDeleteDelay();
+      done();
+    }
   }).then(action => {
     if (action === 'confirm') {
-      const delaySelect = document.getElementById('delete-delay-select');
-      const deleteAfterSeconds = Number(delaySelect?.value || 0);
+      const deleteAfterSeconds = selectedDeleteAfterSeconds;
       const delayText = deleteAfterSeconds > 0 ? `，将在 ${formatCountdown(deleteAfterSeconds)} 后生效` : '';
       // 再次确认“全部删除”
       ElementPlus.ElMessageBox.confirm(
@@ -2799,7 +2823,15 @@ function handleDelete(row) {
   // 添加“仅删除文件”按钮（红色）
   setTimeout(() => {
     const box = document.querySelector('.el-message-box__btns');
+    const delaySelect = document.getElementById('delete-delay-select');
+    const rememberDelay = readSelectedDeleteDelay;
+    if (delaySelect) {
+      rememberDelay();
+      delaySelect.addEventListener('change', rememberDelay);
+    }
     if (box && !box.querySelector('.only-delete-btn')) {
+      const confirmButton = box.querySelector('.el-button--primary');
+      confirmButton?.addEventListener('click', rememberDelay, true);
       const btn = document.createElement('button');
       btn.className = 'el-button el-button--danger only-delete-btn'; // 红色按钮
       btn.innerHTML = '<span>仅删除文件(推荐)</span>';

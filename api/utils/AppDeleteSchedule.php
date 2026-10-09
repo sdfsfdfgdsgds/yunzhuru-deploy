@@ -20,6 +20,7 @@ function ensureAppDeleteScheduleSchema(PDO $pdo): void
         `schedule_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '删除计划 ID',
         `app_id` INT NOT NULL COMMENT '应用 ID',
         `user_id` INT NOT NULL DEFAULT 0 COMMENT '应用所属用户 ID',
+        `requested_by` INT NOT NULL DEFAULT 0 COMMENT '创建计划的操作者 ID',
         `apply_at` DATETIME NOT NULL COMMENT 'UTC 执行时间',
         `status` VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/queued/completed/cancelled/failed',
         `progress_token` VARCHAR(128) NOT NULL DEFAULT '' COMMENT '删除进度 token',
@@ -33,6 +34,18 @@ function ensureAppDeleteScheduleSchema(PDO $pdo): void
         KEY `idx_apk_delete_schedule_due` (`status`, `apply_at`),
         KEY `idx_apk_delete_schedule_user` (`user_id`, `status`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='应用延迟删除计划'");
+    // 兼容已经先创建过旧版本计划表的实例，补齐管理员审计所需操作者字段。
+    $column = $pdo->query("SHOW COLUMNS FROM `cainiao_apk_delete_schedule` LIKE 'requested_by'")->fetch(PDO::FETCH_ASSOC);
+    if (!$column) {
+        try {
+            $pdo->exec("ALTER TABLE `cainiao_apk_delete_schedule` ADD `requested_by` INT NOT NULL DEFAULT 0 COMMENT '创建计划的操作者 ID' AFTER `user_id`");
+        } catch (Throwable $error) {
+            // 并发首请求可能同时补字段；重复字段表示目标状态已满足，其它错误继续抛出。
+            if (stripos($error->getMessage(), 'Duplicate column') === false && strpos($error->getMessage(), '1060') === false) {
+                throw $error;
+            }
+        }
+    }
     $checked = true;
 }
 
@@ -40,7 +53,13 @@ function ensureAppDeleteScheduleSchema(PDO $pdo): void
 function appDeleteScheduleNormalizeDelay($value): int
 {
     if ($value === null || $value === '') return 0;
-    if (!is_numeric($value)) throw new InvalidArgumentException('删除延迟时间不合法');
+    // 小数和负数不能截断为零，否则本来想延迟的请求会变成立即删除。
+    if ((!is_int($value) && !is_string($value)) || !preg_match('/^\d+$/D', (string)$value)) {
+        throw new InvalidArgumentException('删除延迟必须为非负整数秒');
+    }
+    if ((float)$value > APP_DELETE_SCHEDULE_MAX_DELAY_SECONDS) {
+        throw new InvalidArgumentException('删除延迟最多只能设置 7 天');
+    }
     $seconds = (int)$value;
     if ($seconds < 0 || $seconds > APP_DELETE_SCHEDULE_MAX_DELAY_SECONDS) {
         throw new InvalidArgumentException('删除延迟最多只能设置 7 天');
@@ -79,8 +98,9 @@ function appDeleteScheduleCreate(PDO $pdo, int $appId, array $user, int $delaySe
     if ($appId <= 0 || $delaySeconds <= 0 || $delaySeconds > APP_DELETE_SCHEDULE_MAX_DELAY_SECONDS) {
         throw new InvalidArgumentException('删除计划参数错误');
     }
-    ensureAppDeleteScheduleSchema($pdo);
     if ($pdo->inTransaction()) throw new RuntimeException('删除计划需要独立事务边界');
+    ensureAppDeleteScheduleSchema($pdo);
+    ensureApkDeleteMarkerTable($pdo);
 
     $userId = (int)($user['id'] ?? 0);
     $isAdmin = (string)($user['role'] ?? '') === 'admin';
@@ -110,11 +130,12 @@ function appDeleteScheduleCreate(PDO $pdo, int $appId, array $user, int $delaySe
         $applyAt = (new DateTimeImmutable('now', new DateTimeZone('UTC')))
             ->modify('+' . $delaySeconds . ' seconds')->format('Y-m-d H:i:s');
         $insert = $pdo->prepare("INSERT INTO cainiao_apk_delete_schedule
-            (app_id,user_id,apply_at,status,progress_token,app_name,app_package,created_at,updated_at,applied_at,error_message)
-            VALUES (:app_id,:user_id,:apply_at,'pending',:progress_token,:app_name,:app_package,UTC_TIMESTAMP(),UTC_TIMESTAMP(),NULL,'')");
+            (app_id,user_id,requested_by,apply_at,status,progress_token,app_name,app_package,created_at,updated_at,applied_at,error_message)
+            VALUES (:app_id,:user_id,:requested_by,:apply_at,'pending',:progress_token,:app_name,:app_package,UTC_TIMESTAMP(),UTC_TIMESTAMP(),NULL,'')");
         $insert->execute([
             ':app_id' => $appId,
             ':user_id' => (int)$app['user_id'],
+            ':requested_by' => $userId,
             ':apply_at' => $applyAt,
             ':progress_token' => $progressToken,
             ':app_name' => (string)($app['name'] ?? ''),
@@ -187,21 +208,32 @@ function appDeleteScheduleAttachRows(PDO $pdo, array &$list): void
 /** 将到期计划转入现有删除标记、配置失效和后台物理清理链路。 */
 function appDeleteScheduleProcessDue(PDO $pdo, int $limit = 1): int
 {
+    if ($pdo->inTransaction()) throw new RuntimeException('到期删除需要独立事务边界');
+    // 所有建表操作都在事务外完成，避免 MySQL DDL 隐式提交业务事务。
     ensureAppDeleteScheduleSchema($pdo);
-    if (!function_exists('appDeleteStartBackgroundCleanup')) return 0;
     ensureApkDeleteMarkerTable($pdo);
     ensureAppConfigInvalidationJobTable($pdo);
+    if (function_exists('ensureAppInfoScheduleSchema')) ensureAppInfoScheduleSchema($pdo);
     $processed = 0;
+    $seen = [];
     for ($i = 0; $i < max(1, $limit); $i++) {
+        $excluded = $seen ? ' AND schedule_id NOT IN (' . implode(',', $seen) . ')' : '';
         $candidate = $pdo->query("SELECT schedule_id,app_id,user_id FROM cainiao_apk_delete_schedule
-            WHERE status IN ('pending','queued') AND apply_at<=UTC_TIMESTAMP()
+            WHERE status IN ('pending','queued') AND apply_at<=UTC_TIMESTAMP()" . $excluded . "
             ORDER BY apply_at ASC,schedule_id ASC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
         if (!$candidate) break;
         $scheduleId = (int)$candidate['schedule_id'];
         $appId = (int)$candidate['app_id'];
+        $seen[] = $scheduleId;
+        // 会话锁覆盖事务提交和队列交接，多个调度器不会同时交接同一计划。
+        // 进程退出时 MySQL 自动释放，queued 状态则继续承担崩溃后的重试依据。
+        $lockName = 'app_delete_schedule_' . $appId;
+        $lock = $pdo->prepare('SELECT GET_LOCK(:lock_name, 0)');
+        $lock->execute([':lock_name' => $lockName]);
+        if ((int)$lock->fetchColumn() !== 1) continue;
         try {
             $pdo->beginTransaction();
-            $appStmt = $pdo->prepare("SELECT a.* FROM cainiao_apk a
+            $appStmt = $pdo->prepare("SELECT a.*, d.apk_id AS deleted_app_id FROM cainiao_apk a
                 LEFT JOIN cainiao_apk_deleted d ON d.apk_id=a.id
                 WHERE a.id=:id LIMIT 1 FOR UPDATE");
             $appStmt->execute([':id' => $appId]);
@@ -214,50 +246,41 @@ function appDeleteScheduleProcessDue(PDO $pdo, int $limit = 1): int
                 $pdo->rollBack();
                 continue;
             }
-            if (!$app) {
-                // 已经写入删除标记但进程在提交后崩溃时，保留 queued 计划并补跑
-                // 后台清理；只有仍处于 pending 的计划才表示应用被其它流程先删除。
-                if ((string)$schedule['status'] === 'queued') {
-                    $pdo->commit();
-                    $cleanup = appDeleteStartBackgroundCleanup($appId, (int)$schedule['user_id'], 'scheduled-retry', (string)($schedule['progress_token'] ?? ''));
-                    appDeleteStartRuntimeInvalidation($appId);
-                    $done = $pdo->prepare("UPDATE cainiao_apk_delete_schedule SET status=:status,updated_at=UTC_TIMESTAMP(),error_message=:error WHERE schedule_id=:id AND status='queued'");
-                    $done->execute([
-                        ':status' => !empty($cleanup['queued']) ? 'completed' : 'failed',
-                        ':error' => !empty($cleanup['queued']) ? '' : substr((string)($cleanup['message'] ?? '后台清理队列落盘失败'), 0, 500),
-                        ':id' => $scheduleId,
-                    ]);
-                } else {
-                    $cancel = $pdo->prepare("UPDATE cainiao_apk_delete_schedule SET status='cancelled',updated_at=UTC_TIMESTAMP(),error_message='应用已不存在' WHERE schedule_id=:id");
+            if ((string)$schedule['status'] === 'pending') {
+                if (!$app || !empty($app['deleted_app_id']) || (int)$app['user_id'] !== (int)$schedule['user_id']) {
+                    $cancel = $pdo->prepare("UPDATE cainiao_apk_delete_schedule SET status='cancelled',updated_at=UTC_TIMESTAMP(),error_message='应用已删除或归属已变更' WHERE schedule_id=:id AND status='pending'");
                     $cancel->execute([':id' => $scheduleId]);
                     $pdo->commit();
+                    $processed++;
+                    continue;
                 }
-                $processed++;
-                continue;
+                if (function_exists('appInfoScheduleCancel')) appInfoScheduleCancel($pdo, $appId);
+                markApkDeleted($pdo, $appId, (int)$app['user_id'], (int)($schedule['requested_by'] ?: $schedule['user_id']), '延迟删除到期');
+                enqueueAppConfigInvalidationJob($pdo, $appId);
+                $queued = $pdo->prepare("UPDATE cainiao_apk_delete_schedule SET status='queued',applied_at=UTC_TIMESTAMP(),updated_at=UTC_TIMESTAMP(),error_message='' WHERE schedule_id=:id AND status='pending'");
+                $queued->execute([':id' => $scheduleId]);
             }
-            appInfoScheduleCancel($pdo, $appId);
-            markApkDeleted($pdo, $appId, (int)$app['user_id'], (int)$schedule['user_id'], '延迟删除到期');
-            enqueueAppConfigInvalidationJob($pdo, $appId);
-            $queued = $pdo->prepare("UPDATE cainiao_apk_delete_schedule SET status='queued',applied_at=UTC_TIMESTAMP(),updated_at=UTC_TIMESTAMP(),error_message='' WHERE schedule_id=:id");
-            $queued->execute([':id' => $scheduleId]);
+            // queued 只补交接，不能重写删除标记或重置已经完成的配置失效任务。
             $pdo->commit();
-
-            $token = (string)($schedule['progress_token'] ?? '');
-            $cleanup = appDeleteStartBackgroundCleanup($appId, (int)$app['user_id'], 'scheduled', $token);
+            $cleanup = appDeleteStartBackgroundCleanup($appId, (int)$schedule['user_id'], 'scheduled', (string)($schedule['progress_token'] ?? ''));
+            if (empty($cleanup['started'])) {
+                throw new RuntimeException((string)($cleanup['message'] ?? '后台清理队列启动失败'));
+            }
+            $done = $pdo->prepare("UPDATE cainiao_apk_delete_schedule SET status='completed',updated_at=UTC_TIMESTAMP(),error_message='' WHERE schedule_id=:id AND status='queued'");
+            $done->execute([':id' => $scheduleId]);
+            // 持久化失效任务和清理队列已接管，快速失效通道失败不撤销交接结果。
             appDeleteStartRuntimeInvalidation($appId);
-            $done = $pdo->prepare("UPDATE cainiao_apk_delete_schedule SET status=:status,updated_at=UTC_TIMESTAMP(),error_message=:error WHERE schedule_id=:id AND status='queued'");
-            $done->execute([
-                ':status' => !empty($cleanup['queued']) ? 'completed' : 'failed',
-                ':error' => !empty($cleanup['queued']) ? '' : substr((string)($cleanup['message'] ?? '后台清理队列落盘失败'), 0, 500),
-                ':id' => $scheduleId,
-            ]);
             $processed++;
         } catch (Throwable $error) {
             if ($pdo->inTransaction()) $pdo->rollBack();
-            $fail = $pdo->prepare("UPDATE cainiao_apk_delete_schedule SET status='failed',updated_at=UTC_TIMESTAMP(),error_message=:error WHERE schedule_id=:id AND status IN ('pending','queued')");
-            $fail->execute([':error' => substr($error->getMessage(), 0, 500), ':id' => $scheduleId]);
-            error_log('[AppDeleteSchedule] 到期删除失败 appId=' . $appId . '：' . $error->getMessage());
-            $processed++;
+            $message = function_exists('mb_substr') ? mb_substr($error->getMessage(), 0, 480) : substr($error->getMessage(), 0, 480);
+            // 瞬态失败保留 pending/queued，由下一轮继续；不能把已隐藏应用遗留为终态失败。
+            $retry = $pdo->prepare("UPDATE cainiao_apk_delete_schedule SET updated_at=UTC_TIMESTAMP(),error_message=:error WHERE schedule_id=:id AND status IN ('pending','queued')");
+            $retry->execute([':error' => $message, ':id' => $scheduleId]);
+            error_log('[AppDeleteSchedule] 到期删除等待重试 appId=' . $appId);
+        } finally {
+            $release = $pdo->prepare('SELECT RELEASE_LOCK(:lock_name)');
+            $release->execute([':lock_name' => $lockName]);
         }
     }
     return $processed;

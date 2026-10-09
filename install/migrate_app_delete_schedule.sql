@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS `cainiao_apk_delete_schedule` (
     `schedule_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '删除计划 ID',
     `app_id` INT NOT NULL COMMENT '应用 ID',
     `user_id` INT NOT NULL DEFAULT 0 COMMENT '应用所属用户 ID',
+    `requested_by` INT NOT NULL DEFAULT 0 COMMENT '创建计划的操作者 ID',
     `apply_at` DATETIME NOT NULL COMMENT 'UTC 执行时间',
     `status` VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/queued/completed/cancelled/failed',
     `progress_token` VARCHAR(128) NOT NULL DEFAULT '' COMMENT '删除进度 token',
