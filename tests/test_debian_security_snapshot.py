@@ -110,7 +110,14 @@ class DebianSecuritySnapshotTests(unittest.TestCase):
 
     def test_php_base_and_strict_index_update_remain_pinned(self) -> None:
         base_images = [line for line in self.dockerfile.splitlines() if line.startswith("FROM ")]
-        self.assertIn("FROM php:7.4-cli-bullseye", base_images)
+        self.assertTrue(
+            any(line.endswith("php:7.4-cli-bullseye") for line in base_images),
+            base_images,
+        )
+        self.assertTrue(
+            any(line.endswith("golang:1.22.2-bookworm AS websocket-builder") for line in base_images),
+            base_images,
+        )
         self.assertIn("APT::Update::Error-Mode=any update", self.dockerfile)
         self.assertNotIn("--fix-missing", self.dockerfile)
         self.assertIn("&& grep -Fq 'https://snapshot.debian.org/archive/debian-security/'", self.dockerfile)

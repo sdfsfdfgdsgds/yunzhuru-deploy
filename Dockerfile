@@ -1,6 +1,7 @@
 # WebSocket 服务必须从当前源码构建，避免把历史预编译 ws.ws 当成最新版本发布。
 # 使用固定 Go 版本复现 server/websocket/go.mod 的 go 1.22.2 合同。
-FROM golang:1.22.2-bookworm AS websocket-builder
+# 使用 Docker Official Images 的 AWS Public ECR 镜像源，避免 Railway 构建器访问 Docker Hub 时触发限流。
+FROM public.ecr.aws/docker/library/golang:1.22.2-bookworm AS websocket-builder
 WORKDIR /src/websocket
 COPY websocket/go.mod websocket/go.sum ./
 RUN go mod download
@@ -8,7 +9,7 @@ COPY websocket/main.go websocket/push_protocol.go ./
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -trimpath -buildvcs=false -o /out/ws.ws .
 
-FROM php:7.4-cli-bullseye
+FROM public.ecr.aws/docker/library/php:7.4-cli-bullseye
 
 # 系统依赖（含 Android 注入工具链）
 # Bullseye 安全源出现索引仍在、安装包已移除的 404；固定官方快照恢复构建。
