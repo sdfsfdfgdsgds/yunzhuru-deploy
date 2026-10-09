@@ -12,6 +12,21 @@
   <script src="/pages/app/common/download-name.js"></script>
   <script src="/config.js"></script>
   <style>
+    .pending-plan-list { max-height: 340px; overflow: auto; margin-bottom: 14px; }
+    .pending-plan-item { border: 1px solid var(--el-border-color-light, #e5e7eb); border-radius: 8px; padding: 12px; margin: 8px 0; }
+    .pending-plan-time { font-weight: 600; line-height: 1.6; }
+    .pending-plan-countdown { color: var(--el-color-warning, #b7791f); font-size: 12px; margin: 4px 0 8px; }
+    .pending-change-row { padding: 8px 0; border-top: 1px solid var(--el-border-color-lighter, #ebeef5); }
+    .pending-change-name { font-weight: 600; margin-bottom: 4px; }
+    .pending-change-values { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+    .pending-value-label { color: var(--el-text-color-secondary, #909399); font-size: 12px; }
+    .pending-value-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+    .pending-value-next { color: var(--el-color-primary, #409eff); }
+    .pending-panel-note { font-size: 12px; color: var(--el-text-color-secondary, #909399); line-height: 1.6; margin: 8px 0; }
+    .pending-details-dialog { width: min(660px, 90vw) !important; }
+    .pending-details-dialog .pending-plan-list { max-height: 60vh; }
+    .pending-summary-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    @media (max-width: 480px) { .pending-change-values { grid-template-columns: minmax(0, 1fr); gap: 6px; } }
     .toolbar {
       margin: 20px 0 10px;
       display: flex;
@@ -390,9 +405,10 @@
 
       <el-table-column label="待生效" min-width="150">
         <template #default="scope">
-          <el-tag v-if="pendingUpdateCount(scope.row) > 0" type="warning" size="small">
-            {{ pendingUpdateLabel(scope.row) }}
-          </el-tag>
+          <div v-if="pendingUpdateCount(scope.row) > 0" class="pending-summary-cell">
+            <el-tag type="warning" size="small">{{ pendingUpdateLabel(scope.row) }}</el-tag>
+            <el-button type="primary" link size="small" @click="openPendingDetails(scope.row)">查看修改</el-button>
+          </div>
           <span v-else>-</span>
         </template>
       </el-table-column>
@@ -482,7 +498,19 @@
     </el-dialog>
     
     
+    <el-dialog title="待生效修改" v-model="pendingDetailsVisible" class="pending-details-dialog">
+      <p class="pending-panel-note">{{ pendingDetailRow && pendingDetailRow.name }} · 这里只展示待生效计划，当前配置仍正常使用。</p>
+      <pending-app-changes :row="pendingDetailRow" :clock="pendingClock"></pending-app-changes>
+      <template #footer><el-button @click="pendingDetailsVisible = false">关闭</el-button></template>
+    </el-dialog>
+
     <el-dialog title="修改应用信息（可选择延迟生效）" v-model="editDialogVisible" width="500px">
+      <section v-if="editPendingCount > 0" aria-label="待生效修改">
+        <strong>待生效修改</strong>
+        <p class="pending-panel-note">{{ editPendingSummary }}</p>
+        <pending-app-changes :row="editPendingRow" :clock="pendingClock"></pending-app-changes>
+        <p class="pending-panel-note">下面表单编辑的是当前生效配置。同一项再次修改时，以后一次保存为准。</p>
+      </section>
       <el-form :model="editForm" label-width="80px">
         <el-form-item label="名称">
           <el-input v-model="editForm.name"></el-input>
@@ -548,8 +576,8 @@
             <el-option
               v-for="app in allApps"
               :key="app.id"
-              :label="`[${app.id}] ${app.name} | ${app.package}`"
-              :disabled="app.id === editForm.id"
+              :label="reuseAppLabel(app)"
+              :disabled="app.unavailable || app.id === Number(editForm.id)"
               :value="app.id">
             </el-option>
           </el-select>
@@ -590,13 +618,6 @@
           <div style="margin-top: 5px; color: #64748b; font-size: 12px;">
             未设置时立即保存；延迟期间应用信息保持旧值，到期后由后台自动应用。
           </div>
-          <el-alert
-            v-if="editPendingCount > 0"
-            :title="editPendingSummary"
-            type="warning"
-            :closable="false"
-            style="margin-top: 8px;">
-          </el-alert>
         </el-form-item>
       </el-form>
       <el-button
@@ -1215,8 +1236,76 @@
   <script>
     const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
 
+    /** 统一复用目标的可读标签，编号只作为辅助识别信息。 */
+    function reuseAppLabel(app) {
+      return `[${Number(app.id)}] ${app.name || '应用不可用'}${app.package ? ' | ' + app.package : ''}`;
+    }
+
+    /** 列表详情与编辑弹窗共用同一计划视图，展示值不进入可编辑表单。 */
+    const PendingAppChanges = {
+      props: { row: { type: Object, default: null }, clock: { type: Number, required: true } },
+      computed: {
+        plans() { return this.row && Array.isArray(this.row.pending_updates) ? this.row.pending_updates : []; }
+      },
+      methods: {
+        fieldLabel(field) {
+          return { name: '名称', app_key: '解绑码', download_name_template: '下载名', is_reusable: '复用身份',
+            config_mode: '配置方式', reuse_apk_id: '复用谁', domain_mode: '接口域名',
+            custom_domains: '自定义域名', reuse_options: '复用选项' }[field] || field;
+        },
+        valueLabel(field, value) {
+          if (field === 'config_mode') return Number(value) === 1 ? '复用其他应用配置' : '独用一套配置';
+          if (field === 'domain_mode') return Number(value) === 1 ? '自定义域名' : '壳内置域名';
+          if (field === 'is_reusable') return Number(value) === 1 ? '允许被复用' : '不展示';
+          if (field === 'app_key') return value === null || value === undefined || value === '' ? '未设置' : '已设置';
+          if (field === 'reuse_apk_id') {
+            if (!value) return '未设置';
+            const id = Number(value);
+            const targets = this.row.pending_reuse_targets || {};
+            const target = targets[id] || (Number(this.row.reuse_apk_id) === id
+              ? { id, name: this.row.reuse_apk_name, package: this.row.reuse_apk_package } : { id });
+            return reuseAppLabel(target);
+          }
+          if (field === 'reuse_options') {
+            let items = value;
+            if (!Array.isArray(items)) { try { items = JSON.parse(items || '[]'); } catch (_) { items = []; } }
+            return Array.isArray(items) && items.length ? items.join('、') : '无';
+          }
+          return value === null || value === undefined || value === '' ? '未设置' : String(value);
+        },
+        applyTime(plan) {
+          const date = new Date(plan.apply_at);
+          return Number.isFinite(date.getTime()) ? date.toLocaleString('zh-CN', {
+            timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+          }) + '（北京时间）' : '等待后台处理';
+        },
+        countdown(plan) {
+          const remaining = Math.max(0, Math.ceil((Date.parse(plan.apply_at) - this.clock) / 1000));
+          if (!remaining) return '已到时间，后台处理中';
+          return [Math.floor(remaining / 3600), Math.floor(remaining % 3600 / 60), remaining % 60]
+            .map(value => String(value).padStart(2, '0')).join(':') + ' 后生效';
+        }
+      },
+      template: `<div class="pending-plan-list">
+        <article v-for="plan in plans" :key="plan.schedule_id" class="pending-plan-item">
+          <div class="pending-plan-time">生效时间：{{ applyTime(plan) }}</div>
+          <div class="pending-plan-countdown">{{ countdown(plan) }}</div>
+          <div v-for="change in plan.changes" :key="change.field" class="pending-change-row">
+            <div class="pending-change-name">{{ fieldLabel(change.field) }}</div>
+            <div class="pending-change-values">
+              <div><div class="pending-value-label">当前生效</div><div class="pending-value-text">{{ valueLabel(change.field, row[change.field]) }}</div></div>
+              <div><div class="pending-value-label">待生效</div><div class="pending-value-text pending-value-next">{{ valueLabel(change.field, change.after) }}</div></div>
+            </div>
+          </div>
+        </article>
+        <p v-if="!plans.length" class="pending-panel-note">暂无待生效修改</p>
+      </div>`
+    };
+
     createApp({
       components: {
+        PendingAppChanges,
         ConfigEntryDataViewer: window.YunzhuruConfigEntryDataViewer,
       },
       setup() {
@@ -2030,7 +2119,7 @@ const permissionOptions = [
         }
 
         
-        async function loadData() {
+        async function loadData(options = {}) {
           try {
             const res = await fetch(`/api/index.php?module=app&method=getMyAppList`, {
               method: 'POST',
@@ -2047,16 +2136,27 @@ const permissionOptions = [
                 stats.total_storage = s.total_storage || 0;
                 stats.used_percent = s.used_percent || 0;
               updatePendingRefreshTimer();
-              // 后台到期刷新时，只有没有未提交草稿才回填当前有效值。
-              if (editDialogVisible.value && !editHasUnsavedChanges()) {
-                const currentRow = tableData.value.find(row => String(row.id) === String(editForm.id));
-                if (currentRow) syncEditFormFromRow(currentRow);
+              // 计划展示始终跟随最新列表；用户正在编辑的草稿与延迟选择不被轮询覆盖。
+              if (editDialogVisible.value) {
+                const currentRow = tableData.value.find(row => Number(row.id) === Number(editForm.id));
+                if (currentRow) {
+                  syncEditPendingFromRow(currentRow);
+                  if (!editHasUnsavedChanges() && !editSaving.value) {
+                    const delay = editForm.apply_after_seconds;
+                    syncEditFormFromRow(currentRow);
+                    editForm.apply_after_seconds = delay;
+                  }
+                }
+              }
+              if (pendingDetailsVisible.value && pendingDetailRow.value) {
+                const currentRow = tableData.value.find(row => Number(row.id) === Number(pendingDetailRow.value.id));
+                if (currentRow) pendingDetailRow.value = currentRow;
               }
             } else {
-              ElementPlus.ElMessage.error(json.message || '加载失败');
+              if (!options.silent) ElementPlus.ElMessage.error(json.message || '加载失败');
             }
           } catch (err) {
-            ElementPlus.ElMessage.error('请求失败');
+            if (!options.silent) ElementPlus.ElMessage.error('请求失败');
           }
         }
 
@@ -2502,6 +2602,9 @@ function handleDelete(row) {
         const editPendingApplyAt = ref('');
         const editPendingRemaining = ref(0);
         const editPendingCount = ref(0);
+        const editPendingRow = ref(null);
+        const pendingDetailsVisible = ref(false);
+        const pendingDetailRow = ref(null);
         const pendingClock = ref(Date.now());
         let pendingClockTimer = null;
         let pendingRefreshTimer = null;
@@ -2609,7 +2712,7 @@ function updatePendingRefreshTimer() {
     if (pendingRefreshBusy) return;
     pendingRefreshBusy = true;
     try {
-      await loadData();
+      await loadData({ silent: true });
     } finally {
       pendingRefreshBusy = false;
     }
@@ -2658,16 +2761,28 @@ function syncEditFormFromRow(row) {
   editForm.reuse_options = normalizeReuseOptions(row.reuse_options);
   editForm.apply_after_seconds = 0;
   editOriginal.value = cloneEditValues(editForm);
+  syncEditPendingFromRow(row);
+}
+
+/** 刷新只读计划状态，不碰表单里的未保存修改。 */
+function syncEditPendingFromRow(row) {
+  editPendingRow.value = row;
   editPendingApplyAt.value = String(row.pending_update_apply_at || '');
   editPendingRemaining.value = Number(row.pending_update_remaining_seconds || 0);
   editPendingCount.value = pendingUpdateCount(row);
   updateEditPendingCountdown();
 }
 
+function openPendingDetails(row) {
+  pendingDetailRow.value = row;
+  pendingDetailsVisible.value = true;
+}
+
 function editInfo(row) {
   // 每次重开都从当前有效列表值开始，待生效内容只在提示区显示。
   syncEditFormFromRow(row);
 // 只有打开编辑时才加载复用应用列表
+  allApps.value = currentReuseFallback(row);
   loadAllApps(row.id);
   nextTick(() => {
     editDialogVisible.value = true;
@@ -2780,15 +2895,31 @@ async function searchReuseTarget(keyword) {
   reuseSearchLoading.value = false;
 }
 
+/** 当前目标即使不在候选页，也保留名称展示；该兜底项不可被重新选取。 */
+function currentReuseFallback(row) {
+  const id = Number(row && row.reuse_apk_id);
+  if (!id) return [];
+  return [{ id, name: row.reuse_apk_name || '应用不可用', package: row.reuse_apk_package || '', unavailable: true }];
+}
+
 async function loadAllApps(appid) {
-  const res = await fetch('/api/index.php?module=app&method=getMyReuseAppList', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ page: 1, limit: 1000, appid: appid }) // 拉全量
-  });
-  const json = await res.json();
-  if (json.code === 200) {
-    allApps.value = json.data.list;
+  try {
+    const res = await fetch('/api/index.php?module=app&method=getMyReuseAppList', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page: 1, limit: 1000, appid })
+    });
+    const json = await res.json();
+    // 异步响应只属于发起请求的应用，快速切换编辑时不覆盖另一应用的候选项。
+    if (Number(editForm.id) !== Number(appid)) return;
+    if (json.code === 200) {
+      const options = (json.data.list || []).map(app => ({ ...app, id: Number(app.id) }));
+      const fallback = currentReuseFallback(editPendingRow.value);
+      allApps.value = options.concat(fallback.filter(app => !options.some(option => option.id === app.id)));
+    }
+  } catch (_) {
+    // 读取失败时保留当前目标标签，避免将应用名称退化为裸编号。
+    if (Number(editForm.id) === Number(appid)) ElementPlus.ElMessage.error('复用应用列表加载失败，请稍后重试');
   }
 }
 
@@ -3084,6 +3215,12 @@ onUnmounted(() => {
           editSaving,
           editPendingRemaining,
           editPendingCount,
+          editPendingRow,
+          pendingClock,
+          pendingDetailsVisible,
+          pendingDetailRow,
+          openPendingDetails,
+          reuseAppLabel,
           editPendingSummary,
           editSaveButtonText,
           editForm,

@@ -162,38 +162,111 @@ function appInfoScheduleCancel(PDO $pdo, int $appId, ?array $changedFields = nul
     appInfoSchedulePruneConflicts($pdo, $appId, $changedFields);
 }
 
-/** 给列表附加最早计划和计划数量，前端据此恢复倒计时。 */
+/** 只投影允许展示的计划差异，不向页面暴露内部守卫或任意载荷字段。 */
+function appInfoScheduleDisplayChanges(string $encoded): array
+{
+    $payload = json_decode($encoded, true);
+    $allowed = ['name', 'download_name_template', 'app_key', 'is_reusable', 'config_mode', 'reuse_apk_id', 'domain_mode', 'custom_domains', 'reuse_options'];
+    $changes = [];
+    foreach (is_array($payload['changes'] ?? null) ? $payload['changes'] : [] as $field => $change) {
+        if (!in_array($field, $allowed, true) || !is_array($change)
+            || !array_key_exists('before', $change) || !array_key_exists('after', $change)) continue;
+        $values = [];
+        foreach (['before', 'after'] as $side) {
+            $value = $change[$side];
+            if ($field === 'reuse_options') {
+                $value = is_array($value) ? array_values(array_filter($value, 'is_string')) : [];
+            } elseif ($field === 'app_key') {
+                // 解绑码属于授权凭据，待生效详情只展示是否设置，不回传明文。
+                $value = $value === null || trim((string)$value) === '' ? null : '已设置';
+            } elseif (in_array($field, ['is_reusable', 'config_mode', 'domain_mode', 'reuse_apk_id'], true)) {
+                $value = $field === 'reuse_apk_id' && ($value === null || $value === '') ? null : (int)$value;
+            } else {
+                $value = $value === null ? null : (is_scalar($value) ? (string)$value : '');
+            }
+            $values[$side] = $value;
+        }
+        $changes[] = ['field' => $field, 'before' => $values['before'], 'after' => $values['after']];
+    }
+    return $changes;
+}
+
+/** 附加所有待生效差异和最早倒计时；复用名称只允许读取应用所属用户的目标。 */
 function appInfoScheduleAttachRows(PDO $pdo, array &$rows): void
 {
     ensureAppInfoScheduleSchema($pdo);
+    $owners = [];
     foreach ($rows as &$row) {
         $row['pending_update_status'] = '';
         $row['pending_update_apply_at'] = '';
         $row['pending_update_remaining_seconds'] = 0;
         $row['pending_update_count'] = 0;
+        $row['pending_updates'] = [];
+        $row['pending_reuse_targets'] = (object)[];
+        if ((int)($row['id'] ?? 0) > 0) $owners[(int)$row['id']] = (int)($row['user_id'] ?? 0);
     }
     unset($row);
-    if (!$rows) return;
-    $ids = array_values(array_unique(array_filter(array_map(static fn($row): int => (int)($row['id'] ?? 0), $rows), static fn(int $id): bool => $id > 0)));
-    if (!$ids) return;
+    if (!$owners) return;
+    $ids = array_keys($owners);
     $placeholders = implode(',', array_fill(0, count($ids), '?'));
-    $stmt = $pdo->prepare("SELECT app_id, status, apply_at, COUNT(*) OVER (PARTITION BY app_id) AS plan_count
+    $stmt = $pdo->prepare("SELECT schedule_id, app_id, user_id, status, apply_at, payload_json
         FROM cainiao_apk_info_schedule WHERE status='pending' AND app_id IN ({$placeholders})
-        ORDER BY apply_at ASC");
+        ORDER BY apply_at ASC, schedule_id ASC");
     $stmt->execute($ids);
     $scheduled = [];
+    $targetOwners = [];
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $item) {
         $id = (int)$item['app_id'];
-        if (!isset($scheduled[$id])) $scheduled[$id] = appInfoScheduleSnapshot($item) + ['count' => (int)$item['plan_count']];
+        if (!isset($owners[$id]) || $owners[$id] <= 0 || (int)$item['user_id'] !== $owners[$id]) continue;
+        $changes = appInfoScheduleDisplayChanges((string)$item['payload_json']);
+        $scheduled[$id][] = ['schedule_id' => (int)$item['schedule_id']]
+            + appInfoScheduleSnapshot($item) + ['changes' => $changes];
+        foreach ($changes as $change) {
+            if ($change['field'] !== 'reuse_apk_id') continue;
+            foreach (['before', 'after'] as $side) {
+                $targetId = (int)$change[$side];
+                if ($targetId > 0) $targetOwners[$owners[$id]][$targetId] = true;
+            }
+        }
+    }
+    $targets = [];
+    if ($targetOwners) {
+        $clauses = [];
+        $params = [];
+        foreach ($targetOwners as $ownerId => $targetIds) {
+            $clauses[] = '(a.user_id = ? AND a.id IN (' . implode(',', array_fill(0, count($targetIds), '?')) . '))';
+            $params[] = $ownerId;
+            foreach (array_keys($targetIds) as $targetId) $params[] = $targetId;
+        }
+        $targetStmt = $pdo->prepare('SELECT a.id, a.user_id, a.name, a.package FROM cainiao_apk a
+            LEFT JOIN cainiao_apk_deleted d ON d.apk_id = a.id
+            WHERE d.apk_id IS NULL AND (' . implode(' OR ', $clauses) . ')');
+        $targetStmt->execute($params);
+        foreach ($targetStmt->fetchAll(PDO::FETCH_ASSOC) as $target) {
+            $ownerId = (int)$target['user_id'];
+            $targetId = (int)$target['id'];
+            if (!isset($targetOwners[$ownerId][$targetId])) continue;
+            $targets[$ownerId][$targetId] = ['id' => $targetId, 'name' => (string)$target['name'], 'package' => (string)$target['package']];
+        }
     }
     foreach ($rows as &$row) {
         $id = (int)($row['id'] ?? 0);
-        if (isset($scheduled[$id])) {
-            $row['pending_update_status'] = $scheduled[$id]['status'];
-            $row['pending_update_apply_at'] = $scheduled[$id]['apply_at'];
-            $row['pending_update_remaining_seconds'] = $scheduled[$id]['remaining_seconds'];
-            $row['pending_update_count'] = $scheduled[$id]['count'];
+        $plans = $scheduled[$id] ?? [];
+        if (!$plans) continue;
+        $row['pending_updates'] = $plans;
+        $row['pending_update_status'] = $plans[0]['status'];
+        $row['pending_update_apply_at'] = $plans[0]['apply_at'];
+        $row['pending_update_remaining_seconds'] = $plans[0]['remaining_seconds'];
+        $row['pending_update_count'] = count($plans);
+        $rowTargets = [];
+        foreach ($plans as $plan) foreach ($plan['changes'] as $change) {
+            if ($change['field'] !== 'reuse_apk_id') continue;
+            foreach (['before', 'after'] as $side) {
+                $targetId = (int)$change[$side];
+                if (isset($targets[$owners[$id]][$targetId])) $rowTargets[$targetId] = $targets[$owners[$id]][$targetId];
+            }
         }
+        $row['pending_reuse_targets'] = (object)$rowTargets;
     }
     unset($row);
 }
