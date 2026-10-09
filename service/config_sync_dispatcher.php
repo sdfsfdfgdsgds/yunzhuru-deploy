@@ -30,14 +30,23 @@ register_shutdown_function(static function () use (&$booted): void {
 try {
     chdir(dirname(__DIR__));
     require_once __DIR__ . '/../config/db.php';
+    require_once __DIR__ . '/../config/redis.php';
     require_once __DIR__ . '/../api/utils/ConfigSyncState.php';
+    require_once __DIR__ . '/../api/utils/AppInfoSchedule.php';
     if (!isset($pdo) || !($pdo instanceof PDO)) throw new RuntimeException('database unavailable');
     ensureConfigSyncStateSchema($pdo);
+    ensureAppInfoScheduleSchema($pdo);
     $booted = true;
     configSyncWorkerLog('dispatcher_started', '', ['pid' => getmypid()]);
     $lastJobId = '';
     $lastAttemptAt = 0.0;
     while (true) {
+        // 应用信息计划与全局配置同步分开轮询；到期后才写主表并触发原有传播合同。
+        try {
+            appInfoScheduleProcessDue($pdo, 5);
+        } catch (Throwable $scheduleError) {
+            configSyncWorkerLog('app_info_schedule_failed', '', ['error_line' => $scheduleError->getLine()]);
+        }
         $state = configSyncWorkerReadState($pdo);
         $jobId = (string)($state['job_id'] ?? '');
         $now = microtime(true);

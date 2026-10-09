@@ -9,6 +9,7 @@ require_once __DIR__ . '/../utils/AppConfigInvalidation.php';
 require_once __DIR__ . '/../utils/BucketPush.php';
 require_once __DIR__ . '/../utils/ConfigDelivery.php';
 require_once __DIR__ . '/../utils/ApiConfigProbe.php';
+require_once __DIR__ . '/../utils/AppInfoSchedule.php';
 
 if (!defined('OSS_DOWNLOAD_KEEP_MINUTES')) {
     // 注入产物可能达到数百 MB 到数 GB，OSS 临时下载对象需要覆盖完整下载和断点续传窗口。
@@ -246,6 +247,8 @@ function getMyAppList(PDO $pdo, array $input)
     // 快照是注入时的不可变公开信息，与当前动态桶及配置推送范围分开。
     ensureBucketFeatureSchema($pdo);
     bucketAttachLatestAppSnapshots($pdo, $list);
+    // 待生效计划按应用独立展示；不会读取或改写全局配置同步任务。
+    appInfoScheduleAttachRows($pdo, $list);
 
     // 批量预查询，避免循环内N+1查询
     $now = date('Y-m-d H:i:s');
@@ -4767,11 +4770,28 @@ function updateAppInfo(PDO $pdo, array $input)
 
     $appId = (int)$input['id'];
 
+    // 只有编辑弹窗显式传入该字段时才启用延迟合同；下载名等旧调用方继续立即保存。
+    $hasScheduleControl = array_key_exists('apply_after_seconds', $input);
+    $applyAfterSeconds = 0;
+    if ($hasScheduleControl) {
+        $rawDelay = $input['apply_after_seconds'];
+        $isIntegerDelay = is_int($rawDelay)
+            || (is_string($rawDelay) && preg_match('/^\d+$/', $rawDelay) === 1);
+        if (!$isIntegerDelay) {
+            throw new InvalidArgumentException('延迟时间必须是非负整数秒');
+        }
+        $applyAfterSeconds = (int)$rawDelay;
+        if ($applyAfterSeconds < 0 || $applyAfterSeconds > APP_INFO_SCHEDULE_MAX_DELAY_SECONDS) {
+            throw new InvalidArgumentException('延迟时间需在 0 至 7 天内');
+        }
+    }
 
     // 验证该应用是否属于当前用户
     if ($user['role'] !== 'admin') {
         $stmt = $pdo->prepare("
-            SELECT a.user_id, a.config_mode, a.reuse_apk_id, a.reuse_options
+            SELECT a.user_id, a.config_mode, a.reuse_apk_id, a.reuse_options,
+                   a.name, a.download_name_template, a.app_key, a.is_reusable,
+                   a.domain_mode, a.custom_domains
             FROM `$apkTable` a
             LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
             WHERE a.id = :id
@@ -4781,7 +4801,9 @@ function updateAppInfo(PDO $pdo, array $input)
         $stmt->execute([':id' => $appId, ':user_id' => $userId]);
     } else {
         $stmt = $pdo->prepare("
-            SELECT a.user_id, a.config_mode, a.reuse_apk_id, a.reuse_options
+            SELECT a.user_id, a.config_mode, a.reuse_apk_id, a.reuse_options,
+                   a.name, a.download_name_template, a.app_key, a.is_reusable,
+                   a.domain_mode, a.custom_domains
             FROM `$apkTable` a
             LEFT JOIN `cainiao_apk_deleted` d ON d.apk_id = a.id
             WHERE a.id = :id
@@ -4802,20 +4824,24 @@ function updateAppInfo(PDO $pdo, array $input)
     $fields = [];
     $params = [':id' => $appId, ':user_id' => $userId];
     $reuseTargetIdForLock = null;
+    $requestedValues = [];
 
     // 可选字段
     if (isset($input['name'])) {
         $fields[] = "name = :name";
         $params[':name'] = trim($input['name']);
+        $requestedValues['name'] = $params[':name'];
     }
     if (array_key_exists('download_name_template', $input)) {
         $fields[] = "download_name_template = :download_name_template";
         $params[':download_name_template'] = normalizeDownloadNameTemplate($input['download_name_template']);
+        $requestedValues['download_name_template'] = $params[':download_name_template'];
     }
     //修改app卡密解绑授权码
     if (isset($input['app_key'])) {
         $fields[] = "app_key = :app_key";
         $params[':app_key'] = trim($input['app_key']);
+        $requestedValues['app_key'] = $params[':app_key'];
     }
 
     // 当前应用是否允许出现在“复用谁”的目标列表中。
@@ -4827,6 +4853,7 @@ function updateAppInfo(PDO $pdo, array $input)
 
         $fields[] = "is_reusable = :is_reusable";
         $params[':is_reusable'] = $isReusable;
+        $requestedValues['is_reusable'] = $isReusable;
     }
     
     //APP包名和版本不可修改
@@ -4849,6 +4876,7 @@ function updateAppInfo(PDO $pdo, array $input)
 
         $fields[] = "config_mode = :config_mode";
         $params[':config_mode'] = $configMode;
+        $requestedValues['config_mode'] = $configMode;
 
         if ($configMode === 1) {
             if (empty($input['reuse_apk_id']) || !is_numeric($input['reuse_apk_id'])) {
@@ -4878,8 +4906,10 @@ function updateAppInfo(PDO $pdo, array $input)
 
             $fields[] = "reuse_apk_id = :reuse_apk_id";
             $params[':reuse_apk_id'] = $reuseApkId;
+            $requestedValues['reuse_apk_id'] = $reuseApkId;
         } else {
             $fields[] = "reuse_apk_id = NULL";
+            $requestedValues['reuse_apk_id'] = null;
         }
     }
 
@@ -4892,6 +4922,7 @@ function updateAppInfo(PDO $pdo, array $input)
 
         $fields[] = "domain_mode = :domain_mode";
         $params[':domain_mode'] = $domainMode;
+        $requestedValues['domain_mode'] = $domainMode;
 
         if ($domainMode === 1) {
             if (empty($input['custom_domains'])) {
@@ -4916,8 +4947,10 @@ function updateAppInfo(PDO $pdo, array $input)
 
             $fields[] = "custom_domains = :custom_domains";
             $params[':custom_domains'] = implode("\n", $validDomains);
+            $requestedValues['custom_domains'] = $params[':custom_domains'];
         } else {
             $fields[] = "custom_domains = NULL";
+            $requestedValues['custom_domains'] = null;
         }
     }
     
@@ -4930,6 +4963,7 @@ function updateAppInfo(PDO $pdo, array $input)
         // 编码成 JSON 字符串保存
         $fields[] = "reuse_options = :reuse_options";
         $params[':reuse_options'] = json_encode($input['reuse_options'], JSON_UNESCAPED_UNICODE);
+        $requestedValues['reuse_options'] = $input['reuse_options'];
     }
 
 
@@ -4937,14 +4971,69 @@ function updateAppInfo(PDO $pdo, array $input)
         throw new Exception('没有任何可修改的字段');
     }
 
+    if ($hasScheduleControl && $applyAfterSeconds > 0) {
+        // 延迟保存只落计划表，不改应用主表；同一事务内锁应用行后裁剪冲突计划。
+        ensureAppInfoScheduleSchema($pdo);
+        if ($pdo->inTransaction()) {
+            throw new RuntimeException('应用信息延迟保存需要独立事务边界');
+        }
+        $pdo->beginTransaction();
+        try {
+            $lock = $pdo->prepare("SELECT a.user_id, a.name, a.download_name_template, a.app_key, a.is_reusable,
+                    a.config_mode, a.reuse_apk_id, a.domain_mode, a.custom_domains, a.reuse_options
+                FROM `$apkTable` a LEFT JOIN cainiao_apk_deleted d ON d.apk_id=a.id
+                WHERE a.id=:id AND a.user_id=:user_id AND d.apk_id IS NULL LIMIT 1 FOR UPDATE");
+            $lock->execute([':id' => $appId, ':user_id' => $userId]);
+            $lockedBefore = $lock->fetch(PDO::FETCH_ASSOC);
+            if (!$lockedBefore) throw new RuntimeException('应用已删除或无权访问');
+            $payload = appInfoScheduleBuildChanges($lockedBefore, $requestedValues);
+            if (!$payload['changes']) {
+                $pdo->rollBack();
+                return ['message' => '没有实际变化，无需延迟'];
+            }
+            appInfoSchedulePruneConflicts($pdo, $appId, $payload['changes']);
+            $pending = appInfoScheduleCreate($pdo, $appId, (int)$userId, $payload, $applyAfterSeconds);
+            $pdo->commit();
+            return [
+                'message' => '已保存，' . appInfoScheduleFormatDelay($pending['remaining_seconds']) . '后生效',
+                'scheduled' => 1,
+                'pending_update' => $pending,
+            ];
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $error;
+        }
+    }
+
     $startedReuseTransaction = false;
+    $startedAppInfoTransaction = false;
+    $actualScheduleChanges = [];
     try {
+        if ($hasScheduleControl && $applyAfterSeconds === 0) {
+            // 与到期 worker 相同，先锁应用行再锁计划行，防止旧快照覆盖立即保存。
+            ensureAppInfoScheduleSchema($pdo);
+            if (!$pdo->inTransaction()) {
+                $pdo->beginTransaction();
+                $startedAppInfoTransaction = true;
+            }
+            $appLock = $pdo->prepare("SELECT a.user_id, a.name, a.download_name_template, a.app_key, a.is_reusable,
+                    a.config_mode, a.reuse_apk_id, a.domain_mode, a.custom_domains, a.reuse_options
+                FROM `$apkTable` a LEFT JOIN cainiao_apk_deleted d ON d.apk_id=a.id
+                WHERE a.id=:id AND a.user_id=:user_id AND d.apk_id IS NULL LIMIT 1 FOR UPDATE");
+            $appLock->execute([':id' => $appId, ':user_id' => $userId]);
+            $lockedBefore = $appLock->fetch(PDO::FETCH_ASSOC);
+            if (!$lockedBefore) throw new RuntimeException('应用已删除或无权访问');
+            $appBefore = $lockedBefore;
+            $actualScheduleChanges = appInfoScheduleBuildChanges($lockedBefore, $requestedValues)['changes'];
+        }
         if ($reuseTargetIdForLock !== null) {
-            if ($pdo->inTransaction()) {
+            if ($pdo->inTransaction() && !$startedAppInfoTransaction) {
                 throw new RuntimeException('复用配置修改需要独立事务边界');
             }
-            $pdo->beginTransaction();
-            $startedReuseTransaction = true;
+            if (!$pdo->inTransaction()) {
+                $pdo->beginTransaction();
+                $startedReuseTransaction = true;
+            }
 
             // 与 deleteApp() 对目标主行的 FOR UPDATE 配对：删除先发生时本查询等待后
             // 看到 tombstone 并结束；复用先发生时删除会在提交后收集到该依赖。
@@ -4970,11 +5059,14 @@ function updateAppInfo(PDO $pdo, array $input)
         $update = $pdo->prepare($sql);
         $update->execute($params);
 
-        if ($startedReuseTransaction && $pdo->inTransaction()) {
+        if (($startedReuseTransaction || $startedAppInfoTransaction) && $pdo->inTransaction()) {
+            if ($hasScheduleControl && $applyAfterSeconds === 0 && $actualScheduleChanges) {
+                appInfoSchedulePruneConflicts($pdo, $appId, $actualScheduleChanges);
+            }
             $pdo->commit();
         }
     } catch (\Throwable $e) {
-        if ($startedReuseTransaction && $pdo->inTransaction()) {
+        if (($startedReuseTransaction || $startedAppInfoTransaction) && $pdo->inTransaction()) {
             $pdo->rollBack();
         }
         throw $e;

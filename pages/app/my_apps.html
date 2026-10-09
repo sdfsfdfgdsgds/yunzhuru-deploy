@@ -388,6 +388,15 @@
           </template>
         </el-table-column>
 
+      <el-table-column label="待生效" min-width="150">
+        <template #default="scope">
+          <el-tag v-if="pendingUpdateCount(scope.row) > 0" type="warning" size="small">
+            {{ pendingUpdateLabel(scope.row) }}
+          </el-tag>
+          <span v-else>-</span>
+        </template>
+      </el-table-column>
+
       <el-table-column label="最近成功制品固定桶" min-width="238">
         <template #default="scope">
           <div class="static-bucket-summary">
@@ -473,7 +482,7 @@
     </el-dialog>
     
     
-    <el-dialog title="修改应用信息(修改后只是自己记录,不会影响编译结果)" v-model="editDialogVisible" width="500px">
+    <el-dialog title="修改应用信息（可选择延迟生效）" v-model="editDialogVisible" width="500px">
       <el-form :model="editForm" label-width="80px">
         <el-form-item label="名称">
           <el-input v-model="editForm.name"></el-input>
@@ -568,6 +577,27 @@
             
           </el-checkbox-group>
         </el-form-item>
+        <el-form-item label="生效延迟">
+          <el-select v-model="editForm.apply_after_seconds" placeholder="请选择生效时间" style="width: 100%;">
+            <el-option label="立即生效" :value="0"></el-option>
+            <el-option label="30 分钟后生效" :value="1800"></el-option>
+            <el-option label="1 小时后生效" :value="3600"></el-option>
+            <el-option label="3 小时后生效" :value="10800"></el-option>
+            <el-option label="6 小时后生效" :value="21600"></el-option>
+            <el-option label="12 小时后生效" :value="43200"></el-option>
+            <el-option label="24 小时后生效" :value="86400"></el-option>
+          </el-select>
+          <div style="margin-top: 5px; color: #64748b; font-size: 12px;">
+            未设置时立即保存；延迟期间应用信息保持旧值，到期后由后台自动应用。
+          </div>
+          <el-alert
+            v-if="editPendingCount > 0"
+            :title="editPendingSummary"
+            type="warning"
+            :closable="false"
+            style="margin-top: 8px;">
+          </el-alert>
+        </el-form-item>
       </el-form>
       <el-button
           type="primary"
@@ -580,7 +610,7 @@
       <template #footer>
         <span class="dialog-footer">
           <el-button @click="editDialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="editSaving" @click="saveEdit">保存</el-button>
+          <el-button type="primary" :loading="editSaving" @click="saveEdit">{{ editSaveButtonText }}</el-button>
         </span>
       </template>
     </el-dialog>
@@ -1183,7 +1213,7 @@
   </div>
 
   <script>
-    const { createApp, ref, reactive, computed, watch, onMounted, nextTick } = Vue;
+    const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
 
     createApp({
       components: {
@@ -2016,6 +2046,12 @@ const permissionOptions = [
                 stats.used_storage = s.used_storage || 0;
                 stats.total_storage = s.total_storage || 0;
                 stats.used_percent = s.used_percent || 0;
+              updatePendingRefreshTimer();
+              // 后台到期刷新时，只有没有未提交草稿才回填当前有效值。
+              if (editDialogVisible.value && !editHasUnsavedChanges()) {
+                const currentRow = tableData.value.find(row => String(row.id) === String(editForm.id));
+                if (currentRow) syncEditFormFromRow(currentRow);
+              }
             } else {
               ElementPlus.ElMessage.error(json.message || '加载失败');
             }
@@ -2463,9 +2499,17 @@ function handleDelete(row) {
         
         const editDialogVisible = ref(false);
         const editSaving = ref(false);
+        const editPendingApplyAt = ref('');
+        const editPendingRemaining = ref(0);
+        const editPendingCount = ref(0);
+        const pendingClock = ref(Date.now());
+        let pendingClockTimer = null;
+        let pendingRefreshTimer = null;
+        let pendingRefreshBusy = false;
         const editForm = reactive({
           id: null,
           name: '',
+          app_key: '',
           version: '',
           package: '',
           config_mode: 0,
@@ -2473,29 +2517,156 @@ function handleDelete(row) {
           reuse_apk_id: null,     // 被复用的 app id
           domain_mode: 0,         // 接口域名模式：0=壳内置，1=自定义
           custom_domains: '',      // 自定义域名，一行一个
-          reuse_options: []
+          reuse_options: [],
+          apply_after_seconds: 0   // 本次保存延迟秒数；0 表示立即生效
         });
+        // 保存前的有效值快照用于计算本次真正改动，避免倒计时期间把旧表单整份提交。
+        const editOriginal = ref(null);
 
-function editInfo(row) {
+function formatCountdown(seconds) {
+  const total = Math.max(0, Number(seconds) || 0);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  return [hours, minutes, secs].map(value => String(value).padStart(2, '0')).join(':');
+}
+
+function normalizeReuseOptions(value) {
+  if (Array.isArray(value)) return [...value];
+  try {
+    const parsed = JSON.parse(value || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function editValues(source) {
+  return {
+    name: String(source.name || ''),
+    app_key: String(source.app_key || ''),
+    is_reusable: Number(source.is_reusable || 0),
+    config_mode: Number(source.config_mode || 0),
+    reuse_apk_id: source.reuse_apk_id === null || source.reuse_apk_id === '' || source.reuse_apk_id === undefined
+      ? null : Number(source.reuse_apk_id),
+    domain_mode: Number(source.domain_mode || 0),
+    custom_domains: String(source.custom_domains || ''),
+    reuse_options: normalizeReuseOptions(source.reuse_options),
+  };
+}
+
+function cloneEditValues(values) {
+  const cloned = editValues(values);
+  cloned.reuse_options = [...cloned.reuse_options];
+  return cloned;
+}
+
+function sameEditValue(left, right) {
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return JSON.stringify(normalizeReuseOptions(left)) === JSON.stringify(normalizeReuseOptions(right));
+  }
+  return left === right;
+}
+
+function editHasUnsavedChanges() {
+  if (!editOriginal.value) return false;
+  const current = editValues(editForm);
+  return Object.keys(editOriginal.value).some(field => !sameEditValue(current[field], editOriginal.value[field]));
+}
+
+function pendingUpdateRemaining(row) {
+  pendingClock.value;
+  const applyAt = Date.parse(String(row && row.pending_update_apply_at || ''));
+  if (!Number.isFinite(applyAt)) return 0;
+  return Math.max(0, Math.ceil((applyAt - Date.now()) / 1000));
+}
+
+function pendingUpdateCount(row) {
+  const count = Number(row && row.pending_update_count);
+  if (Number.isFinite(count) && count > 0) return Math.floor(count);
+  return row && row.pending_update_status ? 1 : 0;
+}
+
+function pendingUpdateLabel(row) {
+  const remaining = pendingUpdateRemaining(row);
+  if (remaining > 0) {
+    const suffix = pendingUpdateCount(row) > 1 ? '（最早）' : '';
+    return formatCountdown(remaining) + ' 后生效' + suffix;
+  }
+  return '后台处理中';
+}
+
+function updatePendingRefreshTimer() {
+  const hasPending = tableData.value.some(row => pendingUpdateCount(row) > 0);
+  if (!hasPending) {
+    if (pendingRefreshTimer) window.clearInterval(pendingRefreshTimer);
+    pendingRefreshTimer = null;
+    return;
+  }
+  if (pendingRefreshTimer) return;
+  // 到期由后台 worker 处理，定期重读列表，避免倒计时到 00 后一直停留在旧值。
+  pendingRefreshTimer = window.setInterval(async () => {
+    if (pendingRefreshBusy) return;
+    pendingRefreshBusy = true;
+    try {
+      await loadData();
+    } finally {
+      pendingRefreshBusy = false;
+    }
+  }, 5000);
+}
+
+const editSaveButtonText = computed(() => {
+  const delay = Number(editForm.apply_after_seconds || 0);
+  return delay > 0 ? '保存（' + formatCountdown(delay) + ' 后生效）' : '保存';
+});
+
+const editPendingSummary = computed(() => {
+  const count = Math.max(0, Number(editPendingCount.value) || 0);
+  if (!count) return '';
+  const prefix = '当前有 ' + count + ' 项待生效修改，本次保存只提交本次改动的字段；';
+  if (editPendingRemaining.value > 0) {
+    return prefix + '最早 ' + formatCountdown(editPendingRemaining.value) + ' 后开始处理。';
+  }
+  return prefix + '后台正在处理，请稍候刷新。';
+});
+
+function updateEditPendingCountdown() {
+  pendingClock.value = Date.now();
+  if (!editPendingApplyAt.value) {
+    editPendingRemaining.value = 0;
+    return;
+  }
+  const applyAt = Date.parse(editPendingApplyAt.value);
+  editPendingRemaining.value = Number.isFinite(applyAt)
+    ? Math.max(0, Math.ceil((applyAt - Date.now()) / 1000))
+    : 0;
+}
+
+function syncEditFormFromRow(row) {
+  if (!row) return;
   editForm.id = row.id;
-  editForm.name = row.name;
-  editForm.app_key = row.app_key;
-  editForm.version = row.version;
-  editForm.package = row.package;
-
+  editForm.name = String(row.name || '');
+  editForm.app_key = String(row.app_key || '');
+  editForm.version = row.version || '';
+  editForm.package = row.package || '';
   editForm.config_mode = row.config_mode !== undefined ? Number(row.config_mode) : 0;
   editForm.is_reusable = row.is_reusable !== undefined ? Number(row.is_reusable) : 0;
-  editForm.reuse_apk_id = (editForm.config_mode === 1 && row.reuse_apk_id) ? row.reuse_apk_id : null;
-
+  editForm.reuse_apk_id = (editForm.config_mode === 1 && row.reuse_apk_id) ? Number(row.reuse_apk_id) : null;
   editForm.domain_mode = row.domain_mode !== undefined ? Number(row.domain_mode) : 0;
   editForm.custom_domains = row.custom_domains || '';
+  editForm.reuse_options = normalizeReuseOptions(row.reuse_options);
+  editForm.apply_after_seconds = 0;
+  editOriginal.value = cloneEditValues(editForm);
+  editPendingApplyAt.value = String(row.pending_update_apply_at || '');
+  editPendingRemaining.value = Number(row.pending_update_remaining_seconds || 0);
+  editPendingCount.value = pendingUpdateCount(row);
+  updateEditPendingCountdown();
+}
 
-  // 解析 reuse_options（字符串转数组），失败则设为空数组
-  try {
-    editForm.reuse_options = JSON.parse(row.reuse_options || '[]');
-  } catch (e) {
-    editForm.reuse_options = [];
-  }
+function editInfo(row) {
+  // 每次重开都从当前有效列表值开始，待生效内容只在提示区显示。
+  syncEditFormFromRow(row);
 // 只有打开编辑时才加载复用应用列表
   loadAllApps(row.id);
   nextTick(() => {
@@ -2647,6 +2818,43 @@ function selectFile() {
 
 
         
+function buildEditPayload() {
+  const current = editValues(editForm);
+  const original = editOriginal.value || cloneEditValues(current);
+  const payload = {
+    id: editForm.id,
+    apply_after_seconds: Number(editForm.apply_after_seconds || 0)
+  };
+  const changed = {};
+  const markChanged = field => {
+    if (!sameEditValue(current[field], original[field])) changed[field] = current[field];
+  };
+
+  markChanged('name');
+  markChanged('app_key');
+  markChanged('is_reusable');
+  markChanged('reuse_options');
+
+  // 配置方式和复用目标是一个业务合同，任一字段变化都提交成组值。
+  const configChanged = !sameEditValue(current.config_mode, original.config_mode)
+    || !sameEditValue(current.reuse_apk_id, original.reuse_apk_id);
+  if (configChanged) {
+    changed.config_mode = current.config_mode;
+    changed.reuse_apk_id = current.config_mode === 1 ? current.reuse_apk_id : null;
+  }
+
+  // 域名模式和域名正文也必须成组提交，避免后台留下半套配置。
+  const domainChanged = !sameEditValue(current.domain_mode, original.domain_mode)
+    || !sameEditValue(current.custom_domains, original.custom_domains);
+  if (domainChanged) {
+    changed.domain_mode = current.domain_mode;
+    changed.custom_domains = current.domain_mode === 1 ? current.custom_domains : '';
+  }
+
+  Object.assign(payload, changed);
+  return { payload, changed };
+}
+
 async function saveEdit() {
   if (editSaving.value) return;
 
@@ -2656,18 +2864,28 @@ async function saveEdit() {
       return;
     }
 
+  const editPayload = buildEditPayload();
+  if (!Object.keys(editPayload.changed).length) {
+    ElementPlus.ElMessage.warning('没有检测到新的修改');
+    return;
+  }
+
   editSaving.value = true;
   try {
     const res = await fetch('/api/index.php?module=app&method=updateAppInfo', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editForm)
+      body: JSON.stringify(editPayload.payload)
     });
     const json = await res.json();
     if (json.code === 200) {
-      ElementPlus.ElMessage.success('修改成功');
+      await loadData();
+      // 延迟保存也立即关闭弹窗；重新打开时从列表读取当前有效值，避免把待生效值
+      // 误显示为已经生效。列表会持续轮询，后台到期后再刷新为新值。
+      const currentRow = tableData.value.find(row => String(row.id) === String(editForm.id));
+      if (currentRow) syncEditFormFromRow(currentRow);
       editDialogVisible.value = false;
-      loadData();
+      ElementPlus.ElMessage.success(json.message || '修改成功');
     } else {
       ElementPlus.ElMessage.error(json.message || '修改失败');
     }
@@ -2837,9 +3055,17 @@ async function handleFileChange(event) {
 
 onMounted(() => {
   loadData();
+  pendingClockTimer = window.setInterval(updateEditPendingCountdown, 1000);
   checkAdmin().then(() => {
     if (isAdmin.value) loadUrlInjectData();
   });
+});
+
+onUnmounted(() => {
+  if (pendingClockTimer) window.clearInterval(pendingClockTimer);
+  pendingClockTimer = null;
+  if (pendingRefreshTimer) window.clearInterval(pendingRefreshTimer);
+  pendingRefreshTimer = null;
 });
 
         return {
@@ -2856,6 +3082,10 @@ onMounted(() => {
           handleFileChange,
           editDialogVisible,
           editSaving,
+          editPendingRemaining,
+          editPendingCount,
+          editPendingSummary,
+          editSaveButtonText,
           editForm,
           saveEdit,
           injectApp,
@@ -2869,6 +3099,10 @@ onMounted(() => {
           useRandomSign,
           currentApp,
           formatSize,
+          formatCountdown,
+          pendingUpdateCount,
+          pendingUpdateLabel,
+          pendingUpdateRemaining,
           chainDialogVisible,
           injectToTop,
           confirmInject,
