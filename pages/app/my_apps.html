@@ -36,12 +36,28 @@
     .pending-details-dialog .pending-plan-item,
     .edit-app-info-dialog .pending-plan-item { margin: 0; min-width: 0; }
     .edit-app-info-dialog { width: min(820px, 94vw) !important; }
+    .pending-inline-change {
+      margin-top: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--el-border-color-lighter, #ebeef5);
+      border-radius: 6px;
+      background: var(--el-fill-color-lighter, #f8fafc);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .pending-inline-title { color: var(--el-text-color-secondary, #909399); margin-bottom: 4px; }
+    .pending-inline-time { color: var(--el-text-color-secondary, #909399); margin-bottom: 4px; }
+    .pending-inline-values { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+    .pending-inline-value { min-width: 0; overflow-wrap: anywhere; }
     .pending-summary-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
     @media (max-width: 760px) {
       .pending-details-dialog .pending-plan-list,
       .edit-app-info-dialog .pending-plan-list { grid-template-columns: minmax(0, 1fr); }
     }
-    @media (max-width: 480px) { .pending-change-values { grid-template-columns: minmax(0, 1fr); gap: 6px; } }
+    @media (max-width: 480px) {
+      .pending-change-values,
+      .pending-inline-values { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+    }
     .toolbar {
       margin: 20px 0 10px;
       display: flex;
@@ -523,6 +539,7 @@
       <el-form :model="editForm" label-width="80px">
         <el-form-item label="名称">
           <el-input v-model="editForm.name"></el-input>
+          <pending-inline-changes field="name" :changes="pendingFieldChanges('name')" :row="editPendingRow"></pending-inline-changes>
         </el-form-item>
         <el-form-item label="版本号">
           <el-input v-model="editForm.version" disabled></el-input>
@@ -541,6 +558,7 @@
           <div style="margin-top: 5px; color: #FF0000; font-size: 12px;">
             拥有此卡密解绑授权码，则可在官网解绑卡密而无需设备码,如果设置为空则代表禁用此功能
         </div>
+          <pending-inline-changes field="app_key" :changes="pendingFieldChanges('app_key')" :row="editPendingRow"></pending-inline-changes>
         </el-form-item>
         
         <el-form-item label="接口域名">
@@ -551,21 +569,25 @@
           <div style="margin-top: 5px; color: #FF0000; font-size: 12px;">
             域名必须在注入前配置好，注入后不可动态修改，如需修改需重新注入
           </div>
+          <pending-inline-changes field="domain_mode" :changes="pendingFieldChanges('domain_mode')" :row="editPendingRow"></pending-inline-changes>
         </el-form-item>
     
-        <el-form-item v-if="editForm.domain_mode == 1" label="自定义">
+        <el-form-item v-if="editForm.domain_mode == 1 || pendingFieldChanges('custom_domains').length" label="自定义">
           <el-input
             type="textarea"
             v-model="editForm.custom_domains"
+            :disabled="editForm.domain_mode != 1"
             placeholder="请输入完整域名，一行一个，必须带 http:// 或 https://"
             :rows="5"
           ></el-input>
+          <pending-inline-changes field="custom_domains" :changes="pendingFieldChanges('custom_domains')" :row="editPendingRow"></pending-inline-changes>
         </el-form-item>
         <el-form-item label="配置方式">
           <el-select v-model="editForm.config_mode" placeholder="请选择配置方式">
             <el-option label="独用一套配置" :value="0"></el-option>
             <el-option label="复用其他应用配置" :value="1"></el-option>
           </el-select>
+          <pending-inline-changes field="config_mode" :changes="pendingFieldChanges('config_mode')" :row="editPendingRow"></pending-inline-changes>
         </el-form-item>
         <el-form-item label="复用身份">
           <el-switch
@@ -578,10 +600,11 @@
           <div style="margin-top: 5px; color: #FF0000; font-size: 12px;">
             开启后，这个应用才会出现在其它应用的“复用谁”列表里；它仍然可以正常作为独立应用使用。
           </div>
+          <pending-inline-changes field="is_reusable" :changes="pendingFieldChanges('is_reusable')" :row="editPendingRow"></pending-inline-changes>
         </el-form-item>
         
-        <el-form-item v-if="editForm.config_mode === 1" label="复用谁">
-          <el-select v-model="editForm.reuse_apk_id" placeholder="请选择复用的应用">
+        <el-form-item v-if="editForm.config_mode === 1 || pendingFieldChanges('reuse_apk_id').length" label="复用谁">
+          <el-select v-model="editForm.reuse_apk_id" placeholder="请选择复用的应用" :disabled="editForm.config_mode !== 1">
             <el-option
               v-for="app in allApps"
               :key="app.id"
@@ -590,13 +613,14 @@
               :value="app.id">
             </el-option>
           </el-select>
+          <pending-inline-changes field="reuse_apk_id" :changes="pendingFieldChanges('reuse_apk_id')" :row="editPendingRow"></pending-inline-changes>
         </el-form-item>
-        <el-form-item v-if="editForm.config_mode === 1" label="复用选项">
+        <el-form-item v-if="editForm.config_mode === 1 || pendingFieldChanges('reuse_options').length" label="复用选项">
           <div style="margin-bottom: 8px;">
-            <el-button type="primary" plain size="small" @click="selectAllReuseOptions">全选</el-button>
-            <el-button size="small" @click="clearReuseOptions">清空</el-button>
+            <el-button type="primary" plain size="small" @click="selectAllReuseOptions" :disabled="editForm.config_mode !== 1">全选</el-button>
+            <el-button size="small" @click="clearReuseOptions" :disabled="editForm.config_mode !== 1">清空</el-button>
           </div>
-          <el-checkbox-group v-model="editForm.reuse_options">
+          <el-checkbox-group v-model="editForm.reuse_options" :disabled="editForm.config_mode !== 1">
             <el-checkbox label="卡密数据"></el-checkbox>
             <el-checkbox label="全屏弹窗"></el-checkbox>
             <el-checkbox label="图片弹窗"></el-checkbox>
@@ -613,6 +637,7 @@
             <el-checkbox label="包名检测"></el-checkbox>
             
           </el-checkbox-group>
+          <pending-inline-changes field="reuse_options" :changes="pendingFieldChanges('reuse_options')" :row="editPendingRow"></pending-inline-changes>
         </el-form-item>
         <el-form-item label="生效延迟">
           <el-select v-model="editForm.apply_after_seconds" placeholder="请选择生效时间" style="width: 100%;">
@@ -629,12 +654,6 @@
           </div>
         </el-form-item>
       </el-form>
-      <section v-if="editPendingCount > 0" aria-label="待生效修改">
-        <strong>待生效修改</strong>
-        <p class="pending-panel-note">{{ editPendingSummary }} 以下是本次延迟保存的生效前后快照；上面的表单仍编辑当前已生效配置。</p>
-        <pending-app-changes :row="editPendingRow" :clock="pendingClock"></pending-app-changes>
-        <p class="pending-panel-note">同一项再次修改时，以后一次保存为准。</p>
-      </section>
       <el-button
           type="primary"
           size="small"
@@ -1318,9 +1337,34 @@
       </div>`
     };
 
+    /** 将计划差异嵌入对应表单项，左侧显示生效前，右侧显示生效后。 */
+    const PendingInlineChanges = {
+      props: {
+        field: { type: String, required: true },
+        changes: { type: Array, default: () => [] },
+        row: { type: Object, default: null }
+      },
+      methods: {
+        fieldLabel(field) { return PendingAppChanges.methods.fieldLabel(field); },
+        valueLabel(field, value) { return PendingAppChanges.methods.valueLabel.call(this, field, value); },
+        applyTime(plan) { return PendingAppChanges.methods.applyTime(plan); }
+      },
+      template: `<div v-if="changes.length" class="pending-inline-change">
+        <div class="pending-inline-title">待生效修改：{{ fieldLabel(field) }}</div>
+        <div v-for="change in changes" :key="change.schedule_id + '-' + field">
+          <div class="pending-inline-time">{{ applyTime(change) }}</div>
+          <div class="pending-inline-values">
+            <div class="pending-inline-value"><span class="pending-value-label">生效前：</span>{{ valueLabel(field, change.before) }}</div>
+            <div class="pending-inline-value pending-value-next"><span class="pending-value-label">生效后：</span>{{ valueLabel(field, change.after) }}</div>
+          </div>
+        </div>
+      </div>`
+    };
+
     createApp({
       components: {
         PendingAppChanges,
+        PendingInlineChanges,
         ConfigEntryDataViewer: window.YunzhuruConfigEntryDataViewer,
       },
       setup() {
@@ -2739,16 +2783,6 @@ const editSaveButtonText = computed(() => {
   return delay > 0 ? '保存（' + formatCountdown(delay) + ' 后生效）' : '保存';
 });
 
-const editPendingSummary = computed(() => {
-  const count = Math.max(0, Number(editPendingCount.value) || 0);
-  if (!count) return '';
-  const prefix = '当前有 ' + count + ' 项待生效修改，本次保存只提交本次改动的字段；';
-  if (editPendingRemaining.value > 0) {
-    return prefix + '最早 ' + formatCountdown(editPendingRemaining.value) + ' 后开始处理。';
-  }
-  return prefix + '后台正在处理，请稍候刷新。';
-});
-
 function updateEditPendingCountdown() {
   pendingClock.value = Date.now();
   if (!editPendingApplyAt.value) {
@@ -2788,13 +2822,22 @@ function syncEditPendingFromRow(row) {
   updateEditPendingCountdown();
 }
 
+/** 返回指定表单字段的全部待生效差异，并附上所属计划的生效时间。 */
+function pendingFieldChanges(field) {
+  const row = editPendingRow.value;
+  if (!row || !Array.isArray(row.pending_updates)) return [];
+  return row.pending_updates.flatMap(plan => (Array.isArray(plan.changes) ? plan.changes : [])
+    .filter(change => change && change.field === field)
+    .map(change => ({ ...change, apply_at: plan.apply_at, schedule_id: plan.schedule_id })));
+}
+
 function openPendingDetails(row) {
   pendingDetailRow.value = row;
   pendingDetailsVisible.value = true;
 }
 
 function editInfo(row) {
-  // 每次重开都从当前有效列表值开始，待生效内容只在提示区显示。
+  // 每次重开都从当前有效列表值开始，待生效差异嵌入对应表单项展示。
   syncEditFormFromRow(row);
 // 只有打开编辑时才加载复用应用列表
   allApps.value = currentReuseFallback(row);
@@ -3231,12 +3274,12 @@ onUnmounted(() => {
           editPendingRemaining,
           editPendingCount,
           editPendingRow,
+          pendingFieldChanges,
           pendingClock,
           pendingDetailsVisible,
           pendingDetailRow,
           openPendingDetails,
           reuseAppLabel,
-          editPendingSummary,
           editSaveButtonText,
           editForm,
           saveEdit,
