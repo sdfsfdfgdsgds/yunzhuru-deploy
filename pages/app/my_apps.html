@@ -38,17 +38,24 @@
     .edit-app-info-dialog { width: min(820px, 94vw) !important; }
     .pending-inline-change {
       margin-top: 8px;
-      padding: 8px 10px;
-      border: 1px solid var(--el-border-color-lighter, #ebeef5);
-      border-radius: 6px;
-      background: var(--el-fill-color-lighter, #f8fafc);
+      padding: 0;
       font-size: 12px;
       line-height: 1.6;
     }
-    .pending-inline-title { color: var(--el-text-color-secondary, #909399); margin-bottom: 4px; }
+    .pending-inline-title { color: var(--el-text-color-regular, #606266); font-weight: 600; margin-bottom: 4px; }
     .pending-inline-time { color: var(--el-text-color-secondary, #909399); margin-bottom: 4px; }
     .pending-inline-values { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
-    .pending-inline-value { min-width: 0; overflow-wrap: anywhere; }
+    .pending-inline-value {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      padding: 5px 8px;
+      border: 1px solid var(--el-border-color, #dcdfe6);
+      border-radius: 4px;
+      background: var(--el-bg-color, #fff);
+    }
+    .pending-inline-value .pending-value-label { display: block; margin-bottom: 1px; }
+    .pending-preview-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+    .pending-preview-select { display: inline-block; padding: 2px 8px; border: 1px solid var(--el-border-color, #dcdfe6); border-radius: 4px; background: var(--el-fill-color-blank, #fff); }
     .pending-summary-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
     @media (max-width: 760px) {
       .pending-details-dialog .pending-plan-list,
@@ -650,7 +657,7 @@
             <el-option label="24 小时后生效" :value="86400"></el-option>
           </el-select>
           <div style="margin-top: 5px; color: #64748b; font-size: 12px;">
-            未设置时立即保存；延迟期间应用信息保持旧值，到期后由后台自动应用。
+            未设置时立即保存；本次保存只提交本次改动的字段，延迟期间应用信息保持旧值，到期后由后台自动应用。
           </div>
         </el-form-item>
       </el-form>
@@ -1347,15 +1354,36 @@
       methods: {
         fieldLabel(field) { return PendingAppChanges.methods.fieldLabel(field); },
         valueLabel(field, value) { return PendingAppChanges.methods.valueLabel.call(this, field, value); },
-        applyTime(plan) { return PendingAppChanges.methods.applyTime(plan); }
+        applyTime(plan) { return PendingAppChanges.methods.applyTime(plan); },
+        optionValues(value) {
+          let items = value;
+          if (!Array.isArray(items)) { try { items = JSON.parse(items || '[]'); } catch (_) { items = []; } }
+          return Array.isArray(items) ? items : [];
+        }
       },
       template: `<div v-if="changes.length" class="pending-inline-change">
         <div class="pending-inline-title">待生效修改：{{ fieldLabel(field) }}</div>
         <div v-for="change in changes" :key="change.schedule_id + '-' + field">
           <div class="pending-inline-time">{{ applyTime(change) }}</div>
           <div class="pending-inline-values">
-            <div class="pending-inline-value"><span class="pending-value-label">生效前：</span>{{ valueLabel(field, change.before) }}</div>
-            <div class="pending-inline-value pending-value-next"><span class="pending-value-label">生效后：</span>{{ valueLabel(field, change.after) }}</div>
+            <div class="pending-inline-value">
+              <span class="pending-value-label">生效前：</span>
+              <div v-if="field === 'reuse_options'" class="pending-preview-tags">
+                <el-tag v-for="item in optionValues(change.before)" :key="item" size="small" effect="plain">{{ item }}</el-tag>
+                <span v-if="!optionValues(change.before).length">无</span>
+              </div>
+              <span v-else-if="field === 'reuse_apk_id'" class="pending-preview-select">{{ valueLabel(field, change.before) }}</span>
+              <span v-else>{{ valueLabel(field, change.before) }}</span>
+            </div>
+            <div class="pending-inline-value pending-value-next">
+              <span class="pending-value-label">生效后：</span>
+              <div v-if="field === 'reuse_options'" class="pending-preview-tags">
+                <el-tag v-for="item in optionValues(change.after)" :key="item" size="small" type="success" effect="plain">{{ item }}</el-tag>
+                <span v-if="!optionValues(change.after).length">无</span>
+              </div>
+              <span v-else-if="field === 'reuse_apk_id'" class="pending-preview-select">{{ valueLabel(field, change.after) }}</span>
+              <span v-else>{{ valueLabel(field, change.after) }}</span>
+            </div>
           </div>
         </div>
       </div>`
