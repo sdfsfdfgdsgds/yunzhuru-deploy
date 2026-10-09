@@ -36,7 +36,9 @@
     .pending-details-dialog .pending-plan-item,
     .edit-app-info-dialog .pending-plan-item { margin: 0; min-width: 0; }
     .edit-app-info-dialog { width: min(980px, 96vw) !important; }
-    .edit-basic-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 18px; }
+    .edit-id-reuse-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
+    .edit-basic-grid { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.6fr) minmax(0, .5fr); gap: 0 18px; }
+    .edit-id-reuse-grid .el-form-item,
     .edit-basic-grid .el-form-item { min-width: 0; }
     .pending-inline-change {
       margin-top: 8px;
@@ -69,6 +71,7 @@
       .pending-details-dialog .pending-plan-list,
       .edit-app-info-dialog .pending-plan-list { grid-template-columns: minmax(0, 1fr); }
       .pending-control-pair { grid-template-columns: minmax(0, 1fr); }
+      .edit-id-reuse-grid { grid-template-columns: minmax(0, 1fr); }
       .edit-basic-grid { grid-template-columns: minmax(0, 1fr); }
     }
     @media (max-width: 480px) {
@@ -554,12 +557,27 @@
 
     <el-dialog title="修改应用信息（可选择延迟生效）" v-model="editDialogVisible" width="500px" class="edit-app-info-dialog">
       <el-form :model="editForm" label-width="80px">
-        <el-form-item label="APPID">
-          <el-input v-model="editForm.id" disabled></el-input>
-          <div style="margin-top: 5px; color: #FF0000; font-size: 12px;">
-            在官网首页解绑卡密时会用到
-          </div>
-        </el-form-item>
+        <div class="edit-id-reuse-grid">
+          <el-form-item label="APPID">
+            <el-input v-model="editForm.id" disabled></el-input>
+            <div style="margin-top: 5px; color: #FF0000; font-size: 12px;">
+              在官网首页解绑卡密时会用到
+            </div>
+          </el-form-item>
+          <el-form-item label="复用身份">
+            <el-switch
+              v-model="editForm.is_reusable"
+              :active-value="1"
+              :inactive-value="0"
+              active-text="允许被复用"
+              inactive-text="不展示">
+            </el-switch>
+            <div style="margin-top: 5px; color: #FF0000; font-size: 12px;">
+              开启后，这个应用才会出现在其它应用的“复用谁”列表里；它仍然可以正常作为独立应用使用。
+            </div>
+            <pending-inline-changes field="is_reusable" :changes="pendingFieldChanges('is_reusable')" :row="editPendingRow"></pending-inline-changes>
+          </el-form-item>
+        </div>
         <div class="edit-basic-grid">
           <el-form-item label="名称">
             <el-input v-model="editForm.name"></el-input>
@@ -608,20 +626,6 @@
           </el-select>
           <pending-inline-changes field="config_mode" :changes="pendingFieldChanges('config_mode')" :row="editPendingRow"></pending-inline-changes>
         </el-form-item>
-        <el-form-item label="复用身份">
-          <el-switch
-            v-model="editForm.is_reusable"
-            :active-value="1"
-            :inactive-value="0"
-            active-text="允许被复用"
-            inactive-text="不展示">
-          </el-switch>
-          <div style="margin-top: 5px; color: #FF0000; font-size: 12px;">
-            开启后，这个应用才会出现在其它应用的“复用谁”列表里；它仍然可以正常作为独立应用使用。
-          </div>
-          <pending-inline-changes field="is_reusable" :changes="pendingFieldChanges('is_reusable')" :row="editPendingRow"></pending-inline-changes>
-        </el-form-item>
-        
         <el-form-item v-if="editForm.config_mode === 1 || pendingFieldChanges('reuse_apk_id').length" label="复用谁">
           <div class="pending-control-pair" :class="{ 'pending-control-pair--single': !pendingFieldChanges('reuse_apk_id').length }">
             <div class="pending-control-column">
