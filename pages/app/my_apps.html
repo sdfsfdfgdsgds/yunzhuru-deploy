@@ -23,8 +23,8 @@
     .pending-value-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
     .pending-value-next { color: var(--el-color-primary, #409eff); }
     .pending-panel-note { font-size: 12px; color: var(--el-text-color-secondary, #909399); line-height: 1.6; margin: 8px 0; }
-    .pending-details-dialog { width: min(920px, 94vw) !important; }
-    .pending-details-dialog .el-dialog__body { max-height: 68vh; overflow-y: auto; }
+    .pending-details-dialog { width: min(980px, 96vw) !important; }
+    .pending-details-dialog .el-dialog__body { max-height: 60vh; overflow-y: auto; }
     .pending-details-dialog .pending-plan-list,
     .edit-app-info-dialog .pending-plan-list {
       display: grid;
@@ -35,8 +35,8 @@
     }
     .pending-details-dialog .pending-plan-item,
     .edit-app-info-dialog .pending-plan-item { margin: 0; min-width: 0; }
-    .edit-app-info-dialog { width: min(820px, 94vw) !important; }
-    .edit-basic-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
+    .edit-app-info-dialog { width: min(980px, 96vw) !important; }
+    .edit-basic-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 18px; }
     .edit-basic-grid .el-form-item { min-width: 0; }
     .pending-inline-change {
       margin-top: 8px;
@@ -63,6 +63,7 @@
     .pending-control-column { min-width: 0; }
     .pending-control-label { color: var(--el-text-color-secondary, #909399); font-size: 12px; margin-bottom: 4px; }
     .pending-control-column > .el-select { width: 100%; }
+    .pending-list-control { width: 100%; }
     .pending-summary-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
     @media (max-width: 760px) {
       .pending-details-dialog .pending-plan-list,
@@ -553,13 +554,13 @@
 
     <el-dialog title="修改应用信息（可选择延迟生效）" v-model="editDialogVisible" width="500px" class="edit-app-info-dialog">
       <el-form :model="editForm" label-width="80px">
-        <div class="edit-basic-grid">
-          <el-form-item label="APPID">
+        <el-form-item label="APPID">
           <el-input v-model="editForm.id" disabled></el-input>
           <div style="margin-top: 5px; color: #FF0000; font-size: 12px;">
             在官网首页解绑卡密时会用到
           </div>
-          </el-form-item>
+        </el-form-item>
+        <div class="edit-basic-grid">
           <el-form-item label="名称">
             <el-input v-model="editForm.name"></el-input>
             <pending-inline-changes field="name" :changes="pendingFieldChanges('name')" :row="editPendingRow"></pending-inline-changes>
@@ -670,6 +671,10 @@
             </div>
             <div v-if="pendingFieldChanges('reuse_options').length" class="pending-control-column">
               <div class="pending-control-label">待生效</div>
+              <div style="margin-bottom: 8px;">
+                <el-button type="primary" plain size="small" disabled>全选</el-button>
+                <el-button size="small" disabled>清空</el-button>
+              </div>
               <pending-reuse-options-preview :items="pendingReuseOptions()"></pending-reuse-options-preview>
             </div>
           </div>
@@ -1342,6 +1347,11 @@
           }
           return value === null || value === undefined || value === '' ? '未设置' : String(value);
         },
+        optionValues(value) {
+          let items = value;
+          if (!Array.isArray(items)) { try { items = JSON.parse(items || '[]'); } catch (_) { items = []; } }
+          return Array.isArray(items) ? items : [];
+        },
         applyTime(plan) {
           const date = new Date(plan.apply_at);
           return Number.isFinite(date.getTime()) ? date.toLocaleString('zh-CN', {
@@ -1363,8 +1373,18 @@
           <div v-for="change in plan.changes" :key="change.field" class="pending-change-row">
             <div class="pending-change-name">{{ fieldLabel(change.field) }}</div>
             <div class="pending-change-values">
-              <div><div class="pending-value-label">生效前</div><div class="pending-value-text">{{ valueLabel(change.field, change.before) }}</div></div>
-              <div><div class="pending-value-label">生效后</div><div class="pending-value-text pending-value-next">{{ valueLabel(change.field, change.after) }}</div></div>
+              <div>
+                <div class="pending-value-label">生效前</div>
+                <pending-reuse-target-preview v-if="change.field === 'reuse_apk_id'" :value="change.before" :label="valueLabel(change.field, change.before)"></pending-reuse-target-preview>
+                <pending-reuse-options-preview v-else-if="change.field === 'reuse_options'" :items="optionValues(change.before)" :show-actions="true"></pending-reuse-options-preview>
+                <div v-else class="pending-value-text">{{ valueLabel(change.field, change.before) }}</div>
+              </div>
+              <div>
+                <div class="pending-value-label">生效后</div>
+                <pending-reuse-target-preview v-if="change.field === 'reuse_apk_id'" :value="change.after" :label="valueLabel(change.field, change.after)"></pending-reuse-target-preview>
+                <pending-reuse-options-preview v-else-if="change.field === 'reuse_options'" :items="optionValues(change.after)" :show-actions="true"></pending-reuse-options-preview>
+                <div v-else class="pending-value-text pending-value-next">{{ valueLabel(change.field, change.after) }}</div>
+              </div>
             </div>
           </div>
         </article>
@@ -1417,31 +1437,48 @@
       </div>`
     };
 
+    /** 复用目标的只读下拉框预览，让列表详情与编辑表单保持同一控件语义。 */
+    const PendingReuseTargetPreview = {
+      props: { value: { type: [String, Number], default: null }, label: { type: String, default: '未设置' } },
+      template: `<el-select class="pending-list-control" :model-value="value === null ? '' : String(value)" :placeholder="label" disabled>
+        <el-option :label="label" :value="value === null ? '' : String(value)"></el-option>
+      </el-select>`
+    };
+
     /** 复用选项的只读预览，沿用编辑表单的复选框样式展示待生效结果。 */
     const PendingReuseOptionsPreview = {
-      props: { items: { type: Array, default: () => [] } },
-      template: `<el-checkbox-group :model-value="items" disabled>
-        <el-checkbox label="卡密数据"></el-checkbox>
-        <el-checkbox label="全屏弹窗"></el-checkbox>
-        <el-checkbox label="图片弹窗"></el-checkbox>
-        <el-checkbox label="文字弹窗"></el-checkbox>
-        <el-checkbox label="输入框弹窗"></el-checkbox>
-        <el-checkbox label="HTML弹窗"></el-checkbox>
-        <el-checkbox label="SP写入劫持"></el-checkbox>
-        <el-checkbox label="SP读取劫持"></el-checkbox>
-        <el-checkbox label="SP重写"></el-checkbox>
-        <el-checkbox label="通杀拦截"></el-checkbox>
-        <el-checkbox label="activity拦截"></el-checkbox>
-        <el-checkbox label="关键词拦截"></el-checkbox>
-        <el-checkbox label="URI劫持"></el-checkbox>
-        <el-checkbox label="包名检测"></el-checkbox>
-      </el-checkbox-group>`
+      props: { items: { type: Array, default: () => [] }, showActions: { type: Boolean, default: false } },
+      template: `<div>
+        <div v-if="showActions" style="margin-bottom: 8px;">
+          <el-button type="primary" plain size="small" disabled>全选</el-button>
+          <el-button size="small" disabled>清空</el-button>
+        </div>
+        <el-checkbox-group :model-value="items" disabled>
+          <el-checkbox label="卡密数据"></el-checkbox>
+          <el-checkbox label="全屏弹窗"></el-checkbox>
+          <el-checkbox label="图片弹窗"></el-checkbox>
+          <el-checkbox label="文字弹窗"></el-checkbox>
+          <el-checkbox label="输入框弹窗"></el-checkbox>
+          <el-checkbox label="HTML弹窗"></el-checkbox>
+          <el-checkbox label="SP写入劫持"></el-checkbox>
+          <el-checkbox label="SP读取劫持"></el-checkbox>
+          <el-checkbox label="SP重写"></el-checkbox>
+          <el-checkbox label="通杀拦截"></el-checkbox>
+          <el-checkbox label="activity拦截"></el-checkbox>
+          <el-checkbox label="关键词拦截"></el-checkbox>
+          <el-checkbox label="URI劫持"></el-checkbox>
+          <el-checkbox label="包名检测"></el-checkbox>
+        </el-checkbox-group>
+      </div>`
     };
+
+    PendingAppChanges.components = { PendingReuseTargetPreview, PendingReuseOptionsPreview };
 
     createApp({
       components: {
         PendingAppChanges,
         PendingInlineChanges,
+        PendingReuseTargetPreview,
         PendingReuseOptionsPreview,
         ConfigEntryDataViewer: window.YunzhuruConfigEntryDataViewer,
       },
