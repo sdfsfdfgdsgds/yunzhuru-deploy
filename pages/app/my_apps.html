@@ -520,12 +520,6 @@
     </el-dialog>
 
     <el-dialog title="修改应用信息（可选择延迟生效）" v-model="editDialogVisible" width="500px" class="edit-app-info-dialog">
-      <section v-if="editPendingCount > 0" aria-label="待生效修改">
-        <strong>待生效修改</strong>
-        <p class="pending-panel-note">{{ editPendingSummary }}</p>
-        <pending-app-changes :row="editPendingRow" :clock="pendingClock"></pending-app-changes>
-        <p class="pending-panel-note">下面表单编辑的是当前生效配置。同一项再次修改时，以后一次保存为准。</p>
-      </section>
       <el-form :model="editForm" label-width="80px">
         <el-form-item label="名称">
           <el-input v-model="editForm.name"></el-input>
@@ -635,6 +629,12 @@
           </div>
         </el-form-item>
       </el-form>
+      <section v-if="editPendingCount > 0" aria-label="待生效修改">
+        <strong>待生效修改</strong>
+        <p class="pending-panel-note">{{ editPendingSummary }} 以下是本次延迟保存的生效前后快照；上面的表单仍编辑当前已生效配置。</p>
+        <pending-app-changes :row="editPendingRow" :clock="pendingClock"></pending-app-changes>
+        <p class="pending-panel-note">同一项再次修改时，以后一次保存为准。</p>
+      </section>
       <el-button
           type="primary"
           size="small"
@@ -1309,8 +1309,8 @@
           <div v-for="change in plan.changes" :key="change.field" class="pending-change-row">
             <div class="pending-change-name">{{ fieldLabel(change.field) }}</div>
             <div class="pending-change-values">
-              <div><div class="pending-value-label">当前生效</div><div class="pending-value-text">{{ valueLabel(change.field, row[change.field]) }}</div></div>
-              <div><div class="pending-value-label">待生效</div><div class="pending-value-text pending-value-next">{{ valueLabel(change.field, change.after) }}</div></div>
+              <div><div class="pending-value-label">生效前</div><div class="pending-value-text">{{ valueLabel(change.field, change.before) }}</div></div>
+              <div><div class="pending-value-label">生效后</div><div class="pending-value-text pending-value-next">{{ valueLabel(change.field, change.after) }}</div></div>
             </div>
           </div>
         </article>
