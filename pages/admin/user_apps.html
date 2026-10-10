@@ -61,6 +61,29 @@
     .delete-result-failed { color: #dc2626; font-weight: 700; }
     .delete-result-warning { color: #d97706; font-weight: 700; }
     .delete-result-skipped { color: #6b7280; font-weight: 700; }
+    .delete-delay-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      padding: 8px 10px;
+      border: 1px solid #dcdfe6;
+      border-radius: 6px;
+      background: #f8fafc;
+    }
+    .delete-delay-control select {
+      min-width: 150px;
+      padding: 4px 8px;
+      border: 1px solid #c0c4cc;
+      border-radius: 4px;
+      background: #fff;
+    }
+    .delete-delay-note {
+      margin-top: 6px;
+      color: #909399;
+      font-size: 12px;
+      line-height: 1.5;
+    }
   </style>
 </head>
 
@@ -175,6 +198,15 @@
           <span v-else>-</span>
         </template>
       </el-table-column>
+
+      <el-table-column label="待删除" width="120">
+        <template #default="scope">
+          <el-tag v-if="pendingDeleteCount(scope.row) > 0" type="danger" size="small">
+            {{ pendingDeleteLabel(scope.row) }}
+          </el-tag>
+          <span v-else>-</span>
+        </template>
+      </el-table-column>
       
         <el-table-column label="标记" prop="tag" width="120">
           <template #default="scope">
@@ -185,7 +217,10 @@
         
       <el-table-column label="操作" width="660">
         <template #default="scope">
-          <el-button type="danger" size="small" @click="handleDelete(scope.row)">删除</el-button>
+          <el-tooltip v-if="pendingDeleteCount(scope.row) > 0" :content="pendingDeleteLabel(scope.row)" placement="top" effect="dark">
+            <el-button type="danger" size="small" disabled>待删除</el-button>
+          </el-tooltip>
+          <el-button v-else type="danger" size="small" @click="handleDelete(scope.row)">删除</el-button>
           <el-button type="warning" size="small" @click="openViolation(scope.row)">违规公示</el-button>
           <el-button type="info" size="small" @click="cancelViolation(scope.row)">撤销公示</el-button>
           <el-button type="primary" size="small" @click="openTakeover(scope.row)">接管应用</el-button>
@@ -371,7 +406,7 @@
   </div>
 
 <script>
-const { createApp, ref, reactive, onMounted } = Vue;
+const { createApp, ref, reactive, onMounted, onUnmounted } = Vue;
 
 createApp({
   setup() {
@@ -390,6 +425,10 @@ createApp({
 
     const tableData = ref([]);
     const total = ref(0);
+    const pendingClock = ref(Date.now());
+    let pendingClockTimer = null;
+    let pendingRefreshTimer = null;
+    let pendingRefreshBusy = false;
     const tagDialog = ref(false);
     const tagForm = reactive({
       appid: '',
@@ -514,7 +553,60 @@ createApp({
     }
 
 
-    async function loadData() {
+    function formatCountdown(seconds) {
+      const totalSeconds = Math.max(0, Number(seconds) || 0);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const secs = totalSeconds % 60;
+      return [hours, minutes, secs].map(value => String(value).padStart(2, '0')).join(':');
+    }
+
+    function pendingDeleteCount(row) {
+      const count = Number(row && row.pending_delete_count);
+      if (Number.isFinite(count) && count > 0) return Math.floor(count);
+      return row && row.pending_delete_status ? 1 : 0;
+    }
+
+    function pendingDeleteRemaining(row) {
+      pendingClock.value;
+      const applyAt = Date.parse(String(row && row.pending_delete_apply_at || ''));
+      if (!Number.isFinite(applyAt)) return Number(row && row.pending_delete_remaining_seconds || 0);
+      return Math.max(0, Math.ceil((applyAt - Date.now()) / 1000));
+    }
+
+    function pendingDeleteLabel(row) {
+      const remaining = pendingDeleteRemaining(row);
+      return remaining > 0 ? formatCountdown(remaining) + ' 后删除' : '删除处理中';
+    }
+
+    function refreshPendingDeleteTimers() {
+      const hasPending = tableData.value.some(row => pendingDeleteCount(row) > 0);
+      if (!hasPending) {
+        if (pendingClockTimer) window.clearInterval(pendingClockTimer);
+        if (pendingRefreshTimer) window.clearInterval(pendingRefreshTimer);
+        pendingClockTimer = null;
+        pendingRefreshTimer = null;
+        return;
+      }
+      if (!pendingClockTimer) {
+        pendingClockTimer = window.setInterval(() => {
+          pendingClock.value = Date.now();
+        }, 1000);
+      }
+      if (!pendingRefreshTimer) {
+        pendingRefreshTimer = window.setInterval(async () => {
+          if (pendingRefreshBusy) return;
+          pendingRefreshBusy = true;
+          try {
+            await loadData({ silent: true });
+          } finally {
+            pendingRefreshBusy = false;
+          }
+        }, 5000);
+      }
+    }
+
+    async function loadData(options = {}) {
       try {
         const res = await fetch(`/api/index.php?module=app&method=getMyAppList`, {
           method: 'POST',
@@ -527,11 +619,12 @@ createApp({
           tableData.value = json.data.list;
           total.value = json.data.total;
           query.page = json.data.page;
+          refreshPendingDeleteTimers();
         } else {
-          ElementPlus.ElMessage.error(json.message || '加载失败');
+          if (!options.silent) ElementPlus.ElMessage.error(json.message || '加载失败');
         }
       } catch {
-        ElementPlus.ElMessage.error('请求失败');
+        if (!options.silent) ElementPlus.ElMessage.error('请求失败');
       }
     }
 
@@ -686,7 +779,9 @@ createApp({
       const hasFailed = Number(summary.failed || 0) > 0;
       const hasWarning = Number(summary.warning || 0) > 0;
       const titlePrefix = method === 'clearAppFile' ? '仅删除文件结果' : '应用删除结果';
-      const titleSuffix = payload.async_cleanup && payload.cleanup_started !== false ? (payload.queued_cleanup ? '后台清理已排队' : '后台清理已启动') : (hasFailed ? '有失败项' : '已完成');
+      const titleSuffix = payload.scheduled
+        ? '已安排'
+        : (payload.async_cleanup && payload.cleanup_started !== false ? (payload.queued_cleanup ? '后台清理已排队' : '后台清理已启动') : (hasFailed ? '有失败项' : '已完成'));
       ElementPlus.ElMessageBox.alert(
         buildDeleteResultHtml(row, payload, fallbackMessage),
         `${titlePrefix}：${titleSuffix}`,
@@ -732,13 +827,29 @@ createApp({
       });
     }
 
+    function applyDeleteScheduledLocalChange(row, pending) {
+      if (!row || !row.id) return;
+      tableData.value = tableData.value.map(item => {
+        if (Number(item.id) !== Number(row.id)) return item;
+        return {
+          ...item,
+          pending_delete_count: 1,
+          pending_delete_status: pending?.status || 'pending',
+          pending_delete_schedule_id: pending?.schedule_id || 0,
+          pending_delete_apply_at: pending?.apply_at || '',
+          pending_delete_remaining_seconds: Number(pending?.remaining_seconds || 0)
+        };
+      });
+      refreshPendingDeleteTimers();
+    }
+
     function refreshDeleteListLater() {
       setTimeout(() => {
         loadData();
       }, 300);
     }
 
-    async function postAppDelete(method, row, successMessage) {
+    async function postAppDelete(method, row, successMessage, options = {}) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 120000);
       const progressToken = `del_${row.id}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -794,10 +905,15 @@ createApp({
       pollDeleteProgress();
 
       try {
+        const body = { id: row.id, progress_token: progressToken };
+        const deleteAfterSeconds = Number(options.deleteAfterSeconds || 0);
+        if (method === 'deleteApp' && deleteAfterSeconds > 0) {
+          body.delete_after_seconds = deleteAfterSeconds;
+        }
         const res = await fetch(`/api/index.php?module=app&method=${method}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: row.id, progress_token: progressToken }),
+          body: JSON.stringify(body),
           signal: controller.signal
         });
         const text = await res.text();
@@ -813,7 +929,11 @@ createApp({
 
         if (json.code === 200) {
           handledResult = true;
-          applyDeleteLocalChange(method, row);
+          if (method === 'deleteApp' && json.data?.scheduled) {
+            applyDeleteScheduledLocalChange(row, json.data.pending_delete || {});
+          } else {
+            applyDeleteLocalChange(method, row);
+          }
           showDeleteResultDialog(row, method, json, json.data?.message || json.message || successMessage);
           refreshDeleteListLater();
         } else {
@@ -853,33 +973,52 @@ createApp({
     }
 
     async function handleDelete(row) {
+      // 第一层确认框销毁 HTML 内容前先缓存延迟选择，确保管理员选择的时间会随本次删除请求提交。
+      let selectedDeleteAfterSeconds = 0;
+      const readSelectedDeleteDelay = () => {
+        selectedDeleteAfterSeconds = Number(document.getElementById('delete-delay-select')?.value || 0);
+      };
       ElementPlus.ElMessageBox({
         title: '提示',
         message: `确定要删除应用「${row.name}」吗？<br>
         仅删除文件：不会影响配置，注入时需重新上传安装包<br>
-        全部删除：会删除应用以及配置，无法恢复`,
+        全部删除：会删除应用以及配置，无法恢复
+        <div class="delete-delay-control"><label for="delete-delay-select">全部删除延迟</label><select id="delete-delay-select"><option value="0">立即生效</option><option value="1800">30 分钟后</option><option value="3600">1 小时后</option><option value="10800">3 小时后</option><option value="21600">6 小时后</option><option value="43200">12 小时后</option><option value="86400">24 小时后</option></select></div>
+        <div class="delete-delay-note">仅对“全部删除（含远程配置）”生效；仅删除文件仍立即执行。</div>`,
         type: 'warning',
         dangerouslyUseHTMLString: true,
         showCancelButton: true,
         showConfirmButton: true,
-        confirmButtonText: '全部删除(含配置)',
+        confirmButtonText: '全部删除(含远程配置)',
         cancelButtonText: '取消',
-        distinguishCancelAndClose: true
+        distinguishCancelAndClose: true,
+        beforeClose: (action, _instance, done) => {
+          if (action === 'confirm') readSelectedDeleteDelay();
+          done();
+        }
       }).then(action => {
         if (action === 'confirm') {
+          const deleteAfterSeconds = selectedDeleteAfterSeconds;
+          const delayText = deleteAfterSeconds > 0 ? `，将在 ${formatCountdown(deleteAfterSeconds)} 后生效` : '';
           ElementPlus.ElMessageBox.confirm(
-            '删除后你将完全失去该应用的控制权，是否确定？',
+            `删除后你将完全失去该应用的控制权${delayText}，是否确定？`,
             '请确认',
             { type: 'warning' }
           ).then(async () => {
-            await postAppDelete('deleteApp', row, '删除成功');
+            await postAppDelete('deleteApp', row, '删除成功', { deleteAfterSeconds });
           }).catch(() => {});
         }
       }).catch(() => {});
 
       setTimeout(() => {
         const box = document.querySelector('.el-message-box__btns');
+        const delaySelect = document.getElementById('delete-delay-select');
+        if (delaySelect) {
+          readSelectedDeleteDelay();
+          delaySelect.addEventListener('change', readSelectedDeleteDelay);
+        }
         if (box && !box.querySelector('.only-delete-btn')) {
+          box.querySelector('.el-button--primary')?.addEventListener('click', readSelectedDeleteDelay, true);
           const btn = document.createElement('button');
           btn.className = 'el-button el-button--danger only-delete-btn';
           btn.innerHTML = '<span>仅删除文件(推荐)</span>';
@@ -969,6 +1108,10 @@ createApp({
     }
 
     onMounted(loadData);
+    onUnmounted(() => {
+      if (pendingClockTimer) window.clearInterval(pendingClockTimer);
+      if (pendingRefreshTimer) window.clearInterval(pendingRefreshTimer);
+    });
 
     return {
       query,
@@ -978,6 +1121,8 @@ createApp({
       resetForm,
       handlePageChange,
       handleDelete,
+      pendingDeleteCount,
+      pendingDeleteLabel,
 
       // 接管功能
       takeoverDialog,
