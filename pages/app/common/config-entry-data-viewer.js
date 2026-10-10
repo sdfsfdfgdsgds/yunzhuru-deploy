@@ -131,7 +131,7 @@
           <el-descriptions-item label="对象地址" :span="2">
             <el-link
               v-if="safeHttpUrl(bucketMeta.fileUrl)"
-              class="config-entry-data-mono"
+              class="config-entry-data-mono config-entry-data-url"
               type="primary"
               :href="safeHttpUrl(bucketMeta.fileUrl)"
               target="_blank"

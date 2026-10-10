@@ -57,6 +57,16 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
+/* 对象下载地址保持正文颜色，访问、拖动或主题覆盖都不能留下错误的链接色。 */
+.config-entry-data-url,
+.config-entry-data-url:visited,
+.config-entry-data-url:hover,
+.config-entry-data-url:focus,
+.config-entry-data-url:active {
+  color: inherit !important;
+  text-decoration: none;
+}
+
 .config-entry-data-hash-row {
   display: flex;
   align-items: flex-start;

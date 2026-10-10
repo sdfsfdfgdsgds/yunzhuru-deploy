@@ -703,6 +703,20 @@
     .file-toolbar .el-input { width: min(430px, 100%); }
     .section-title { margin: 18px 0 10px; font-size: 15px; font-weight: 600; }
     .file-key { max-width: 100%; overflow-wrap: anywhere; }
+    /* 公开地址和对象下载链接不使用强调色，避免访问或拖动后颜色残留。 */
+    .bucket-url-link,
+    .bucket-url-link:visited,
+    .bucket-url-link:hover,
+    .bucket-url-link:focus,
+    .bucket-url-link:active,
+    .file-key-link,
+    .file-key-link:visited,
+    .file-key-link:hover,
+    .file-key-link:focus,
+    .file-key-link:active {
+      color: inherit !important;
+      text-decoration: none;
+    }
     .pagination-row {
       display: flex;
       justify-content: flex-end;
@@ -881,7 +895,7 @@
           <template #default="scope">
             <el-link
               v-if="scope.row.domain"
-              class="ellipsis"
+              class="ellipsis bucket-url-link"
               type="primary"
               :href="scope.row.domain"
               target="_blank"
@@ -1522,7 +1536,7 @@
             <template #default="scope">
               <el-link
                 v-if="scope.row.public_url"
-                class="file-key mono"
+                class="file-key file-key-link mono"
                 type="primary"
                 :href="scope.row.public_url"
                 target="_blank"

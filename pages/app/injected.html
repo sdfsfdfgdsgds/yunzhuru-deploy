@@ -45,6 +45,15 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       word-break: break-all;
     }
+    /* 下载地址保留可点击能力，但不因访问、拖动或主题链接规则改变正文颜色。 */
+    .static-bucket-link,
+    .static-bucket-link:visited,
+    .static-bucket-link:hover,
+    .static-bucket-link:focus,
+    .static-bucket-link:active {
+      color: inherit !important;
+      text-decoration: none;
+    }
     .static-bucket-secondary {
       margin-top: 4px;
       color: #909399;
@@ -477,7 +486,7 @@
               <template #default="scope">
                 <el-link
                   v-if="safeStaticBucketUrl(scope.row.domain)"
-                  class="static-bucket-mono"
+                  class="static-bucket-mono static-bucket-link"
                   type="primary"
                   :href="safeStaticBucketUrl(scope.row.domain)"
                   target="_blank"
@@ -491,7 +500,7 @@
               <template #default="scope">
                 <el-link
                   v-if="safeStaticBucketUrl(scope.row.app_file_url)"
-                  class="static-bucket-mono"
+                  class="static-bucket-mono static-bucket-link"
                   type="primary"
                   :href="safeStaticBucketUrl(scope.row.app_file_url)"
                   target="_blank"
