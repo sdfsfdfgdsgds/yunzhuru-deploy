@@ -1956,6 +1956,55 @@ $applicationlin=[];
                 echo "优化失败，走正常签名路线\n";
             } else {
                 echo "优化成功，输出文件：" . $result . "\n";
+                // ApkDataMultiplexing 会重新写外层 ZIP 并自行签名；它可能丢失
+                // zipalign 的条目对齐。先去掉旧签名，按最终 ZIP 合同修复，再重新签名。
+                updateTaskInfo($pdo, $task['id'], '校正复用成品 ZIP 合同');
+                $contractInput = $signed_apk . '.contract-input.apk';
+                $contractSigned = $signed_apk . '.contract-signed.apk';
+                $contractAligned = null;
+                $contractOk = @copy($signed_apk, $contractInput)
+                    && stripApkSignatureMetaEntries($contractInput)
+                    && normalizeApkResourcesCompression($contractInput);
+                if ($contractOk) {
+                    $contractZipalign = zipalign_apk($contractInput);
+                    $contractOk = !empty($contractZipalign[0]);
+                    $contractAligned = $contractOk ? ($contractZipalign[1] ?? null) : null;
+                }
+                if ($contractOk && $contractAligned) {
+                    $contractSignResult = sign_apk(
+                        $keystore,
+                        $alias,
+                        $storepass,
+                        $keypass,
+                        $contractAligned,
+                        $contractSigned,
+                        null,
+                        $apksigner_jar
+                    );
+                    $contractOk = !empty($contractSignResult[0]);
+                }
+                safeDeleteFile($contractInput);
+                if ($contractAligned && is_file($contractAligned)) {
+                    safeDeleteFile($contractAligned);
+                }
+                if (!$contractOk || !is_file($contractSigned)) {
+                    echo "复用成品 ZIP 合同校正失败，停止发布\n";
+                    safeDeleteFile($signed_apk);
+                    safeDeleteFile($contractSigned);
+                    updateTaskStatus($pdo, $task['id'], '编译失败');
+                    updateTaskInfo($pdo, $task['id'], '复用成品 ZIP 对齐或重新签名失败');
+                    safeDeleteDirectory($temp_dir);
+                    return;
+                }
+                safeDeleteFile($signed_apk);
+                if (!@rename($contractSigned, $signed_apk)) {
+                    echo "复用成品重新签名文件交接失败，停止发布\n";
+                    safeDeleteFile($contractSigned);
+                    updateTaskStatus($pdo, $task['id'], '编译失败');
+                    updateTaskInfo($pdo, $task['id'], '复用成品重新签名文件交接失败');
+                    safeDeleteDirectory($temp_dir);
+                    return;
+                }
                 // APK 完整性检测
                 $verifyResult = verify_apk_installable(
                     $signed_apk,
@@ -2501,6 +2550,36 @@ function normalizeApkResourcesCompression(string $apkPath): bool
 
     echo "resources.arsc 已规范为 STORE\n";
     return true;
+}
+
+/**
+ * 删除 APK 中已有的 v1 签名材料，供重新 zipalign 后再次签名使用。
+ * META-INF/services 等运行时 SPI 文件必须保留。
+ */
+function stripApkSignatureMetaEntries(string $apkPath): bool
+{
+    if (!is_file($apkPath) || !class_exists('ZipArchive')) {
+        return false;
+    }
+
+    $zip = new ZipArchive();
+    if ($zip->open($apkPath) !== true) {
+        return false;
+    }
+    $deleteNames = [];
+    for ($index = 0; $index < $zip->numFiles; $index++) {
+        $name = $zip->getNameIndex($index);
+        if ($name !== false && isApkSignatureMetaEntry($name)) {
+            $deleteNames[] = $name;
+        }
+    }
+    foreach ($deleteNames as $name) {
+        if (!$zip->deleteName($name)) {
+            $zip->close();
+            return false;
+        }
+    }
+    return $zip->close();
 }
 
 /**
