@@ -119,7 +119,8 @@ def find_version_name(data: bytes) -> tuple[int, int, int, int, int] | None:
     if u16(data, 0) != RES_XML_TYPE or u32(data, 4) != len(data):
         raise ValueError("AXML 头无效")
     values, _flags, _style_count, _styles_start, _styles = decode_pool(data)
-    version_index = values.index("versionName")
+    # versionName 是可选的；没有该属性时无需规范化，也不能把合法 APK 判为失败。
+    version_index = values.index("versionName") if "versionName" in values else None
     pool = u16(data, 2)
     cursor = pool + u32(data, pool + 4)
     while cursor < len(data):
@@ -136,7 +137,7 @@ def find_version_name(data: bytes) -> tuple[int, int, int, int, int] | None:
             if name_index < len(values) and values[name_index] == "manifest":
                 for index in range(attr_count):
                     attr = cursor + 16 + attr_start + index * attr_size
-                    if u32(data, attr + 4) == version_index:
+                    if version_index is not None and u32(data, attr + 4) == version_index:
                         return attr, data[attr + 15], u32(data, attr + 16), index, cursor
                 return None
         cursor += chunk_size
