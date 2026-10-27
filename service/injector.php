@@ -1863,6 +1863,14 @@ $applicationlin=[];
         }
     }
 
+    echo "==================================最终校验 AndroidManifest versionName\n";
+    if (!normalizeManifestVersionInApk($output_apk)) {
+        updateTaskStatus($pdo, $task['id'], '编译失败');
+        updateTaskInfo($pdo, $task['id'], 'Manifest versionName 类型校验失败');
+        safeDeleteDirectory($temp_dir);
+        return;
+    }
+
     echo "==================================AndroidManifest伪加密\n";
     //统一加密Androidmanifest
     if($task['fake']){
@@ -2390,6 +2398,31 @@ function normalizeManifestVersionNameAxml(string $manifestPath): bool
     }
 
     return !$patched || file_put_contents($manifestPath, $content, LOCK_EX) === $length;
+}
+
+/**
+ * 在最终 APK 写出前修正输入包已经存在的 versionName FLOAT/整数类型。
+ *
+ * 这条门禁覆盖只走 ManifestEditor 的路径：ManifestEditor 会保留输入的
+ * typedValue，不会主动把已经错误的 FLOAT 推断回 STRING。
+ */
+function normalizeManifestVersionInApk(string $apkPath): bool
+{
+    if (!is_file($apkPath)) {
+        return false;
+    }
+    $script = __DIR__ . '/../bin/normalize_manifest_version.py';
+    if (!is_file($script)) {
+        echo "Manifest versionName 修复脚本不存在\n";
+        return false;
+    }
+
+    $output = [];
+    $exitCode = 0;
+    $command = 'python3 ' . escapeshellarg($script) . ' ' . escapeshellarg($apkPath) . ' 2>&1';
+    exec($command, $output, $exitCode);
+    echo implode("\n", $output) . "\n";
+    return $exitCode === 0;
 }
 
 /**
