@@ -1871,6 +1871,33 @@ $applicationlin=[];
         return;
     }
 
+    echo "==================================规范化 resources.arsc 压缩方式\n";
+    updateTaskInfo($pdo, $task['id'], '规范化 resources.arsc');
+    if (!normalizeApkResourcesCompression($output_apk)) {
+        updateTaskStatus($pdo, $task['id'], '编译失败');
+        updateTaskInfo($pdo, $task['id'], 'resources.arsc 压缩方式校验失败');
+        safeDeleteDirectory($temp_dir);
+        return;
+    }
+
+    // versionName 规范化可能改变压缩条目长度；重新对齐后再进入伪加密和签名，
+    // 资源表压缩方式规范化也可能改变条目长度；统一在最后一次 zipalign 后再签名。
+    echo "==================================最终校验后重新 ZIP 对齐\n";
+    updateTaskInfo($pdo, $task['id'], '最终 ZIP 对齐');
+    $finalZipalign = zipalign_apk($output_apk);
+    print_r($finalZipalign);
+    if (!$finalZipalign[0]) {
+        updateTaskStatus($pdo, $task['id'], '编译失败');
+        updateTaskInfo($pdo, $task['id'], '最终 ZIP 对齐失败');
+        safeDeleteDirectory($temp_dir);
+        return;
+    }
+    $previousOutputApk = $output_apk;
+    $output_apk = $finalZipalign[1];
+    if ($previousOutputApk !== $output_apk) {
+        safeDeleteFile($previousOutputApk);
+    }
+
     echo "==================================AndroidManifest伪加密\n";
     //统一加密Androidmanifest
     if($task['fake']){
@@ -2342,7 +2369,8 @@ function normalizeManifestVersionNameAxml(string $manifestPath): bool
     }
 
     $versionNameIndex = array_search('versionName', $strings, true);
-    if ($versionNameIndex === false) {
+    $androidNamespaceIndex = array_search('http://schemas.android.com/apk/res/android', $strings, true);
+    if ($versionNameIndex === false || $androidNamespaceIndex === false) {
         return true;
     }
 
@@ -2374,8 +2402,9 @@ function normalizeManifestVersionNameAxml(string $manifestPath): bool
 
             for ($index = 0; $index < $attrCount; $index++) {
                 $attrOffset = $cursor + 16 + $attrStart + ($index * $attrSize);
+                $attrNamespaceIndex = $readUInt32($attrOffset);
                 $attrNameIndex = $readUInt32($attrOffset + 4);
-                if ($attrNameIndex !== $versionNameIndex) continue;
+                if ($attrNamespaceIndex !== $androidNamespaceIndex || $attrNameIndex !== $versionNameIndex) continue;
                 $rawIndex = $readUInt32($attrOffset + 8);
                 $valueType = ord($content[$attrOffset + 15]);
                 $valueData = $readUInt32($attrOffset + 16);
@@ -2423,6 +2452,55 @@ function normalizeManifestVersionInApk(string $apkPath): bool
     exec($command, $output, $exitCode);
     echo implode("\n", $output) . "\n";
     return $exitCode === 0;
+}
+
+/**
+ * 保证最终 APK 的 resources.arsc 使用 STORE，避免下游身份/签章校验拒绝 DEFLATE。
+ *
+ * ZipArchive 只改 ZIP 条目元数据和压缩数据，不改资源表内容；调用方随后必须重新
+ * zipalign，并且在签名之前执行本函数。
+ */
+function normalizeApkResourcesCompression(string $apkPath): bool
+{
+    if (!is_file($apkPath) || !class_exists('ZipArchive')) {
+        return false;
+    }
+
+    $zip = new ZipArchive();
+    if ($zip->open($apkPath) !== true) {
+        return false;
+    }
+
+    $matches = [];
+    for ($index = 0; $index < $zip->numFiles; $index++) {
+        $name = $zip->getNameIndex($index);
+        if ($name !== false && strcasecmp(ltrim(str_replace('\\', '/', $name), '/'), 'resources.arsc') === 0) {
+            $matches[] = $index;
+        }
+    }
+
+    if (count($matches) === 0) {
+        $zip->close();
+        echo "未找到 resources.arsc，跳过压缩方式规范化\n";
+        return true;
+    }
+    if (count($matches) !== 1) {
+        $zip->close();
+        echo "resources.arsc 条目数量异常：" . count($matches) . "\n";
+        return false;
+    }
+
+    $name = $zip->getNameIndex($matches[0]);
+    if ($name === false || !$zip->setCompressionName($name, ZipArchive::CM_STORE)) {
+        $zip->close();
+        return false;
+    }
+    if (!$zip->close()) {
+        return false;
+    }
+
+    echo "resources.arsc 已规范为 STORE\n";
+    return true;
 }
 
 /**
@@ -5144,7 +5222,10 @@ function patchApk($apkPath, $tmpDir, $unpackDir, array $assetFiles = ['cainiao_v
             $zip->close();
             return false;
         }
-        if (stripos($rel, 'lib/') === 0 && substr($rel, -3) === '.so') {
+        if (
+            (stripos($rel, 'lib/') === 0 && substr($rel, -3) === '.so')
+            || strcasecmp($rel, 'resources.arsc') === 0
+        ) {
             $zip->setCompressionName($rel, ZipArchive::CM_STORE);
         } else {
             $zip->setCompressionName($rel, ZipArchive::CM_DEFLATE);
