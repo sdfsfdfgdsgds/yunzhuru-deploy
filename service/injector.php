@@ -2203,6 +2203,196 @@ function maybeAddCommonAndroidPrefix($package)
 }
 
 /**
+ * 保证 XML -> AXML 回编译时 versionName 保持字符串语义。
+ *
+ * xml2axml 的通用值推断会把形如 1.0 的文本编码成 FLOAT，
+ * 但 AndroidManifest 的 android:versionName 是字符串属性。这里先用
+ * 编码器支持的显式类型标记保护它，编码完成后再把 rawValue 指向实际
+ * 字符串，避免标记本身残留在二进制清单中。
+ */
+function forceManifestVersionNameStringForXml2Axml(DOMDocument $dom): bool
+{
+    $manifestNode = $dom->getElementsByTagName('manifest')->item(0);
+    if (!$manifestNode instanceof DOMElement || !$manifestNode->hasAttribute('android:versionName')) {
+        return true;
+    }
+
+    $value = (string)$manifestNode->getAttribute('android:versionName');
+    if ($value === '' || strpos($value, '@') === 0) {
+        // 空值和资源引用不参与数字推断，保留原语义。
+        return true;
+    }
+
+    if (strpos($value, '!string!') === 0) {
+        $value = substr($value, strlen('!string!'));
+    }
+    $manifestNode->setAttribute('android:versionName', '!string!' . $value);
+    return true;
+}
+
+/**
+ * 校验并修正 xml2axml 输出的 versionName rawValue。
+ *
+ * 显式类型标记会让 typedValue 正确落到 STRING，但旧版编码器会把标记
+ * 写入 rawValue。将 rawValue 改为 typedValue 指向的实际字符串索引后，
+ * aapt、Apktool 和 Android 都会看到标准的 versionName="..."。
+ */
+function normalizeManifestVersionNameAxml(string $manifestPath): bool
+{
+    if (!is_file($manifestPath)) {
+        return false;
+    }
+
+    $content = file_get_contents($manifestPath);
+    $length = is_string($content) ? strlen($content) : 0;
+    if ($length < 8) {
+        return false;
+    }
+
+    $readUInt16 = static function (int $offset) use ($content, $length): ?int {
+        if ($offset < 0 || $offset + 2 > $length) {
+            return null;
+        }
+        $decoded = unpack('vvalue', substr($content, $offset, 2));
+        return is_array($decoded) && isset($decoded['value']) ? (int)$decoded['value'] : null;
+    };
+    $readUInt32 = static function (int $offset) use ($content, $length): ?int {
+        if ($offset < 0 || $offset + 4 > $length) {
+            return null;
+        }
+        $decoded = unpack('Vvalue', substr($content, $offset, 4));
+        return is_array($decoded) && isset($decoded['value']) ? (int)$decoded['value'] : null;
+    };
+
+    if ($readUInt16(0) !== 0x0003 || $readUInt16(2) < 8 || $readUInt32(4) !== $length) {
+        return false;
+    }
+
+    $poolOffset = (int)$readUInt16(2);
+    $poolType = $readUInt16($poolOffset);
+    $poolHeaderSize = $readUInt16($poolOffset + 2);
+    $poolLength = $readUInt32($poolOffset + 4);
+    if ($poolType !== 0x0001 || $poolHeaderSize === null || $poolHeaderSize < 28
+        || $poolLength === null || $poolLength < $poolHeaderSize
+        || $poolOffset + $poolLength > $length) {
+        return false;
+    }
+
+    $stringCount = $readUInt32($poolOffset + 8);
+    $stringFlags = $readUInt32($poolOffset + 16);
+    $stringsStart = $readUInt32($poolOffset + 20);
+    if ($stringCount === null || $stringFlags === null || $stringsStart === null
+        || $poolOffset + $poolHeaderSize + ($stringCount * 4) > $length
+        || $poolOffset + $stringsStart > $length) {
+        return false;
+    }
+
+    $isUtf8 = (($stringFlags & 0x00000100) !== 0);
+    $offsetsOffset = $poolOffset + $poolHeaderSize;
+    $stringsOffset = $poolOffset + $stringsStart;
+    $strings = [];
+    $decodeLength = static function (string $data, int $offset, bool $utf8): ?array {
+        $limit = strlen($data);
+        if ($offset < 0 || $offset >= $limit) {
+            return null;
+        }
+        if ($utf8) {
+            $readLength = static function (string $value, int &$position, int $limit): ?int {
+                if ($position >= $limit) return null;
+                $first = ord($value[$position++]);
+                if (($first & 0x80) === 0) return $first;
+                if ($position >= $limit) return null;
+                return (($first & 0x7f) << 8) | ord($value[$position++]);
+            };
+            $utf16Length = $readLength($data, $offset, $limit);
+            $byteLength = $readLength($data, $offset, $limit);
+            if ($utf16Length === null || $byteLength === null) return null;
+            return [$offset, $byteLength, $utf16Length];
+        }
+        if ($offset + 2 > $limit) return null;
+        $utf16Length = unpack('vvalue', substr($data, $offset, 2))['value'];
+        return [$offset + 2, $utf16Length * 2, $utf16Length];
+    };
+
+    for ($index = 0; $index < $stringCount; $index++) {
+        $relativeOffset = $readUInt32($offsetsOffset + ($index * 4));
+        if ($relativeOffset === null) return false;
+        $entryOffset = $stringsOffset + $relativeOffset;
+        $lengthInfo = $decodeLength($content, $entryOffset, $isUtf8);
+        if ($lengthInfo === null) return false;
+        [$textOffset, $byteLength] = $lengthInfo;
+        if ($textOffset + $byteLength > $length) return false;
+        $strings[$index] = $isUtf8
+            ? substr($content, $textOffset, $byteLength)
+            : (function () use ($content, $textOffset, $byteLength): string {
+                $text = '';
+                for ($i = 0; $i < $byteLength; $i += 2) {
+                    $text .= $content[$textOffset + $i];
+                }
+                return $text;
+            })();
+    }
+
+    $versionNameIndex = array_search('versionName', $strings, true);
+    if ($versionNameIndex === false) {
+        return true;
+    }
+
+    $cursor = $poolOffset + $poolLength;
+    $patched = false;
+    while ($cursor < $length) {
+        $chunkType = $readUInt16($cursor);
+        $chunkHeaderSize = $readUInt16($cursor + 2);
+        $chunkLength = $readUInt32($cursor + 4);
+        if ($chunkType === null || $chunkHeaderSize === null || $chunkLength === null
+            || $chunkHeaderSize < 8 || $chunkLength < $chunkHeaderSize
+            || $cursor + $chunkLength > $length) {
+            return false;
+        }
+
+        // 0x0102 = RES_XML_START_ELEMENT_TYPE，查找 manifest 根节点。
+        if ($chunkType === 0x0102 && $chunkLength >= 36) {
+            $nameIndex = $readUInt32($cursor + 20);
+            $attrStart = $readUInt16($cursor + 24);
+            $attrSize = $readUInt16($cursor + 26);
+            $attrCount = $readUInt16($cursor + 28);
+            if ($nameIndex === null || !isset($strings[$nameIndex]) || $strings[$nameIndex] !== 'manifest') {
+                $cursor += $chunkLength;
+                continue;
+            }
+            if ($attrStart === null || $attrSize === null || $attrSize < 20 || $attrCount === null) {
+                return false;
+            }
+
+            for ($index = 0; $index < $attrCount; $index++) {
+                $attrOffset = $cursor + 16 + $attrStart + ($index * $attrSize);
+                $attrNameIndex = $readUInt32($attrOffset + 4);
+                if ($attrNameIndex !== $versionNameIndex) continue;
+                $rawIndex = $readUInt32($attrOffset + 8);
+                $valueType = ord($content[$attrOffset + 15]);
+                $valueData = $readUInt32($attrOffset + 16);
+                if ($valueType === 0x01) {
+                    // 允许 versionName 使用 @string/... 资源引用。
+                    return true;
+                }
+                if ($valueType !== 0x03 || $valueData === null || !isset($strings[$valueData])) {
+                    return false;
+                }
+                if ($rawIndex !== $valueData) {
+                    $content = substr_replace($content, pack('V', $valueData), $attrOffset + 8, 4);
+                    $patched = true;
+                }
+                break;
+            }
+            break;
+        }
+        $cursor += $chunkLength;
+    }
+
+    return !$patched || file_put_contents($manifestPath, $content, LOCK_EX) === $length;
+}
+
+/**
  * 去除引流分享界面启动入口
  *
  * @param string $xml2axmlPath xml2axml.jar 路径
@@ -2379,6 +2569,7 @@ function setupLauncherByMetaDataWithXml2Axml($xml2axmlPath, $dir)
         }
 
         // 保存 XML
+        forceManifestVersionNameStringForXml2Axml($dom);
         $dom->formatOutput = true;
         if ($dom->save($manifestXml) === false) {
             echo "保存 XML 失败\n";
@@ -2394,6 +2585,10 @@ function setupLauncherByMetaDataWithXml2Axml($xml2axmlPath, $dir)
         );
         echo "执行编码命令：\n$cmdEncode\n";
         echo shell_exec($cmdEncode);
+        if (!normalizeManifestVersionNameAxml($manifestBin)) {
+            echo "versionName 类型校验失败\n";
+            return false;
+        }
 
         $newMd5 = md5_file($manifestBin);
         if ($newMd5 === false || $newMd5 === $oldMd5) {
@@ -2564,6 +2759,7 @@ function removeLauncherCategoryWithXml2Axml($xml2axmlPath, $dir)
         }
 
         // 保存 XML
+        forceManifestVersionNameStringForXml2Axml($dom);
         $dom->formatOutput = true;
         if ($dom->save($manifestXml) === false) {
             echo "保存 AndroidManifest2.xml 失败\n";
@@ -2579,6 +2775,10 @@ function removeLauncherCategoryWithXml2Axml($xml2axmlPath, $dir)
         );
         echo "执行编码命令：\n$cmdEncode\n";
         echo shell_exec($cmdEncode);
+        if (!normalizeManifestVersionNameAxml($manifestBin)) {
+            echo "versionName 类型校验失败\n";
+            return false;
+        }
 
         // 校验 md5
         $newMd5 = md5_file($manifestBin);
@@ -2681,6 +2881,7 @@ function removeLauncherCategoryWithXml2Axml2($xml2axmlPath, $dir)
         }
 
         // 保存修改后的 XML
+        forceManifestVersionNameStringForXml2Axml($dom);
         $dom->formatOutput = true;
         if ($dom->save($manifestXml) === false) {
             echo "保存 AndroidManifest2.xml 失败\n";
@@ -2697,6 +2898,10 @@ function removeLauncherCategoryWithXml2Axml2($xml2axmlPath, $dir)
 
         echo "执行编码命令：\n$cmdEncode\n";
         echo shell_exec($cmdEncode);
+        if (!normalizeManifestVersionNameAxml($manifestBin)) {
+            echo "versionName 类型校验失败\n";
+            return false;
+        }
 
         // 校验 md5
         $newMd5 = md5_file($manifestBin);
@@ -2789,6 +2994,7 @@ function injectActivityWithXml2Axml($xml2axmlPath, $dir, $activityXml)
         $applicationNode->appendChild($importedNode);
 
         // 保存修改后的 XML
+        forceManifestVersionNameStringForXml2Axml($dom);
         $dom->formatOutput = true;
         if ($dom->save($manifestXml) === false) {
             echo "保存 AndroidManifest2.xml 失败\n";
@@ -2806,6 +3012,10 @@ function injectActivityWithXml2Axml($xml2axmlPath, $dir, $activityXml)
         echo "执行编码命令：\n$cmdEncode\n";
         $encodeOutput = shell_exec($cmdEncode);
         echo "编码输出：\n$encodeOutput\n";
+        if (!normalizeManifestVersionNameAxml($manifestBin)) {
+            echo "versionName 类型校验失败\n";
+            return false;
+        }
 
         // 校验 md5 是否变化
         $newMd5 = md5_file($manifestBin);
