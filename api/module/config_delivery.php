@@ -103,7 +103,9 @@ function configDeliveryPathStats(PDO $pdo, array $input, bool $internalCall): ar
 
     $rowsSql = "SELECT s.dns_mode, s.dns_provider, s.target_host, s.domain_pool_id,
         COALESCE(p.name, IF(s.domain_pool_id=0, '内置/STATIC', CONCAT('已删除 #',s.domain_pool_id))) AS domain_name,
-        s.scope, s.app_id, s.package_name, s.carrier, s.network_type,
+        s.scope, s.app_id,
+        COALESCE(NULLIF(a.name, ''), CONCAT('应用 #', s.app_id)) AS app_name,
+        s.package_name, s.carrier, s.network_type,
         SUM(s.request_count) AS range_count,
         SUM(CASE WHEN s.stat_date={$todayQuoted} THEN s.request_count ELSE 0 END) AS today_count,
         SUM(CASE WHEN s.stat_date={$todayQuoted} THEN s.ok_count ELSE 0 END) AS today_ok,
@@ -114,9 +116,10 @@ function configDeliveryPathStats(PDO $pdo, array $input, bool $internalCall): ar
         MAX(s.last_seen_at) AS last_seen_at
         FROM cainiao_dns_path_stats s
         LEFT JOIN cainiao_api_domain_pool p ON p.id=s.domain_pool_id
+        LEFT JOIN cainiao_apk a ON a.id=s.app_id
         {$rowWhere}
         GROUP BY s.dns_mode,s.dns_provider,s.target_host,s.domain_pool_id,p.name,s.scope,
-                 s.app_id,s.package_name,s.carrier,s.network_type
+                 s.app_id,a.name,s.package_name,s.carrier,s.network_type
         ORDER BY today_count DESC, range_count DESC, last_seen_at DESC
         LIMIT 500";
     $stmt = $pdo->prepare($rowsSql);

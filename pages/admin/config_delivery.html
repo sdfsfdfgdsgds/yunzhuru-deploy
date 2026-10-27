@@ -334,7 +334,7 @@
           <el-table-column label="路径" width="125"><template #default="scope"><el-tag size="small" :type="modeTag(scope.row.dns_mode)">{{ modeLabel(scope.row.dns_mode) }}</el-tag></template></el-table-column>
           <el-table-column prop="dns_provider" label="解析来源" min-width="150"><template #default="scope">{{ scope.row.dns_provider || '-' }}</template></el-table-column>
           <el-table-column label="目标入口" min-width="230"><template #default="scope"><div>{{ scope.row.domain_name || scope.row.target_host || '内置/STATIC' }}</div><div class="muted">{{ scope.row.target_host || '-' }}<span v-if="scope.row.domain_pool_id"> · 池 #{{ scope.row.domain_pool_id }}</span></div></template></el-table-column>
-          <el-table-column label="应用" min-width="150"><template #default="scope"><div>APPID {{ scope.row.app_id || '-' }}</div><div class="muted">{{ scope.row.package_name || '-' }}</div></template></el-table-column>
+          <el-table-column label="应用" min-width="180"><template #default="scope"><div>{{ scope.row.app_name || ('应用 #' + (scope.row.app_id || '-')) }}</div><div class="muted">APPID {{ scope.row.app_id || '-' }} · {{ scope.row.package_name || '-' }}</div></template></el-table-column>
           <el-table-column label="用途" width="85"><template #default="scope">{{ scopeLabel(scope.row.scope) }}</template></el-table-column>
           <el-table-column label="范围 / 今日" width="125" align="right"><template #default="scope">{{ metric(scope.row, 'range') }} / {{ metric(scope.row, 'today') }}</template></el-table-column>
           <el-table-column label="成功 / 失败" width="125" align="right"><template #default="scope">{{ metric(scope.row, 'ok') }} / {{ metric(scope.row, 'fail') }}</template></el-table-column>
