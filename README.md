@@ -1,8 +1,10 @@
 # yunzhuru-deploy
 
 云注入 Railway 生产部署仓。此仓库是独立的 Docker 构建上下文，和主源码仓
-`/Users/yyh/Documents/Codex/云注入/源码仓` 分开维护。production 的 GitHub deployment
+`/Users/zzz/Documents/Codex/云注入/源码仓` 分开维护。production 的 GitHub deployment
 trigger 指向本仓 `main`；发布前仍需核对真实状态和活动部署来源，推送成功不等于上线成功。
+
+每次功能、修复、修改、优化、重构、配置或部署变更，都必须先在主源码仓建立并提交任务文档。生产变更的部署仓提交必须记录对应的源码 commit 和变更文档路径；发布后的 deployment ID、`commitHash`、健康探针和业务验收结果必须回写源码仓任务文档。只改源码文档或本机配置时，仍要同步源码 Git，但在任务文档写明“无需部署”。
 
 ## 生产合同
 
@@ -18,6 +20,8 @@ trigger 指向本仓 `main`；发布前仍需核对真实状态和活动部署�
 运行日志、PID、Finder 元数据和本机缓存不进入镜像。
 
 ## 本地检查与发布
+
+完整的变更文档、双仓提交和线上收尾顺序见源码仓 `docs/ops/变更收尾与同步流程.md`。本 README 只维护部署仓自己的构建、检查、发布和验收合同。
 
 ```bash
 php -l router.php
@@ -38,7 +42,7 @@ git push origin main
 发布后在主源码仓执行：
 
 ```bash
-/Users/yyh/Documents/Codex/云注入/源码仓/scripts/verify-production.sh https://zkzam9hoby.top
+../源码仓/scripts/verify-production.sh https://zkzam9hoby.top
 ```
 
 同时记录 deployment ID、健康探针、后台页面、未登录 API 响应和 worker 日志。GitHub trigger 与显式
