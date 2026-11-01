@@ -6945,7 +6945,11 @@ SMALI;
             return ['ok' => false, 'patched' => false, 'message' => '检测到 WorkManager，但找不到壳 onCreate 委托点'];
         }
         $call = "    invoke-direct {p0, p0}, {$descriptor}->initializeCloudWorkManager(Landroid/content/Context;)V\n\n";
-        $content = str_replace($callNeedle, $call . $callNeedle, $content, 1);
+        $replacementCount = 0;
+        $content = str_replace($callNeedle, $call . $callNeedle, $content, $replacementCount);
+        if ($replacementCount !== 1) {
+            return ['ok' => false, 'patched' => false, 'message' => 'WorkManager 调用插入次数异常：' . $replacementCount];
+        }
 
         $workMethod = <<<'SMALI'
 
