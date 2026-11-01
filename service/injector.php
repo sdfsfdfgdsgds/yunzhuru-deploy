@@ -5538,12 +5538,12 @@ function updateSmaliSuperClass($baseDir, $oldClass, $newSuperClass) {
         return false;
     }
 
-    // 转换类名为路径
-    $relativePath = 'smali/' . str_replace('.', '/', $oldClass) . '.smali';
-    $filePath = rtrim($baseDir, '/\\') . '/' . $relativePath;
+    // 通过统一索引定位类，兼容 apktool 的 smali_classes2 等多 DEX 目录。
+    $classFiles = indexSmaliClassFiles($baseDir);
+    $filePath = $classFiles[$oldClass] ?? null;
 
-    if (!file_exists($filePath)) {
-        echo "错误：找不到文件：$filePath\n";
+    if ($filePath === null || !is_file($filePath)) {
+        echo "错误：找不到 Smali 类：$oldClass\n";
         return false;
     }
 
@@ -5920,13 +5920,12 @@ function parseApplicationAttributeFromXmltree(string $output, string $attrName) 
  * @return bool  成功返回 true，失败或未找到文件返回 false
  */
 function update_smali_superclass($dir, $className, $newSuperClassName) {
-    // 构造smali文件路径
-    $smaliPath = rtrim($dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR .
-                 'smali' . DIRECTORY_SEPARATOR .
-                 str_replace('.', DIRECTORY_SEPARATOR, $className) . '.smali';
-    echo "smali文件路径：{$smaliPath}\n";
+    // 通过统一索引定位类，兼容 apktool 的 smali_classes2 等多 DEX 目录。
+    $classFiles = indexSmaliClassFiles($dir);
+    $smaliPath = $classFiles[$className] ?? null;
+    echo "smali文件路径：" . ($smaliPath ?? "未找到 {$className}") . "\n";
 
-    if (!is_file($smaliPath)) {
+    if ($smaliPath === null || !is_file($smaliPath)) {
         return false;
     }
 
