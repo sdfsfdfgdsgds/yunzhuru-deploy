@@ -6882,6 +6882,26 @@ function patchShellApplicationForHiltCompatibility($shellRoot, $targetRoot, $she
     $patched = false;
     $messages = [];
 
+    if ($hasWorkManager && strpos($content, '.method public getApplicationContext()Landroid/content/Context;') === false) {
+        $contextBridge = <<<'SMALI'
+
+.method public getApplicationContext()Landroid/content/Context;
+    .locals 1
+    iget-object v0, p0, %APP_DESCRIPTOR%->originAppInstance:Landroid/app/Application;
+    if-eqz v0, :fallback_application_context
+    return-object v0
+    :fallback_application_context
+    invoke-super {p0}, Landroid/app/Application;->getApplicationContext()Landroid/content/Context;
+    move-result-object v0
+    return-object v0
+.end method
+SMALI;
+        $contextBridge = str_replace('%APP_DESCRIPTOR%', $descriptor, $contextBridge);
+        $content .= $contextBridge;
+        $patched = true;
+        $messages[] = 'ApplicationContext 委托桥';
+    }
+
     if ($hasHilt && strpos($content, '.implements Ldagger/hilt/internal/GeneratedComponentManagerHolder;') === false) {
         $superLine = preg_match('/^\.super\s+[^\r\n]+$/m', $content, $superMatch, PREG_OFFSET_CAPTURE)
             ? $superMatch[0]
