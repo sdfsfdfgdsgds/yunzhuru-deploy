@@ -887,6 +887,17 @@ function handleInjectionTasks(PDO $pdo, $oss)
     updateTaskInfo($pdo, $task['id'], '反编译壳');
     $result = dexToSmali($baksmali, $de_apk1);
     if ($result) {
+        $hiltBridge = patchShellApplicationForHiltCompatibility($de_apk1, $de_apk2, $shellClassName);
+        echo $hiltBridge['message'] . "\n";
+        if (!$hiltBridge['ok']) {
+            updateTaskStatus($pdo, $task['id'], '注入失败');
+            updateTaskInfo($pdo, $task['id'], 'Hilt Application 兼容桥处理失败：' . $hiltBridge['message']);
+            safeDeleteDirectory($temp_dir);
+            del_osstemp($oss_temp, $localSavePath);
+            return;
+        }
+    }
+    if ($result) {
         echo "反编译成功\n";
     } else {
         updateTaskStatus($pdo, $task['id'], '任务失败');
@@ -6780,6 +6791,200 @@ function compileSmaliToNextDex($smaliJar, $de_apk1, $de_apk2) {
     return true;
 }
 
+
+/**
+ * Detect whether a target APK carries Hilt's Application component contract.
+ *
+ * The shell DEX is compiled before it is merged with the target DEX, so the
+ * check intentionally reads the target's raw DEX string pool instead of trying
+ * to load target classes in the injector JVM.
+ */
+function targetDexContainsString($decompiledDir, $needle): bool
+{
+    if (!is_dir($decompiledDir) || $needle === '') {
+        return false;
+    }
+
+    foreach (listStandardDexFiles($decompiledDir) as $dexName) {
+        $path = rtrim($decompiledDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $dexName;
+        $handle = @fopen($path, 'rb');
+        if ($handle === false) {
+            continue;
+        }
+
+        $carry = '';
+        $found = false;
+        while (!feof($handle)) {
+            $chunk = fread($handle, 1024 * 1024);
+            if ($chunk === false || $chunk === '') {
+                break;
+            }
+            $data = $carry . $chunk;
+            if (strpos($data, $needle) !== false) {
+                $found = true;
+                break;
+            }
+            $carry = strlen($needle) > 1
+                ? substr($data, -strlen($needle) + 1)
+                : '';
+        }
+        fclose($handle);
+        if ($found) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Make the cloud Application wrapper visible to Hilt-generated Activities.
+ *
+ * Hilt performs an instanceof check on the process Application before creating
+ * an Activity component. The wrapper cannot implement this interface for every
+ * target (non-Hilt apps do not carry the interface), therefore this small bridge
+ * is added only when the target DEX contains Hilt's holder contract. Calls are
+ * delegated to the original Application created by the wrapper.
+ */
+function patchShellApplicationForHiltCompatibility($shellRoot, $targetRoot, $shellClassName): array
+{
+    $hiltMarker = 'dagger/hilt/internal/GeneratedComponentManagerHolder';
+    $workManagerMarker = 'androidx/work/WorkManagerInitializer';
+    $hasHilt = targetDexContainsString($targetRoot, $hiltMarker);
+    $hasWorkManager = targetDexContainsString($targetRoot, $workManagerMarker);
+    if (!$hasHilt && !$hasWorkManager) {
+        return ['ok' => true, 'patched' => false, 'message' => '目标未发现 Hilt/WorkManager 运行时合同，保留通用壳。'];
+    }
+
+    $classes = indexSmaliClassFiles($shellRoot);
+    $smaliPath = $classes[$shellClassName] ?? null;
+    if (!is_string($smaliPath) || !is_file($smaliPath)) {
+        return [
+            'ok' => false,
+            'patched' => false,
+            'message' => '检测到 Hilt/WorkManager，但找不到壳 Application Smali：' . $shellClassName,
+        ];
+    }
+
+    $content = @file_get_contents($smaliPath);
+    if ($content === false) {
+        return ['ok' => false, 'patched' => false, 'message' => '读取壳 Application Smali 失败'];
+    }
+    if (strpos($content, '->originAppInstance:Landroid/app/Application;') === false) {
+        return [
+            'ok' => false,
+            'patched' => false,
+            'message' => '检测到 Hilt/WorkManager，但壳 Application 缺少 originAppInstance 字段合同',
+        ];
+    }
+
+    $descriptor = 'L' . str_replace('.', '/', $shellClassName) . ';';
+    $patched = false;
+    $messages = [];
+
+    if ($hasHilt && strpos($content, '.implements Ldagger/hilt/internal/GeneratedComponentManagerHolder;') === false) {
+        $superLine = preg_match('/^\.super\s+[^\r\n]+$/m', $content, $superMatch, PREG_OFFSET_CAPTURE)
+            ? $superMatch[0]
+            : null;
+        if ($superLine === null) {
+            return ['ok' => false, 'patched' => false, 'message' => '壳 Application 缺少 .super 声明'];
+        }
+        $insertAt = $superLine[1] + strlen($superLine[0]);
+        $content = substr($content, 0, $insertAt)
+            . "\n\n# interfaces\n.implements Ldagger/hilt/internal/GeneratedComponentManagerHolder;"
+            . substr($content, $insertAt);
+
+        $bridge = <<<'SMALI'
+
+.method public componentManager()Ldagger/hilt/internal/GeneratedComponentManager;
+    .locals 1
+    iget-object v0, p0, %APP_DESCRIPTOR%->originAppInstance:Landroid/app/Application;
+    check-cast v0, Ldagger/hilt/internal/GeneratedComponentManagerHolder;
+    invoke-interface {v0}, Ldagger/hilt/internal/GeneratedComponentManagerHolder;->componentManager()Ldagger/hilt/internal/GeneratedComponentManager;
+    move-result-object v0
+    return-object v0
+.end method
+
+.method public generatedComponent()Ljava/lang/Object;
+    .locals 1
+    iget-object v0, p0, %APP_DESCRIPTOR%->originAppInstance:Landroid/app/Application;
+    check-cast v0, Ldagger/hilt/internal/GeneratedComponentManagerHolder;
+    invoke-interface {v0}, Ldagger/hilt/internal/GeneratedComponentManagerHolder;->generatedComponent()Ljava/lang/Object;
+    move-result-object v0
+    return-object v0
+.end method
+SMALI;
+        $bridge = str_replace('%APP_DESCRIPTOR%', $descriptor, $bridge);
+        $content .= $bridge;
+        $patched = true;
+        $messages[] = 'Hilt Application 委托桥';
+    }
+
+    if ($hasWorkManager && strpos($content, 'initializeCloudWorkManager') === false) {
+        $callNeedle = '    invoke-virtual {v0}, Landroid/app/Application;->onCreate()V';
+        if (strpos($content, $callNeedle) === false) {
+            return ['ok' => false, 'patched' => false, 'message' => '检测到 WorkManager，但找不到壳 onCreate 委托点'];
+        }
+        $call = "    invoke-direct {p0, p0}, {$descriptor}->initializeCloudWorkManager(Landroid/content/Context;)V\n\n";
+        $content = str_replace($callNeedle, $call . $callNeedle, 1);
+
+        $workMethod = <<<'SMALI'
+
+.method private initializeCloudWorkManager(Landroid/content/Context;)V
+    .locals 6
+    :try_start_cloud_work
+    invoke-virtual {p1}, Landroid/content/Context;->getClassLoader()Ljava/lang/ClassLoader;
+    move-result-object v0
+    const-string v1, "androidx.work.WorkManagerInitializer"
+    const/4 v2, 0x0
+    invoke-static {v1, v2, v0}, Ljava/lang/Class;->forName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;
+    move-result-object v0
+    const/4 v2, 0x0
+    new-array v2, v2, [Ljava/lang/Class;
+    invoke-virtual {v0, v2}, Ljava/lang/Class;->getDeclaredConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;
+    move-result-object v1
+    const/4 v2, 0x0
+    new-array v2, v2, [Ljava/lang/Object;
+    invoke-virtual {v1, v2}, Ljava/lang/reflect/Constructor;->newInstance([Ljava/lang/Object;)Ljava/lang/Object;
+    move-result-object v1
+    const/4 v2, 0x1
+    new-array v2, v2, [Ljava/lang/Class;
+    const-class v3, Landroid/content/Context;
+    const/4 v5, 0x0
+    aput-object v3, v2, v5
+    const-string v3, "create"
+    invoke-virtual {v0, v3, v2}, Ljava/lang/Class;->getMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;
+    move-result-object v2
+    const/4 v3, 0x1
+    new-array v3, v3, [Ljava/lang/Object;
+    const/4 v5, 0x0
+    aput-object p1, v3, v5
+    invoke-virtual {v2, v1, v3}, Ljava/lang/reflect/Method;->invoke(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;
+    :try_end_cloud_work
+    .catch Ljava/lang/Throwable; {:try_start_cloud_work .. :try_end_cloud_work} :catch_cloud_work
+    return-void
+    :catch_cloud_work
+    move-exception v0
+    return-void
+.end method
+SMALI;
+        $content .= $workMethod;
+        $patched = true;
+        $messages[] = 'WorkManager 反射初始化';
+    }
+
+    if (@file_put_contents($smaliPath, $content) === false) {
+        return ['ok' => false, 'patched' => false, 'message' => '写回 Hilt/WorkManager 兼容补丁失败'];
+    }
+
+    return [
+        'ok' => true,
+        'patched' => $patched,
+        'message' => $patched
+            ? '检测到目标运行时合同，已添加' . implode('、', $messages) . '。'
+            : '壳 Application 已包含 Hilt/WorkManager 兼容桥。',
+    ];
+}
 
 //dex转smali
 function dexToSmali($baksmaliPath, $decompiledDir) {
