@@ -1520,9 +1520,43 @@ $applicationlin=[];
         $appComponentFactoryClassName = getappComponentFactoryClassName($aapt, $apk_file[1], $aapt2);
         echo "注入模式2,appComponentFactory 注入,注入工厂{$appComponentFactoryClassName}\n";
         echo "此模式原理,读取原始工厂，将壳类注入到工厂入口，然后由壳appComponentFactory劫持原入口，调用壳入口，然后壳反射调用原工厂\n";
+
+        /*
+         * 崩溃 SDK 必须位于最终 Manifest 的唯一 appComponentFactory 外层。
+         * 旧实现无条件把 Manifest 改成云工厂，导致 CrashAppComponentFactory
+         * 被覆盖，Application 构造阶段的异常重新变成未捕获异常。检测到新版
+         * 崩溃工厂时，云壳只作为 delegate，并把原始工厂留给云壳 Config。
+         */
+        $crashFactoryOuter = ($appComponentFactoryClassName === 'com.lsj.crash.CrashAppComponentFactory');
+        $cloudOriginFactory = $appComponentFactoryClassName;
+        if ($crashFactoryOuter) {
+            $configuredCrashOriginFactory = readAndroidManifestMetaDataWithXml2Axml(
+                $xml2axml,
+                $de_apk2,
+                'crash_original_app_component_factory'
+            );
+            $cloudOriginFactory = trim((string)$configuredCrashOriginFactory);
+            if ($cloudOriginFactory === ''
+                || $cloudOriginFactory === 'com.lsj.crash.CrashAppComponentFactory') {
+                $cloudOriginFactory = 'android.app.AppComponentFactory';
+            }
+            // 云壳在前面的包名混淆阶段会把 com.example.shell.* 一起随机化，
+            // 所以这里按 class_defs 的简单类名确认桥接类，不能再查旧全限定名。
+            $bridgeDexFile = findDexClassBySimpleName($de_apk1, 'CrashFactoryBridge');
+            if ($bridgeDexFile === false) {
+                updateTaskStatus($pdo, $task['id'], '注入失败');
+                updateTaskInfo($pdo, $task['id'], '崩溃外层要求当前云壳 CrashFactoryBridge，当前壳模板不兼容');
+                safeDeleteDirectory($temp_dir);
+                del_osstemp($oss_temp, $localSavePath);
+                return;
+            }
+            echo "检测到崩溃外层工厂，保留 CrashAppComponentFactory，云工厂写入 delegate；原始工厂={$cloudOriginFactory}\n";
+        }
         if(!empty($appComponentFactoryClassName)){
             echo "AAPT得到的工厂类名是：$appComponentFactoryClassName\n";//有原始工厂，需要修改壳配置为原始工厂
-            if($appComponentFactoryClassName == 'android.app.AppComponentFactory'){
+            if($crashFactoryOuter){
+                replace_config_originFactoryClassName($de_apk1, $cloudOriginFactory);
+            }else if($appComponentFactoryClassName == 'android.app.AppComponentFactory'){
                 echo "原始工厂已经是android.app.AppComponentFactory，无需修改壳配置\n";
             }else{
                 echo "开始修改壳配置种的工厂名为{$appComponentFactoryClassName}\n";
@@ -1531,16 +1565,42 @@ $applicationlin=[];
         }else{
             echo "未读到工厂类名，不用修改壳工厂调用类\n";
         }
-        //修改目标应用工厂为壳工厂
-        $result = fix_android_http_limit($Editor, $de_apk2, "android-appComponentFactory:{$final_package}.{$GLOBALS['ShellAppComponentFactory']}");
-        if(!$result){
-            updateTaskStatus($pdo, $task['id'], '注入失败');
-            updateTaskInfo($pdo, $task['id'], '注入壳工厂失败,请更换注入模式');
-            safeDeleteDirectory($temp_dir);
-            del_osstemp($oss_temp, $localSavePath);
-            return;
-        }else{
-            echo "工厂注入完成\n";
+        if ($crashFactoryOuter) {
+            /*
+             * 不能再写入 Cloud ShellAppComponentFactory，否则会覆盖 Crash 外层。
+             * ManifestEditor 的 --metaData 操作会更新同名节点并保持唯一性；完成后
+             * AliPack 才能从最终 APK 读回真实随机类名。
+             */
+            $cloudFactoryDelegate = $final_package . '.' . $GLOBALS['ShellAppComponentFactory'];
+            $chainMeta = [
+                'alipack_identity_contract' => 'ALIPACK_APK_IDENTITY_CONTRACT_V1',
+                'alipack_identity_protocol' => 'ALIPACK_APK_IDENTITY_CONTRACT_V1',
+                'alipack_factory_chain' => 'crash->cloud->original',
+                'alipack_factory_chain_delegate' => $cloudFactoryDelegate,
+                'alipack_capabilities' => 'cloud.runtime.package.v2,cloud.physical-cert.bridge,crash.identity.v2,crash.physical-cert,bootstrap.factory-chain,factory_chain_complete',
+                'crash_original_app_component_factory' => $cloudOriginFactory,
+            ];
+            $result = upsertManifestMetaDataWithXml2Axml($xml2axml, $de_apk2, $chainMeta);
+            if (!$result) {
+                updateTaskStatus($pdo, $task['id'], '注入失败');
+                updateTaskInfo($pdo, $task['id'], '崩溃+云工厂链 metadata 写入失败');
+                safeDeleteDirectory($temp_dir);
+                del_osstemp($oss_temp, $localSavePath);
+                return;
+            }
+            echo "保留 CrashAppComponentFactory，写入云 delegate={$cloudFactoryDelegate}\n";
+        } else {
+            // 普通云壳仍使用云工厂作为唯一 Manifest 入口。
+            $result = fix_android_http_limit($Editor, $de_apk2, "android-appComponentFactory:{$final_package}.{$GLOBALS['ShellAppComponentFactory']}");
+            if(!$result){
+                updateTaskStatus($pdo, $task['id'], '注入失败');
+                updateTaskInfo($pdo, $task['id'], '注入壳工厂失败,请更换注入模式');
+                safeDeleteDirectory($temp_dir);
+                del_osstemp($oss_temp, $localSavePath);
+                return;
+            }else{
+                echo "工厂注入完成\n";
+            }
         }
         /*updateTaskStatus($pdo, $task['id'], '注入失败');
         updateTaskInfo($pdo, $task['id'], '未启用的注入模式,请更换注入模式');
@@ -7550,6 +7610,166 @@ function fix_android_http_limit($editorPath, $dirPath, $className) {
     }
 
     return true;
+}
+
+/**
+ * 从二进制 AndroidManifest 读取 application/meta-data 的字符串值。
+ * 云壳与崩溃壳分别由不同作者维护，不能假设其中一个已经把 XML 解码文件
+ * 留在工作目录；每次读取都使用同一份 xml2axml 工具并在结束时清理临时文件。
+ */
+function readAndroidManifestMetaDataWithXml2Axml($xml2axmlPath, $dirPath, $metaName) {
+    $manifestBin = rtrim($dirPath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'AndroidManifest.xml';
+    $manifestXml = $manifestBin . '.identity.xml';
+    if (!is_file($xml2axmlPath) || !is_file($manifestBin) || trim((string)$metaName) === '') {
+        return '';
+    }
+
+    $cmd = 'java -jar ' . escapeshellarg($xml2axmlPath) . ' d '
+        . escapeshellarg($manifestBin) . ' ' . escapeshellarg($manifestXml) . ' 2>&1';
+    shell_exec($cmd);
+    if (!is_file($manifestXml)) {
+        return '';
+    }
+
+    try {
+        libxml_use_internal_errors(true);
+        $dom = new DOMDocument();
+        if (!$dom->load($manifestXml)) {
+            return '';
+        }
+        $application = $dom->getElementsByTagName('application')->item(0);
+        if (!$application) {
+            return '';
+        }
+        foreach ($application->getElementsByTagName('meta-data') as $meta) {
+            if ($meta->getAttribute('android:name') === (string)$metaName) {
+                return trim((string)$meta->getAttribute('android:value'));
+            }
+        }
+        return '';
+    } finally {
+        if (is_file($manifestXml)) {
+            @unlink($manifestXml);
+        }
+    }
+}
+
+/** 按 class_defs 查找已被云壳包名混淆的稳定桥接类。 */
+function findDexClassBySimpleName($dirPath, $simpleName) {
+    if (!is_dir($dirPath) || trim((string)$simpleName) === '') {
+        return false;
+    }
+    $files = scandir($dirPath);
+    if ($files === false) {
+        return false;
+    }
+    usort($files, static function ($left, $right) {
+        if ($left === 'classes.dex') return -1;
+        if ($right === 'classes.dex') return 1;
+        preg_match('/^classes(\d*)\.dex$/', $left, $leftMatch);
+        preg_match('/^classes(\d*)\.dex$/', $right, $rightMatch);
+        $leftIndex = ($leftMatch[1] ?? '') === '' ? PHP_INT_MAX : (int)$leftMatch[1];
+        $rightIndex = ($rightMatch[1] ?? '') === '' ? PHP_INT_MAX : (int)$rightMatch[1];
+        return $leftIndex <=> $rightIndex;
+    });
+    foreach ($files as $file) {
+        if (!preg_match('/^classes(\d*)\.dex$/', $file)) {
+            continue;
+        }
+        $report = parseDexClassDefinitions($dirPath . DIRECTORY_SEPARATOR . $file);
+        if (empty($report['ok'])) {
+            continue;
+        }
+        foreach ($report['classes'] as $descriptor => $defined) {
+            if (!$defined) continue;
+            $trimmed = trim($descriptor, 'L;');
+            $slash = strrpos($trimmed, '/');
+            $className = $slash === false ? $trimmed : substr($trimmed, $slash + 1);
+            if ($className === (string)$simpleName) {
+                return $file;
+            }
+        }
+    }
+    return false;
+}
+
+/**
+ * 以 xml2axml 原子更新 application 下的 meta-data。
+ * 同名字段只保留一个节点，避免 Crash/Cloud/AliPack 三套作者各自追加后
+ * 产生 Android 读取顺序不确定的重复身份字段。
+ */
+function upsertManifestMetaDataWithXml2Axml($xml2axmlPath, $dirPath, array $values) {
+    $manifestBin = rtrim($dirPath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'AndroidManifest.xml';
+    $manifestXml = $manifestBin . '.identity.xml';
+    if (!is_file($xml2axmlPath) || !is_file($manifestBin) || empty($values)) {
+        return false;
+    }
+
+    foreach ($values as $name => $value) {
+        if (!preg_match('/^[A-Za-z0-9_.-]+$/', (string)$name)
+            || preg_match('/[\x00\r\n]/', (string)$value)) {
+            return false;
+        }
+    }
+
+    $decode = 'java -jar ' . escapeshellarg($xml2axmlPath) . ' d '
+        . escapeshellarg($manifestBin) . ' ' . escapeshellarg($manifestXml) . ' 2>&1';
+    shell_exec($decode);
+    if (!is_file($manifestXml)) {
+        return false;
+    }
+
+    try {
+        libxml_use_internal_errors(true);
+        $dom = new DOMDocument('1.0', 'utf-8');
+        if (!$dom->load($manifestXml)) {
+            return false;
+        }
+        $application = $dom->getElementsByTagName('application')->item(0);
+        if (!$application) {
+            return false;
+        }
+
+        $existing = [];
+        foreach ($application->getElementsByTagName('meta-data') as $meta) {
+            $name = (string)$meta->getAttribute('android:name');
+            if ($name !== '') {
+                $existing[$name][] = $meta;
+            }
+        }
+        foreach ($values as $name => $value) {
+            $nodes = $existing[$name] ?? [];
+            $node = $nodes[0] ?? null;
+            if (!$node) {
+                $node = $dom->createElement('meta-data');
+                $node->setAttribute('android:name', (string)$name);
+                $application->appendChild($node);
+            }
+            $node->setAttribute('android:value', (string)$value);
+            // 删除同名重复节点，只保留本次写入的第一个节点。
+            for ($index = 1; $index < count($nodes); $index++) {
+                $duplicate = $nodes[$index];
+                if ($duplicate->parentNode === $application) {
+                    $application->removeChild($duplicate);
+                }
+            }
+        }
+
+        forceManifestVersionNameStringForXml2Axml($dom);
+        $dom->formatOutput = true;
+        if ($dom->save($manifestXml) === false) {
+            return false;
+        }
+        $encode = 'java -jar ' . escapeshellarg($xml2axmlPath) . ' e '
+            . escapeshellarg($manifestXml) . ' ' . escapeshellarg($manifestBin) . ' 2>&1';
+        shell_exec($encode);
+        return is_file($manifestBin) && filesize($manifestBin) > 0
+            && normalizeManifestVersionNameAxml($manifestBin);
+    } finally {
+        if (is_file($manifestXml)) {
+            @unlink($manifestXml);
+        }
+    }
 }
 
 
