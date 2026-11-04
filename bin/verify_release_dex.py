@@ -41,17 +41,28 @@ ARTIFACT_KIND_TEMPLATE = "template"
 ARTIFACT_KIND_INJECTED = "injected"
 SUPPORTED_ARTIFACT_KINDS = (ARTIFACT_KIND_TEMPLATE, ARTIFACT_KIND_INJECTED)
 CONTRACT_MANIFEST_SHELL_VERSION = "manifest_shell_version"
+CONTRACT_MANIFEST_NOT_DEBUGGABLE = "template_manifest_not_debuggable"
 CONTRACT_TEMPLATE_CONFIG_PLACEHOLDERS = "cn.shell.Config_template_placeholders"
 CONTRACT_TEMPLATE_PRIMARY_DEX = "template_primary_dex_namespaces"
 CONTRACT_TEMPLATE_DEPENDENCIES = "template_no_legacy_multidex"
 SHELL_PROTOCOL_MARKER_FIELD = "SHELL_PROTOCOL_MARKER"
-SHELL_PROTOCOL_MARKER_PREFIX = "YUNZHURU_SHELL_PROTOCOL_V1:"
+SHELL_PROTOCOL_MARKER_PREFIX = "YUNZHURU_SHELL_PROTOCOL_V2:"
+IDENTITY_CONTRACT_MARKER_FIELD = "IDENTITY_CONTRACT_MARKER"
+IDENTITY_CONTRACT_MARKER = "ALIPACK_APK_IDENTITY_CONTRACT_V1"
+IDENTITY_CAPABILITIES_FIELD = "IDENTITY_CAPABILITIES"
+IDENTITY_CAPABILITIES = (
+    "package_context,context_paths,physical_cert_bridge,factory_chain_delegate_v1,early_application_bridge_v1"
+)
+FACTORY_CHAIN_MODE_FIELD = "FACTORY_CHAIN_MODE"
+FACTORY_CHAIN_MODE = "cloud->original"
 PRIMARY_DEX_ENTRY = "classes.dex"
 PRIMARY_DEX_REQUIRED_CLASSES = (
     "Lcn/shell/App;",
     "Lcn/shell/MainActivity;",
     "Lcn/shell/ShellAppComponentFactory;",
     "Lcn/shell/Config;",
+    "Lcom/example/shell/RuntimePackageIdentity;",
+    "Lcom/example/shell/CrashFactoryBridge;",
 )
 PRIMARY_DEX_GUARDED_PREFIXES = (
     "Lcn/shell/",
@@ -188,6 +199,7 @@ class ScanReport:
     expected_shell_version: Optional[int] = None
     manifest_version_code: Optional[str] = None
     manifest_version_name: Optional[str] = None
+    manifest_debuggable: Optional[str] = None
     shell_protocol_marker_expected: Optional[str] = None
     shell_protocol_marker_hit_count: int = 0
     shell_protocol_marker_candidates: Dict[str, int] = field(default_factory=dict)
@@ -218,6 +230,7 @@ class ScanReport:
             "expected_shell_version": self.expected_shell_version,
             "manifest_version_code": self.manifest_version_code,
             "manifest_version_name": self.manifest_version_name,
+            "manifest_debuggable": self.manifest_debuggable,
             "shell_protocol_marker_expected": self.shell_protocol_marker_expected,
             "shell_protocol_marker_hit_count": self.shell_protocol_marker_hit_count,
             "shell_protocol_marker_candidates": dict(
@@ -1119,6 +1132,34 @@ def validate_shell_version_contract(
     return violations
 
 
+def validate_manifest_debuggable_contract(
+    *, manifest_debuggable: Optional[str],
+) -> List[ContractViolation]:
+    """模板必须关闭 debuggable，避免发布壳暴露调试入口和运行时信息。"""
+
+    normalized = (
+        manifest_debuggable.strip().lower()
+        if manifest_debuggable is not None
+        else None
+    )
+    # Release 构建由 Android 默认将省略的 debuggable 解释为 false；
+    # Debug 构建会由 AGP 显式写入 true，因此这里仍能阻断误用 Debug 制品。
+    if normalized in {None, "false", "0"}:
+        return []
+    return [
+        ContractViolation(
+            code="TEMPLATE_MANIFEST_DEBUGGABLE",
+            location="AndroidManifest.xml@android:debuggable",
+            message=(
+                "发布模板必须关闭 android:debuggable；"
+                f"当前值为 {manifest_debuggable!r}。"
+            ),
+            expected="false",
+            actual=manifest_debuggable,
+        )
+    ]
+
+
 def build_shell_protocol_marker(expected_version: int) -> str:
     """从发布壳版本生成模板和注入成品共用的明文自证标记。"""
 
@@ -1250,6 +1291,36 @@ def validate_template_config_marker(
             actual=actual,
         )
     ]
+
+
+def validate_identity_contract_fields(
+    field_values: Mapping[str, Optional[str]],
+) -> List[ContractViolation]:
+    """Verify the cross-system identity contract is preserved in the shell DEX."""
+
+    expected_fields = {
+        IDENTITY_CONTRACT_MARKER_FIELD: IDENTITY_CONTRACT_MARKER,
+        IDENTITY_CAPABILITIES_FIELD: IDENTITY_CAPABILITIES,
+        FACTORY_CHAIN_MODE_FIELD: FACTORY_CHAIN_MODE,
+    }
+    violations: List[ContractViolation] = []
+    for field_name, expected_value in expected_fields.items():
+        actual_value = field_values.get(field_name)
+        if actual_value == expected_value:
+            continue
+        violations.append(
+            ContractViolation(
+                code="CONFIG_IDENTITY_CONTRACT_MISMATCH",
+                location=f"{CONFIG_CLASS}->{field_name}",
+                message=(
+                    f"身份合同字段 {field_name} 静态值为 {actual_value!r}，"
+                    f"合同值为 {expected_value!r}。"
+                ),
+                expected=expected_value,
+                actual=actual_value,
+            )
+        )
+    return violations
 
 
 def validate_config_placeholder_contract(
@@ -1428,6 +1499,7 @@ def apply_artifact_contracts(report: ScanReport, evidence: ArtifactEvidence) -> 
         report.skipped_contracts.extend(
             [
                 CONTRACT_MANIFEST_SHELL_VERSION,
+                CONTRACT_MANIFEST_NOT_DEBUGGABLE,
                 CONTRACT_TEMPLATE_CONFIG_PLACEHOLDERS,
                 CONTRACT_TEMPLATE_PRIMARY_DEX,
                 CONTRACT_TEMPLATE_DEPENDENCIES,
@@ -1443,6 +1515,11 @@ def apply_artifact_contracts(report: ScanReport, evidence: ArtifactEvidence) -> 
             expected_version=report.expected_shell_version,
             manifest_version_code=report.manifest_version_code,
             manifest_version_name=report.manifest_version_name,
+        )
+    )
+    report.contract_violations.extend(
+        validate_manifest_debuggable_contract(
+            manifest_debuggable=report.manifest_debuggable,
         )
     )
     definition_locations = {
@@ -1467,6 +1544,9 @@ def apply_artifact_contracts(report: ScanReport, evidence: ArtifactEvidence) -> 
             evidence.config_field_values,
             report.shell_protocol_marker_expected,
         )
+    )
+    report.contract_violations.extend(
+        validate_identity_contract_fields(evidence.config_field_values)
     )
 
 
@@ -1688,6 +1768,10 @@ def scan_apk(
         report.manifest_version_name = (
             str(version_name) if version_name is not None else None
         )
+        debuggable = manifest_apk.get_attribute_value("application", "debuggable")
+        report.manifest_debuggable = (
+            str(debuggable) if debuggable is not None else None
+        )
     except GateExecutionError:
         raise
     except Exception as exc:
@@ -1813,12 +1897,20 @@ def print_report(report: ScanReport, max_findings: int) -> None:
             f"versionCode={report.manifest_version_code!r}，"
             f"versionName={report.manifest_version_name!r}"
         )
+        print(
+            "[DEX门禁] 目标 Manifest debuggable："
+            f"{report.manifest_debuggable!r}（合同跳过）"
+        )
     else:
         print(
             "[DEX门禁] Manifest 版本："
             f"versionCode={report.manifest_version_code!r}，"
             f"versionName={report.manifest_version_name!r}，"
             f"期望壳版本={expected_text}"
+        )
+        print(
+            "[DEX门禁] Manifest debuggable："
+            f"{report.manifest_debuggable!r}，期望关闭"
         )
     if CONTRACT_TEMPLATE_CONFIG_PLACEHOLDERS in report.skipped_contracts:
         print(
