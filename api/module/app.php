@@ -3166,7 +3166,7 @@ function uploadApk(PDO $pdo, array $input)
         $stmt->execute([':pkg' => $apkInfo['package']]);
         $protect = $stmt->fetch(PDO::FETCH_ASSOC);
         if($protect){
-            if($user['role1'] !=='admin'){
+            if($user['role'] !== 'admin'){
                 $currentTime = new DateTime();
                 $uploadTime = new DateTime($protect['upload_time']);
                 //保护未过期
@@ -3437,17 +3437,7 @@ function replaceApk(PDO $pdo, array $input)
         throw new Exception($blackRow['message']);
     }
 
-    // 删除旧文件
-    $oldFilePath = $uploadDir . $oldApk['path'];
-    if (is_file($oldFilePath)) {
-        @unlink($oldFilePath);
-    }
-    
     $oss = new OSS();
-    //删除oss端储存的旧文件
-    if(!empty($oldApk['osspath'])){
-        $oss->deleteFile($oldApk['osspath']);
-    }
     
     //图标提取（优先ico.jar，失败fallback到aapt2）
     $icon = extractApkIcon($savedPath, __DIR__ . '/../../icon/', $apkId);
@@ -3491,6 +3481,22 @@ function replaceApk(PDO $pdo, array $input)
         ':id'      => $apkId,
         ':osspath' => $osspath,
     ]);
+
+    // 新记录成功写回后再清理旧文件，保证前面的解析、图标、OSS 或数据库
+    // 失败时旧 APK 仍可回滚/下载。
+    $oldFilePath = $uploadDir . $oldApk['path'];
+    if (is_file($oldFilePath)) {
+        @unlink($oldFilePath);
+    }
+    if (!empty($oldApk['osspath'])) {
+        try {
+            $oss->deleteFile($oldApk['osspath']);
+        } catch (Throwable $cleanupError) {
+            // 新记录已经提交，旧 OSS 清理失败不应把“替换成功”伪装成失败；
+            // 保留日志供后续清理任务重试。
+            error_log('replaceApk 清理旧 OSS 文件失败: ' . $cleanupError->getMessage());
+        }
+    }
 
     return [
         'message' => '替换成功',

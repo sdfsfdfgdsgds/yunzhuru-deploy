@@ -398,12 +398,6 @@ function deleteWhitelist(PDO $pdo, array $input) { return deleteClassnameList($p
 function addBlacklist(PDO $pdo, array $input) { return addClassnameList($pdo, $input, 'cainiao_popup_message_blacklist'); }
 function deleteBlacklist(PDO $pdo, array $input) { return deleteClassnameList($pdo, $input, 'cainiao_popup_message_blacklist'); }
 
-/*function addClassnameList($pdo, $input, $table) {
-    if (empty($input['popup_id']) || empty($input['class_name'])) throw new Exception('缺少参数');
-    $stmt = $pdo->prepare("INSERT INTO `$table` (popup_id, class_name, created_at, remark) VALUES (?, ?, NOW(), ?)");
-    $stmt->execute([$input['popup_id'], $input['class_name'], $input['remark']]);
-    return ['message' => '添加成功'];
-}*/
 //20260227修复越权漏洞
 function addClassnameList($pdo, $input, $table)
 {
@@ -451,11 +445,6 @@ function addClassnameList($pdo, $input, $table)
     return ['message' => '添加成功'];
 }
 
-/*function deleteClassnameList($pdo, $input, $table) {
-    if (empty($input['id'])) throw new Exception('缺少ID');
-    $pdo->prepare("DELETE FROM `$table` WHERE id = ?")->execute([$input['id']]);
-    return ['message' => '删除成功'];
-}*/
 //20260227修复越权漏洞
 function deleteClassnameList($pdo, $input, $table)
 {

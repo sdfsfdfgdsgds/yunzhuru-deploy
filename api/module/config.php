@@ -191,15 +191,20 @@ function updateAppConfig(PDO $pdo, array $input)
         }
     }
 
+    // 管理员也必须确认配置真实存在；否则 UPDATE 影响 0 行后旧逻辑仍会
+    // 返回成功，并把不存在配置的 apk_id 当作 0 推送缓存。
+    $stmt = $pdo->prepare("SELECT apk_id FROM cainiao_apk_config WHERE id = :id LIMIT 1");
+    $stmt->execute([':id' => $configId]);
+    $app = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$app) {
+        throw new Exception('配置不存在');
+    }
+
     // 执行更新
     $sql = "UPDATE cainiao_apk_config SET `$field` = :val WHERE id = :id";
     $update = $pdo->prepare($sql);
     $update->execute([':val' => $value, ':id' => $configId]);
-    
-    $stmt = $pdo->prepare("SELECT apk_id FROM cainiao_apk_config WHERE id = :id LIMIT 1");
-    $stmt->execute([':id' => $configId]);
-    $app = $stmt->fetch(PDO::FETCH_ASSOC);
-    
+
     Auth::afterConfigChange($pdo, (int)$app['apk_id']);
 
     return ['message' => '更新成功'];

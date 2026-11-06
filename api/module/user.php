@@ -76,77 +76,142 @@ function renewvip(PDO $pdo, array $input) {
 
     // 获取 VIP 单月价格（元），并转为分
     $vipprice = Auth::getSetting($pdo, "vipprice", "10.00");
-    $vippriceCents = (int)round(floatval($vipprice) * 100);
+    $vippriceFloat = floatval($vipprice);
+    if (!is_finite($vippriceFloat) || $vippriceFloat <= 0) {
+        // 与 getvipprice 保持一致：异常配置不能让 VIP 变成免费。
+        $vippriceFloat = 0.01;
+    }
+    if ($vippriceFloat > PHP_INT_MAX / (100 * $months)) {
+        throw new Exception("VIP价格配置无效");
+    }
+    $vippriceCents = max(1, (int)round($vippriceFloat * 100));
     $totalCost = $vippriceCents * $months;
 
-    // 检查余额是否足够
-    $balance = (int)$user['balance'];
-    if ($balance < $totalCost) {
-        throw new Exception("余额不足，无法续费 {$months} 个月的 VIP");
-    }
-
-    // 判断当前 VIP 是否过期，过期则从当前时间续算
-    $now = new DateTime();
-    $expireTime = $user['vip_expire_time'] ?? null;
-    $baseTime = $now;
-
-    if ($expireTime && $expireTime > $now->format('Y-m-d H:i:s')) {
-        $baseTime = new DateTime($expireTime);
-    }
-
-    // 每月按 31 天计算
-    $baseTime->modify('+' . (31 * $months) . ' days');
-    $newVipExpire = $baseTime->format('Y-m-d H:i:s');
-
-    // 扣除余额并更新过期时间
-    $stmt = $pdo->prepare("UPDATE cainiao_user SET vip_expire_time = :vip_expire, balance = balance - :cost WHERE id = :id");
-    $stmt->execute([
-        ':vip_expire' => $newVipExpire,
-        ':cost' => $totalCost,
-        ':id' => $userId
-    ]);
-    
-    
-    //代表有邀请人
-    if(!empty($user['superior'])){
-        $superiorm = Auth::getSetting($pdo, "superiorm", "0");//奖励上级余额，单位分
-        $superiorv = Auth::getSetting($pdo, "superiorv", "0");//奖励上级VIP时长，单位分钟
-        if($superiorm > 0){
-            $stmt = $pdo->prepare("UPDATE cainiao_user SET balance = balance + :cost WHERE id = :id");
-            $stmt->execute([
-                ':cost' => $superiorm * $months,//实际奖励 = 奖励金额 * 开通月数
-                ':id' => $user['superior']
-            ]);
+    // 余额、VIP 到期时间以及上级奖励必须在同一短事务内完成。先按 id 顺序
+    // 锁住涉及的用户，避免两个并发续费重复消费，也避免互为上下级时死锁。
+    $ownsTransaction = false;
+    try {
+        if (!$pdo->inTransaction()) {
+            $pdo->beginTransaction();
+            $ownsTransaction = true;
         }
-        if($superiorv > 0){
-            // 先要查询$user['superior']的vip_expire_time是否超过当前时间
-            $querySuperior = $pdo->prepare("SELECT vip_expire_time FROM cainiao_user WHERE id = :superior_id");
-            $querySuperior->execute([':superior_id' => $user['superior']]);
-            $superiorData = $querySuperior->fetch(PDO::FETCH_ASSOC);
-            
-            if($superiorData && isset($superiorData['vip_expire_time'])){
+
+        $superiorHint = (int)($user['superior'] ?? 0);
+        $lockIds = [$userId];
+        if ($superiorHint > 0) {
+            $lockIds[] = $superiorHint;
+        }
+        $lockIds = array_values(array_unique(array_map('intval', $lockIds)));
+        sort($lockIds, SORT_NUMERIC);
+        $lockPlaceholders = [];
+        $lockParams = [];
+        foreach ($lockIds as $index => $lockId) {
+            $placeholder = ':lock_id_' . $index;
+            $lockPlaceholders[] = $placeholder;
+            $lockParams[$placeholder] = $lockId;
+        }
+        $lockStmt = $pdo->prepare(
+            'SELECT id, balance, vip_expire_time, superior FROM cainiao_user '
+            . 'WHERE id IN (' . implode(',', $lockPlaceholders) . ') ORDER BY id FOR UPDATE'
+        );
+        $lockStmt->execute($lockParams);
+        $lockedUsers = [];
+        while ($row = $lockStmt->fetch(PDO::FETCH_ASSOC)) {
+            $lockedUsers[(int)$row['id']] = $row;
+        }
+        if (!isset($lockedUsers[(int)$userId])) {
+            throw new Exception('用户不存在');
+        }
+
+        $freshUser = $lockedUsers[(int)$userId];
+        // Auth::check 的快照可能早于上级关系变更；若锁定后发现新的上级不在
+        // 初始锁集内，立即补锁该行，确保奖励不会因为旧快照而静默丢失。
+        $freshSuperiorId = (int)($freshUser['superior'] ?? 0);
+        if ($freshSuperiorId > 0 && !isset($lockedUsers[$freshSuperiorId])) {
+            $freshSuperiorStmt = $pdo->prepare(
+                'SELECT id, balance, vip_expire_time, superior FROM cainiao_user '
+                . 'WHERE id = :superior_id FOR UPDATE'
+            );
+            $freshSuperiorStmt->execute([':superior_id' => $freshSuperiorId]);
+            $freshSuperior = $freshSuperiorStmt->fetch(PDO::FETCH_ASSOC);
+            if ($freshSuperior) {
+                $lockedUsers[$freshSuperiorId] = $freshSuperior;
+            }
+        }
+        $balance = (int)$freshUser['balance'];
+        if ($balance < $totalCost) {
+            throw new Exception("余额不足，无法续费 {$months} 个月的 VIP");
+        }
+
+        // 判断当前 VIP 是否过期，过期则从当前时间续算。
+        $now = new DateTime();
+        $expireTime = $freshUser['vip_expire_time'] ?? null;
+        $baseTime = $now;
+        if ($expireTime && strtotime($expireTime) > $now->getTimestamp()) {
+            $baseTime = new DateTime($expireTime);
+        }
+
+        // 每月按 31 天计算。
+        $baseTime->modify('+' . (31 * $months) . ' days');
+        $newVipExpire = $baseTime->format('Y-m-d H:i:s');
+
+        // 原子余额校验是并发场景下的最后一道保护，即使调用方在事务外
+        // 修改了余额，也不能把账户扣成负数。
+        $stmt = $pdo->prepare(
+            'UPDATE cainiao_user SET vip_expire_time = :vip_expire, '
+            . 'balance = balance - :cost WHERE id = :id AND balance >= :cost_check'
+        );
+        $stmt->execute([
+            ':vip_expire' => $newVipExpire,
+            ':cost' => $totalCost,
+            ':cost_check' => $totalCost,
+            ':id' => $userId
+        ]);
+        if ($stmt->rowCount() !== 1) {
+            throw new Exception("余额不足，无法续费 {$months} 个月的 VIP");
+        }
+
+        // 代表有邀请人。上级行已在同一事务中锁住，奖励与扣款一并提交。
+        $superiorId = (int)($freshUser['superior'] ?? 0);
+        if ($superiorId > 0 && isset($lockedUsers[$superiorId])) {
+            $superiorm = (int)Auth::getSetting($pdo, "superiorm", "0"); // 奖励上级余额，单位分
+            $superiorv = (int)Auth::getSetting($pdo, "superiorv", "0"); // 奖励上级 VIP 时长，单位分钟
+            if ($superiorm > 0) {
+                $stmt = $pdo->prepare('UPDATE cainiao_user SET balance = balance + :cost WHERE id = :id');
+                $stmt->execute([
+                    ':cost' => $superiorm * $months, // 实际奖励 = 奖励金额 * 开通月数
+                    ':id' => $superiorId
+                ]);
+            }
+            if ($superiorv > 0) {
                 $addtime = $superiorv * $months; // 实际新增的时长 = 奖励时长(分钟) * 开通月数
-                
-                $now = date('Y-m-d H:i:s'); // 当前时间
-                $superiorExpireTime = $superiorData['vip_expire_time'];
-                
-                // 判断上级会员是否过期
-                if(strtotime($superiorExpireTime) > time()){
-                    // 如果超过当前时间，则代表是会员，从记录的时间开始增加时长
+                $nowTimestamp = time();
+                $superiorExpireTime = $lockedUsers[$superiorId]['vip_expire_time'] ?? null;
+                $superiorExpireTimestamp = $superiorExpireTime ? strtotime($superiorExpireTime) : false;
+                if ($superiorExpireTimestamp !== false && $superiorExpireTimestamp > $nowTimestamp) {
                     $newExpireTime = date('Y-m-d H:i:s', strtotime($superiorExpireTime . " +{$addtime} minutes"));
                 } else {
-                    // 如果未超过则代表会员过期，从现在时间开始增加时长
-                    $newExpireTime = date('Y-m-d H:i:s', strtotime($now . " +{$addtime} minutes"));
+                    $newExpireTime = date('Y-m-d H:i:s', $nowTimestamp + ($addtime * 60));
                 }
-                
-                $stmt = $pdo->prepare("UPDATE cainiao_user SET vip_expire_time = :vip_expire WHERE id = :id");
+
+                $stmt = $pdo->prepare('UPDATE cainiao_user SET vip_expire_time = :vip_expire WHERE id = :id');
                 $stmt->execute([
                     ':vip_expire' => $newExpireTime,
-                    ':id' => $user['superior']
+                    ':id' => $superiorId
                 ]);
             }
         }
+
+        if ($ownsTransaction && !$pdo->commit()) {
+            throw new Exception('续费事务提交失败');
+        }
+    } catch (Throwable $error) {
+        if ($ownsTransaction && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $error;
     }
+
     return [
         'message' => "成功续费 {$months} 个月 VIP",
         'new_expire_time' => $newVipExpire,

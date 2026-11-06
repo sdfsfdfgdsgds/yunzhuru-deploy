@@ -7,7 +7,7 @@
 
     // 解析参数
     $page     = isset($input['page']) ? max(1, (int)$input['page']) : 1;
-    $pageSize = isset($input['pageSize']) ? max(1, (int)$input['pageSize']) : 50;
+    $pageSize = isset($input['pageSize']) ? min(200, max(1, (int)$input['pageSize'])) : 50;
     $apkId    = isset($input['apk_id']) ? (int)$input['apk_id'] : 0;
     $start    = isset($input['start']) ? $input['start'] : '';
     $end      = isset($input['end']) ? $input['end'] : '';
@@ -120,7 +120,7 @@ function apk_request_stat(PDO $pdo, array $input) {
 
     // ===== 解析参数 =====
     $page     = isset($input['page']) ? max(1, (int)$input['page']) : 1;
-    $pageSize = isset($input['pageSize']) ? max(1, (int)$input['pageSize']) : 50;
+    $pageSize = isset($input['pageSize']) ? min(200, max(1, (int)$input['pageSize'])) : 50;
     $apkId    = isset($input['apk_id']) ? (int)$input['apk_id'] : 0;
     $start    = isset($input['start']) ? $input['start'] : '';
     $end      = isset($input['end']) ? $input['end'] : '';
@@ -280,7 +280,7 @@ function apk_request_stat(PDO $pdo, array $input) {
     $startTime = microtime(true);
     // 解析参数
     $page     = isset($input['page']) ? max(1, (int)$input['page']) : 1;
-    $pageSize = isset($input['pageSize']) ? max(1, (int)$input['pageSize']) : 50;
+    $pageSize = isset($input['pageSize']) ? min(200, max(1, (int)$input['pageSize'])) : 50;
     $apkId    = isset($input['apk_id']) ? (int)$input['apk_id'] : 0;
     $start    = isset($input['start']) ? $input['start'] : '';
     $end      = isset($input['end']) ? $input['end'] : '';
@@ -359,7 +359,7 @@ function apk_region_stat(PDO $pdo, array $input) {
 
     // ===== 解析参数 =====
     $page     = isset($input['page']) ? max(1, (int)$input['page']) : 1;
-    $pageSize = isset($input['pageSize']) ? max(1, (int)$input['pageSize']) : 50;
+    $pageSize = isset($input['pageSize']) ? min(200, max(1, (int)$input['pageSize'])) : 50;
     $apkId    = isset($input['apk_id']) ? (int)$input['apk_id'] : 0;
     $start    = isset($input['start']) ? $input['start'] : '';
     $end      = isset($input['end']) ? $input['end'] : '';
