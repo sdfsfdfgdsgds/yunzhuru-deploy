@@ -1885,8 +1885,6 @@ $applicationlin=[];
     //回编译成功之后,可以删除解包内容了
     //safeDeleteDirectory($de_apk1);
     //safeDeleteDirectory($de_apk2);
-    echo "==================================反编译后,开始清理oss拉取下来的缓存文件\n";
-    del_osstemp($oss_temp, $localSavePath);
     echo "==================================调用dex拆分合并\n";
     if($task['dexmerge']){
         updateTaskInfo($pdo, $task['id'], '合并DEX');
@@ -1896,6 +1894,20 @@ $applicationlin=[];
         echo "该任务未开启dex重新分配\n";
     }
 
+    echo "==================================读取原 APK 条目压缩方式\n";
+    updateTaskInfo($pdo, $task['id'], '读取原包压缩方式');
+    $originalApkCompressionMethods = readApkCompressionMethods($apk_file[1]);
+    if ($originalApkCompressionMethods === null
+        || !normalizeApkCompressionWithMethods($originalApkCompressionMethods, $output_apk)) {
+        updateTaskStatus($pdo, $task['id'], '编译失败');
+        updateTaskInfo($pdo, $task['id'], '恢复原包压缩方式失败');
+        safeDeleteDirectory($temp_dir);
+        del_osstemp($oss_temp, $localSavePath);
+        return;
+    }
+
+    echo "==================================反编译后,开始清理oss拉取下来的缓存文件\n";
+    del_osstemp($oss_temp, $localSavePath);
 
     echo "==================================zipalign_apk\n";
     updateTaskInfo($pdo, $task['id'], 'ZIP对齐');
@@ -1942,9 +1954,9 @@ $applicationlin=[];
         return;
     }
 
-    echo "==================================规范化 resources.arsc 压缩方式\n";
-    updateTaskInfo($pdo, $task['id'], '规范化 resources.arsc');
-    if (!normalizeApkResourcesCompression($output_apk)) {
+    echo "==================================恢复 resources.arsc 原包压缩方式\n";
+    updateTaskInfo($pdo, $task['id'], '恢复 resources.arsc 原包压缩方式');
+    if (!normalizeApkResourcesCompression($output_apk, $originalApkCompressionMethods)) {
         updateTaskStatus($pdo, $task['id'], '编译失败');
         updateTaskInfo($pdo, $task['id'], 'resources.arsc 压缩方式校验失败');
         safeDeleteDirectory($temp_dir);
@@ -2035,7 +2047,8 @@ $applicationlin=[];
                 $contractAligned = null;
                 $contractOk = @copy($signed_apk, $contractInput)
                     && stripApkSignatureMetaEntries($contractInput)
-                    && normalizeApkResourcesCompression($contractInput);
+                    && normalizeApkCompressionWithMethods($originalApkCompressionMethods, $contractInput)
+                    && normalizeApkResourcesCompression($contractInput, $originalApkCompressionMethods);
                 if ($contractOk) {
                     $contractZipalign = zipalign_apk($contractInput);
                     $contractOk = !empty($contractZipalign[0]);
@@ -2575,12 +2588,118 @@ function normalizeManifestVersionInApk(string $apkPath): bool
 }
 
 /**
- * 保证最终 APK 的 resources.arsc 使用 STORE，避免下游身份/签章校验拒绝 DEFLATE。
+ * 返回新增 APK 条目的默认压缩方式。
  *
+ * 原包已有条目由 normalizeApkCompressionAgainstSource() 按输入 APK 决定；
+ * 这里只处理新增条目，原生库使用 STORE 以便后续 ZIP 对齐，其余文件使用 DEFLATE。
+ */
+function defaultInjectedApkCompressionMethod(string $entryName): int
+{
+    $normalized = ltrim(str_replace('\\', '/', $entryName), '/');
+    if (strcasecmp($normalized, 'resources.arsc') === 0) {
+        return ZipArchive::CM_STORE;
+    }
+    if (stripos($normalized, 'lib/') === 0 && substr($normalized, -3) === '.so') {
+        return ZipArchive::CM_STORE;
+    }
+    return ZipArchive::CM_DEFLATE;
+}
+
+/**
+ * 读取 APK 中已有条目的压缩方式，供后续多个 ZIP 重写阶段复用。
+ */
+function readApkCompressionMethods(string $sourceApk): ?array
+{
+    if (!is_file($sourceApk) || !class_exists('ZipArchive')) {
+        return null;
+    }
+
+    $sourceZip = new ZipArchive();
+    if ($sourceZip->open($sourceApk) !== true) {
+        return null;
+    }
+
+    $methods = [];
+    for ($index = 0; $index < $sourceZip->numFiles; $index++) {
+        $name = $sourceZip->getNameIndex($index);
+        if ($name === false || substr($name, -1) === '/') {
+            continue;
+        }
+        $stat = $sourceZip->statIndex($index);
+        if (!is_array($stat) || !isset($stat['comp_method'])) {
+            continue;
+        }
+        $method = (int) $stat['comp_method'];
+        if (in_array($method, [ZipArchive::CM_STORE, ZipArchive::CM_DEFLATE], true)) {
+            $methods[ltrim(str_replace('\\', '/', $name), '/')] = $method;
+        }
+    }
+    if (!$sourceZip->close()) {
+        return null;
+    }
+    return $methods;
+}
+
+/**
+ * 让重编译或其他 ZIP 重写步骤恢复输入 APK 的条目压缩方式。
+ *
+ * apktool 和数据复用工具可能重新决定 ZIP 压缩方式；如果不在写回后恢复，
+ * 原本 DEFLATE 的 lib/*.so、DEX 和 Manifest 会被整体变成 STORE，造成体积膨胀。
+ * 仅对输入中存在的条目沿用原方法；新增条目使用 defaultInjectedApkCompressionMethod()。
+ */
+function normalizeApkCompressionWithMethods(array $sourceCompressionMethods, string $outputApk): bool
+{
+    if (!is_file($outputApk) || !class_exists('ZipArchive')) {
+        return false;
+    }
+
+    $outputZip = new ZipArchive();
+    if ($outputZip->open($outputApk) !== true) {
+        return false;
+    }
+
+    for ($index = 0; $index < $outputZip->numFiles; $index++) {
+        $name = $outputZip->getNameIndex($index);
+        if ($name === false || substr($name, -1) === '/') {
+            continue;
+        }
+
+        $normalizedName = ltrim(str_replace('\\', '/', $name), '/');
+        if (array_key_exists($normalizedName, $sourceCompressionMethods)) {
+            $method = $sourceCompressionMethods[$normalizedName];
+        } elseif (strcasecmp($normalizedName, 'resources.arsc') === 0) {
+            // 新增资源表没有原包方法可沿用时，默认使用 STORE。
+            $method = ZipArchive::CM_STORE;
+        } else {
+            $method = defaultInjectedApkCompressionMethod($normalizedName);
+        }
+
+        if (!$outputZip->setCompressionName($name, $method)) {
+            $outputZip->close();
+            return false;
+        }
+    }
+
+    return $outputZip->close();
+}
+
+/**
+ * 兼容单次调用方：从输入 APK 读取压缩方式后立即恢复输出 APK。
+ */
+function normalizeApkCompressionAgainstSource(string $sourceApk, string $outputApk): bool
+{
+    $methods = readApkCompressionMethods($sourceApk);
+    return $methods !== null && normalizeApkCompressionWithMethods($methods, $outputApk);
+}
+
+/**
+ * 恢复最终 APK 的 resources.arsc 压缩方式。
+ *
+ * 原包已有资源表沿用输入 APK 的方法；没有原包基线的新增资源表才默认 STORE。
  * ZipArchive 只改 ZIP 条目元数据和压缩数据，不改资源表内容；调用方随后必须重新
  * zipalign，并且在签名之前执行本函数。
  */
-function normalizeApkResourcesCompression(string $apkPath): bool
+function normalizeApkResourcesCompression(string $apkPath, ?array $sourceCompressionMethods = null): bool
 {
     if (!is_file($apkPath) || !class_exists('ZipArchive')) {
         return false;
@@ -2611,7 +2730,11 @@ function normalizeApkResourcesCompression(string $apkPath): bool
     }
 
     $name = $zip->getNameIndex($matches[0]);
-    if ($name === false || !$zip->setCompressionName($name, ZipArchive::CM_STORE)) {
+    $resourceMethod = ZipArchive::CM_STORE;
+    if (is_array($sourceCompressionMethods) && array_key_exists('resources.arsc', $sourceCompressionMethods)) {
+        $resourceMethod = (int) $sourceCompressionMethods['resources.arsc'];
+    }
+    if ($name === false || !$zip->setCompressionName($name, $resourceMethod)) {
         $zip->close();
         return false;
     }
@@ -2619,7 +2742,7 @@ function normalizeApkResourcesCompression(string $apkPath): bool
         return false;
     }
 
-    echo "resources.arsc 已规范为 STORE\n";
+    echo "resources.arsc 已恢复为原包压缩方式\n";
     return true;
 }
 
@@ -5335,9 +5458,17 @@ function patchApk($apkPath, $tmpDir, $unpackDir, array $assetFiles = ['cainiao_v
 
     $deleteNames = [];
     $preservedMetaEntries = [];
+    $originalCompressionMethods = [];
     for ($i = 0; $i < $zip->numFiles; $i++) {
         $name = $zip->getNameIndex($i);
-        if ($name === false || stripos($name, 'META-INF/') !== 0 || substr($name, -1) === '/') {
+        if ($name === false || substr($name, -1) === '/') {
+            continue;
+        }
+        $entryStat = $zip->statIndex($i);
+        if (is_array($entryStat) && isset($entryStat['comp_method'])) {
+            $originalCompressionMethods[$name] = (int) $entryStat['comp_method'];
+        }
+        if (stripos($name, 'META-INF/') !== 0) {
             continue;
         }
         if (isApkSignatureMetaEntry($name)) {
@@ -5372,13 +5503,23 @@ function patchApk($apkPath, $tmpDir, $unpackDir, array $assetFiles = ['cainiao_v
             $zip->close();
             return false;
         }
-        if (
-            (stripos($rel, 'lib/') === 0 && substr($rel, -3) === '.so')
-            || strcasecmp($rel, 'resources.arsc') === 0
-        ) {
-            $zip->setCompressionName($rel, ZipArchive::CM_STORE);
+        if (isset($originalCompressionMethods[$rel])
+            && in_array($originalCompressionMethods[$rel], [ZipArchive::CM_STORE, ZipArchive::CM_DEFLATE], true)) {
+            // 覆盖已有条目时保持原 APK 的压缩方式，避免重打包把整套原生库变成 STORE。
+            $compressionMethod = $originalCompressionMethods[$rel];
+        } elseif (strcasecmp($rel, 'resources.arsc') === 0) {
+            // 新增资源表没有原包方法可沿用时，默认使用 STORE。
+            $compressionMethod = ZipArchive::CM_STORE;
+        } elseif (stripos($rel, 'lib/') === 0 && substr($rel, -3) === '.so') {
+            // 新增原生库保持未压缩，交给后续 zipalign 做对齐。
+            $compressionMethod = ZipArchive::CM_STORE;
         } else {
-            $zip->setCompressionName($rel, ZipArchive::CM_DEFLATE);
+            $compressionMethod = ZipArchive::CM_DEFLATE;
+        }
+        if (!$zip->setCompressionName($rel, $compressionMethod)) {
+            echo "错误：设置 APK 条目压缩方式失败：{$rel}\n";
+            $zip->close();
+            return false;
         }
         $written++;
     }
