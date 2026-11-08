@@ -253,6 +253,12 @@ function getMyAppList(PDO $pdo, array $input)
     appInfoScheduleAttachRows($pdo, $list);
     appDeleteScheduleAttachRows($pdo, $list);
 
+    // 数据库业务时间按 UTC 保存，列表输出统一转换为北京时间；查询和清理仍使用原始 UTC 值。
+    foreach ($list as &$app) {
+        formatStoredUtcDateTimeFields($app, ['upload_time']);
+    }
+    unset($app);
+
     // 批量预查询，避免循环内N+1查询
     $now = date('Y-m-d H:i:s');
     $appIds = array_column($list, 'id');
@@ -481,6 +487,9 @@ function getAppStaticBucketFiles(PDO $pdo, array $input)
     ]];
     bucketAttachLatestAppSnapshots($pdo, $rows);
     $snapshot = $rows[0]['static_injected_buckets'] ?? [];
+    if (is_array($snapshot)) {
+        formatStoredUtcDateTimeFields($snapshot, ['completed_at']);
+    }
     $snapshot['items'] = bucketLoadAppFileMetadata(
         $appId,
         is_array($snapshot['items'] ?? null) ? $snapshot['items'] : []
@@ -557,6 +566,7 @@ function getInjectTaskStaticEntries(PDO $pdo, array $input)
     $snapshot = is_array($rows[0]['static_injected_buckets'] ?? null)
         ? $rows[0]['static_injected_buckets']
         : [];
+    formatStoredUtcDateTimeFields($snapshot, ['completed_at']);
     $snapshotTaskId = (int)($snapshot['task_id'] ?? $taskId);
     $snapshotAttemptNo = max(0, (int)($snapshot['attempt_no'] ?? 0));
     if ($snapshotTaskId !== $taskId || $snapshotAttemptNo !== $attemptNo) {
@@ -700,6 +710,7 @@ function getAppStaticBucketFileContent(PDO $pdo, array $input)
     $snapshot = is_array($exactTask['static_injected_buckets'] ?? null)
         ? $exactTask['static_injected_buckets']
         : [];
+    formatStoredUtcDateTimeFields($snapshot, ['completed_at']);
     // 重试会产生新的 attempt；旧弹窗继续携带旧号时立即终止读取。
     if ((int)($snapshot['task_id'] ?? 0) !== $requestedTaskId) {
         throw new RuntimeException('本次制品快照已更新，请关闭详情后重新打开');
@@ -748,6 +759,8 @@ function getAppStaticBucketFileContent(PDO $pdo, array $input)
         apiConfigProbeReleaseGuard($guard);
     }
 
+    $snapshotCompletedAt = (string)($snapshot['completed_at'] ?? '');
+
     return [
         'message' => '已读取并解密该桶当前实际对象',
         'app_id' => $appId,
@@ -759,7 +772,7 @@ function getAppStaticBucketFileContent(PDO $pdo, array $input)
             'task_id' => (int)($snapshot['task_id'] ?? 0),
             'attempt_no' => (int)($snapshot['attempt_no'] ?? 0),
             'template_version' => (string)($snapshot['template_version'] ?? ''),
-            'completed_at' => (string)($snapshot['completed_at'] ?? ''),
+            'completed_at' => $snapshotCompletedAt,
         ],
         'bucket' => [
             'id' => (int)($selected['id'] ?? 0),
@@ -6189,6 +6202,16 @@ function getUnifiedTaskList(PDO $pdo, array $input)
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
     $list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($list as &$taskRow) {
+        formatStoredUtcDateTimeFields($taskRow, ['created_at', 'completed_at']);
+        if (isset($taskRow['static_injected_buckets']) && is_array($taskRow['static_injected_buckets'])) {
+            formatStoredUtcDateTimeFields($taskRow['static_injected_buckets'], ['completed_at']);
+        }
+        if (array_key_exists('static_injected_bucket_completed_at', $taskRow)) {
+            $taskRow['static_injected_bucket_completed_at'] = formatStoredUtcDateTime($taskRow['static_injected_bucket_completed_at']);
+        }
+    }
+    unset($taskRow);
     
     cleanupExpiredOssDownloadFiles($pdo);
 
@@ -6275,6 +6298,10 @@ function getJiaguTaskList(PDO $pdo, array $input)
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
     $list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($list as &$taskRow) {
+        formatStoredUtcDateTimeFields($taskRow, ['created_at', 'completed_at']);
+    }
+    unset($taskRow);
 
     $ossCleanup = cleanupExpiredOssDownloadFiles($pdo);
 
@@ -6425,6 +6452,16 @@ function getInjectTaskList(PDO $pdo, array $input)
     // 返回明确的推算等级，不用当前全局桶冒充历史 APK 事实。
     ensureBucketFeatureSchema($pdo);
     bucketAttachTaskSnapshots($pdo, $list);
+    foreach ($list as &$taskRow) {
+        formatStoredUtcDateTimeFields($taskRow, ['created_at', 'completed_at']);
+        if (isset($taskRow['static_injected_buckets']) && is_array($taskRow['static_injected_buckets'])) {
+            formatStoredUtcDateTimeFields($taskRow['static_injected_buckets'], ['completed_at']);
+        }
+        if (array_key_exists('static_injected_bucket_completed_at', $taskRow)) {
+            $taskRow['static_injected_bucket_completed_at'] = formatStoredUtcDateTime($taskRow['static_injected_bucket_completed_at']);
+        }
+    }
+    unset($taskRow);
     
     
     

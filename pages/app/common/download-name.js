@@ -35,13 +35,23 @@
       .trim();
   }
 
-  /** 使用本地日期生成文件名友好的 YYYYMMDD 日期。 */
+  /** 使用北京时间生成文件名友好的 YYYYMMDD 日期。 */
   function formatDate(date) {
-    const value = date && typeof date.getTime === 'function' && !Number.isNaN(date.getTime())
-      ? date : new Date();
-    const year = value.getFullYear();
-    const month = String(value.getMonth() + 1).padStart(2, '0');
-    const day = String(value.getDate()).padStart(2, '0');
+    const hasExplicitDate = date && typeof date.getTime === 'function' && !Number.isNaN(date.getTime());
+    if (hasExplicitDate) {
+      // 中国大陆全年固定 UTC+8；用 UTC 取值避免浏览器所在时区影响预览。
+      const beijing = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+      const year = beijing.getUTCFullYear();
+      const month = String(beijing.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(beijing.getUTCDate()).padStart(2, '0');
+      return `${year}${month}${day}`;
+    }
+
+    // 中国标准时间全年固定为 UTC+8，使用 UTC 取值避免依赖浏览器本地时区和旧 WebView 的 Intl 支持。
+    const beijingNow = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    const year = beijingNow.getUTCFullYear();
+    const month = String(beijingNow.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(beijingNow.getUTCDate()).padStart(2, '0');
     return `${year}${month}${day}`;
   }
 

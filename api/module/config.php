@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . '/../utils/DownloadName.php';
+
 function getMyApps(PDO $pdo, array $input)
 {
     $user = Auth::check($pdo);
@@ -8,6 +10,10 @@ function getMyApps(PDO $pdo, array $input)
     $stmt = $pdo->prepare("SELECT id, name, version, package, size, upload_time FROM cainiao_apk WHERE user_id = :uid ORDER BY id DESC");
     $stmt->execute([':uid' => $userId]);
     $apps = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($apps as &$app) {
+        formatStoredUtcDateTimeFields($app, ['upload_time']);
+    }
+    unset($app);
 
     return $apps;
 }
@@ -101,6 +107,11 @@ function getMyAppsWithConfig(PDO $pdo, array $input)
     ");
     $stmt->execute($params);
     $apps = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($apps as &$app) {
+        formatStoredUtcDateTimeFields($app, ['upload_time']);
+    }
+    unset($app);
 
     // 获取配置
     $apkIds = array_column($apps, 'id');

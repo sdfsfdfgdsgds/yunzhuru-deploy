@@ -77,6 +77,61 @@ function defaultDownloadNameTemplate(): string
     return '{name}_{date}_云注入.apk';
 }
 
+/** 返回平台业务使用的北京时间日期，避免 PHP 容器默认 UTC 导致跨日偏差。 */
+function yunzhuruBusinessDate(string $format = 'Y-m-d H:i:s', ?DateTimeImmutable $now = null): string
+{
+    $now = $now ?: new DateTimeImmutable('now', new DateTimeZone('UTC'));
+    return $now->setTimezone(new DateTimeZone('Asia/Shanghai'))->format($format);
+}
+
+/**
+ * 将数据库中按 UTC 保存的 DATETIME 转成后台页面使用的北京时间。
+ * 解析失败或空值原样返回，兼容旧数据中的空字段。
+ */
+function formatStoredUtcDateTime($value): string
+{
+    $text = trim((string)$value);
+    if ($text === '') {
+        return $text;
+    }
+
+    try {
+        $date = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $text, new DateTimeZone('UTC'));
+        $errors = DateTimeImmutable::getLastErrors();
+        if (!$date || (is_array($errors) && ($errors['warning_count'] > 0 || $errors['error_count'] > 0))) {
+            $date = new DateTimeImmutable($text, new DateTimeZone('UTC'));
+        }
+        return $date->setTimezone(new DateTimeZone('Asia/Shanghai'))->format('Y-m-d H:i:s');
+    } catch (Throwable $e) {
+        return $text;
+    }
+}
+
+/** 返回数据库 UTC 时间对应的北京时间日期，供对象路径回溯使用。 */
+function yunzhuruBusinessDateFromStoredUtc($value): ?string
+{
+    $display = formatStoredUtcDateTime($value);
+    if ($display === '') {
+        return null;
+    }
+    try {
+        $date = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $display, new DateTimeZone('Asia/Shanghai'));
+        return $date ? $date->format('Ymd') : null;
+    } catch (Throwable $e) {
+        return null;
+    }
+}
+
+/** 批量转换 API 行中的业务时间字段，保持数据库查询和清理逻辑仍使用 UTC。 */
+function formatStoredUtcDateTimeFields(array &$row, array $fields): void
+{
+    foreach ($fields as $field) {
+        if (array_key_exists($field, $row) && $row[$field] !== null && $row[$field] !== '') {
+            $row[$field] = formatStoredUtcDateTime($row[$field]);
+        }
+    }
+}
+
 /**
  * 校验并规范化下载名称模板。
  *
@@ -130,7 +185,7 @@ function renderDownloadNameTemplate(string $template, array $context): string
 
     $values = [
         'name' => normalizeDownloadApplicationName($context['name'] ?? $context['app_name'] ?? '未命名应用') ?: '未命名应用',
-        'date' => trim((string)($context['date'] ?? date('Ymd'))),
+        'date' => trim((string)($context['date'] ?? yunzhuruBusinessDate('Ymd'))),
         'version' => trim((string)($context['version'] ?? $context['app_version'] ?? '')),
         'package' => trim((string)($context['package'] ?? $context['app_package'] ?? '')),
         'appid' => trim((string)($context['appid'] ?? $context['app_id'] ?? '')),

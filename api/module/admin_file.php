@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . '/../utils/DownloadName.php';
+
 
 /*function getCompiledList(PDO $pdo, array $input)
 {
@@ -500,6 +502,10 @@ function getCompiledList(PDO $pdo, array $input)
 
     $stmt = $pdo->query($sql);
     $list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($list as &$taskRow) {
+        formatStoredUtcDateTimeFields($taskRow, ['created_at', 'completed_at']);
+    }
+    unset($taskRow);
 
     return [
         'list' => $list,

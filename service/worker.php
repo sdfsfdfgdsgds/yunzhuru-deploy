@@ -51,6 +51,7 @@ try {
     $pdo = new PDO($dsn, $dbConfig['username'], $dbConfig['password'], [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
     ]);
+    $pdo->exec("SET time_zone = '+00:00'");
     
     if (!empty($resetStatuses)) {
         $placeholders = implode(',', array_fill(0, count($resetStatuses), '?'));
@@ -88,6 +89,7 @@ while (true) {
         $pdo = new PDO($dsn, $dbConfig['username'], $dbConfig['password'], [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
         ]);
+        $pdo->exec("SET time_zone = '+00:00'");
     } catch (Exception $e) {
         echo "[" . date('Y-m-d H:i:s') . "] 数据库连接失败: " . $e->getMessage() . "\n";
         sleep(1);

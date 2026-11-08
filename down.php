@@ -144,7 +144,7 @@ $templateContextName = !empty($task['apk_name'])
     : (!empty($app['name']) ? normalizeDownloadApplicationName($app['name']) : $fallbackDownloadName);
 $templateDownloadName = renderDownloadNameTemplate($downloadTemplate, [
     'name' => $templateContextName,
-    'date' => date('Ymd'),
+    'date' => yunzhuruBusinessDate('Ymd'),
     'version' => (string)($task['apk_version'] ?? $app['version'] ?? ''),
     'package' => (string)($task['apk_package'] ?? $app['package'] ?? ''),
     'appid' => (string)($task['apk_id'] ?? $app['id'] ?? ''),
@@ -254,13 +254,9 @@ if($oss){
     $stmtDownloadCount = $pdo->prepare("SELECT COUNT(*) FROM `cainiao_download_record` WHERE task_id = :task_id AND source = 'oss'");
     $stmtDownloadCount->execute([':task_id' => $task['id']]);
     $ossDownloadCount = $stmtDownloadCount->fetchColumn();
-    // 获取当前年月日
-    $year = date('Y');
-    $month = date('m');
-    $day = date('d');
     $ossName = basename($filePath);
     // 拼接新的路径
-    $newFilePath = "oss/{$year}{$month}{$day}/{$ossName}";
+    $newFilePath = 'oss/' . yunzhuruBusinessDate('Ymd') . "/{$ossName}";
 
     if ($ossDownloadCount >= $osshigh) {
         // 下载次数超限，走常规下载流程
@@ -659,7 +655,7 @@ function tryRedirectRailwayReleaseDownloadViaBuckets(PDO $pdo, $redis, string $d
         $objectBaseName
     );
     $objectFileName = buildReleaseDownloadObjectFileName($objectBaseName, $downloadName, $defaultName);
-    $objectKey = 'release_downloads/' . date('Ymd') . '/' . $objectFileName;
+    $objectKey = 'release_downloads/' . yunzhuruBusinessDate('Ymd') . '/' . $objectFileName;
     $contentDisposition = buildContentDispositionHeaderValue($downloadName);
     foreach ($buckets as $bucket) {
         try {
@@ -825,19 +821,20 @@ function buildTaskDateCandidates(array $task): array {
         if (empty($task[$field])) {
             continue;
         }
-        $time = strtotime($task[$field]);
-        if ($time) {
-            $dates[] = date('Ymd', $time);
+        $date = yunzhuruBusinessDateFromStoredUtc($task[$field]);
+        if ($date !== null) {
+            $dates[] = $date;
         }
     }
-    $dates[] = date('Ymd');
+    $dates[] = yunzhuruBusinessDate('Ymd');
     return array_values(array_unique($dates));
 }
 
 function buildRecentDateCandidates(): array {
+    $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
     return [
-        date('Ymd'),
-        date('Ymd', strtotime('-1 day')),
+        yunzhuruBusinessDate('Ymd', $now),
+        yunzhuruBusinessDate('Ymd', $now->modify('-1 day')),
     ];
 }
 
